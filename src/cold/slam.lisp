@@ -39,7 +39,8 @@
 (setf *stems-and-flags* (read-from-file "build-order.lisp-expr"))
 
 (do-stems-and-flags (stem flags)
-  (unless (position :not-target flags)
+  (unless (or (position :not-target flags)
+              (position :warm flags))
     (let ((srcname (stem-source-path stem))
           (objname (stem-object-path stem flags :target-compile)))
       (unless (and (output-up-to-date-wrt-input-p objname srcname)

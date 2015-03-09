@@ -95,156 +95,104 @@
 ;;; into build-order.lisp-expr with some new flag (perhaps :WARM) to
 ;;; indicate that the files should be handled not in cold load but
 ;;; afterwards.
-(let ((pcl-srcs
-              '(;; CLOS, derived from the PCL reference implementation
-                ;;
-                ;; This PCL build order is based on a particular
-                ;; (arbitrary) linearization of the declared build
-                ;; order dependencies from the old PCL defsys.lisp
-                ;; dependency database.
-                #+nil "src/pcl/walk" ; #+NIL = moved to build-order.lisp-expr
-                "SRC;PCL;EARLY-LOW"
-                "SRC;PCL;MACROS"
-                "SRC;PCL;COMPILER-SUPPORT"
-                "SRC;PCL;LOW"
-                "SRC;PCL;SLOT-NAME"
-                "SRC;PCL;DEFCLASS"
-                "SRC;PCL;DEFS"
-                "SRC;PCL;FNGEN"
-                "SRC;PCL;WRAPPER"
-                "SRC;PCL;CACHE"
-                "SRC;PCL;DLISP"
-                "SRC;PCL;BOOT"
-                "SRC;PCL;VECTOR"
-                "SRC;PCL;SLOTS-BOOT"
-                "SRC;PCL;COMBIN"
-                "SRC;PCL;DFUN"
-                "SRC;PCL;CTOR"
-                "SRC;PCL;BRAID"
-                "SRC;PCL;DLISP3"
-                "SRC;PCL;GENERIC-FUNCTIONS"
-                "SRC;PCL;SLOTS"
-                "SRC;PCL;INIT"
-                "SRC;PCL;STD-CLASS"
-                "SRC;PCL;CPL"
-                "SRC;PCL;FSC"
-                "SRC;PCL;METHODS"
-                "SRC;PCL;FIXUP"
-                "SRC;PCL;DEFCOMBIN"
-                "SRC;PCL;CTYPES"
-                "SRC;PCL;ENV"
-                "SRC;PCL;DOCUMENTATION"
-                "SRC;PCL;PRINT-OBJECT"
-                "SRC;PCL;PRECOM1"
-                "SRC;PCL;PRECOM2"))
-      (other-srcs
-              '(;; miscellaneous functionality which depends on CLOS
-                "SRC;CODE;FORCE-DELAYED-DEFBANGMETHODS"
-                "SRC;CODE;LATE-CONDITION"
 
-                ;; CLOS-level support for the Gray OO streams
-                ;; extension (which is also supported by various
-                ;; lower-level hooks elsewhere in the code)
-                "SRC;PCL;GRAY-STREAMS-CLASS"
-                "SRC;PCL;GRAY-STREAMS"
+(let* ((ppd (copy-pprint-dispatch))
+       (sb-debug:*debug-print-variable-alist*
+         (list (cons '*print-pprint-dispatch* ppd)))
+       (*print-pprint-dispatch* ppd))
+  (set-pprint-dispatch
+   'sb-kernel:layout (lambda (stream obj)
+                       (print-unreadable-object (obj stream :type t)
+                         (write (sb-int:awhen (sb-kernel:layout-classoid obj)
+                                              (sb-kernel:classoid-name sb-int:it))
+                                :stream stream))))
+  (set-pprint-dispatch
+   'sb-kernel:classoid (lambda (stream obj)
+                         (print-unreadable-object (obj stream :type t)
+                           (write (sb-kernel:classoid-name obj) :stream stream))))
+  (set-pprint-dispatch
+   'package (lambda (stream obj)
+              (print-unreadable-object (obj stream :type t)
+                (write (package-name obj) :stream stream))))
+  (set-pprint-dispatch
+   'pathname (lambda (stream obj)
+               (write-string "#P" stream)
+               (write (namestring obj) :stream stream)))
+  (set-pprint-dispatch
+   'sb-thread:thread (lambda (stream obj)
+                       (declare (ignore obj))
+                       (write-string "#<main-thread>" stream)))
+  (set-pprint-dispatch
+   'restart (lambda (stream obj)
+              (print-unreadable-object (obj stream :type t :identity t)
+                (write (restart-name obj) :stream stream))))
+;;; Note RED 2009-10-23: Pathnames are now merged with those of the
+;;; cold load but the below code is still a blatent cut-and-paste from
+;;; src/cold/shared.lisp file.  This issue I had getting the rest over
+;;; is that the code in shared.lisp is in the SB-COLD package that no
+;;; longer exists once we are on the target.  To resolve this we need
+;;; to put the stem code into a package that both SB-COLD and this
+;;; file can load.  Not quite there yet.
+  (with-compilation-unit ()
+    (dolist (stem-src-and-obj-pathnames
+             ;; Before 2009-10-23 this was a hard-coded list of
+             ;; pathnames.  Now we reuse the build-order.lisp-expr
+             ;; previously loaded and parsed during the cold build.  At
+             ;; some point the SB-COLD emitted an s-expression with a
+             ;; list of the warm init files that we should compile and
+             ;; load now.  That's exactly what we do. -- RED 2009-10-23
+             (with-open-file (s "output/warm-init-stems.lisp-expr")
+               (read s)))
+      (let ((source-pathname (first stem-src-and-obj-pathnames))
+            (object-pathname (second stem-src-and-obj-pathnames)))
+        ;; FIXME: We should make object-pathname into an absolute pathname
+        ;; so that COMPILE-FILE knows exactly what to do with it.  Even
+        ;; better, fix the code in src/cold/shared.lisp, and use that code
+        ;; here Right now we ignore the suggested object pathname with and
+        ;; just use the default compile-file behavior.
+        (declare (ignore object-pathname))
+        (sb-int:/show "about to compile" source-pathname)
+        (flet ((report-recompile-restart (stream)
+                 (format stream "Recompile file ~S" source-pathname))
+               (report-continue-restart (stream)
+                 (format stream
+                         "Continue, using possibly bogus file ~S"
+                         (compile-file-pathname source-pathname))))
+          (tagbody
+           retry-compile-file
+             (multiple-value-bind (output-truename warnings-p failure-p)
+                 (if *compile-files-p*
+                     (compile-file source-pathname)
+                     (compile-file-pathname source-pathname))
+               (declare (ignore warnings-p))
+               (sb-int:/show "done compiling" source-pathname)
+               (cond ((not output-truename)
+                      (error "COMPILE-FILE of ~S failed." source-pathname))
+                     (failure-p
+                      (unwind-protect
+                           (restart-case
+                               (error "FAILURE-P was set when creating ~S."
+                                      output-truename)
+                             (recompile ()
+                               :report report-recompile-restart
+                               (go retry-compile-file))
+                             (continue ()
+                               :report report-continue-restart
+                               (setf failure-p nil)))
+                        ;; Don't leave failed object files lying around.
+                        (when (and failure-p (probe-file output-truename))
+                          (delete-file output-truename)
+                          (format t "~&deleted ~S~%" output-truename))))
+                     ;; Otherwise: success, just fall through.
+                     (t nil))
+               (unless (handler-bind
+                           ((sb-kernel:redefinition-with-defgeneric
+                              #'muffle-warning))
+                         (load output-truename))
+                 (error "LOAD of ~S failed." output-truename))
+               (sb-int:/show "done loading" output-truename)))))))
+  (format t "~&; Done with PCL compilation~2%"))
 
-                ;; CLOS-level support for User-extensible sequences.
-                "SRC;PCL;SEQUENCE"
-
-                ;; other functionality not needed for cold init, moved
-                ;; to warm init to reduce peak memory requirement in
-                ;; cold init
-                "SRC;CODE;DESCRIBE"
-                "SRC;CODE;DESCRIBE-POLICY"
-                "SRC;CODE;INSPECT"
-                "SRC;CODE;PROFILE"
-                "SRC;CODE;NTRACE"
-                "SRC;CODE;STEP"
-                "SRC;CODE;WARM-LIB"
-                #+win32 "SRC;CODE;WARM-MSWIN"
-                "SRC;CODE;RUN-PROGRAM")))
- (declare (special *compile-files-p*))
- (flet
-    ((do-srcs (list)
-       (dolist (stem list)
-         (let ((fullname (concatenate 'string "SYS:" stem ".LISP")))
-           (sb-int:/show "about to compile" fullname)
-           (flet ((report-recompile-restart (stream)
-                    (format stream "Recompile file ~S" fullname))
-                  (report-continue-restart (stream)
-                    (format stream
-                            "Continue, using possibly bogus file ~S"
-                            (compile-file-pathname fullname))))
-             (tagbody
-              retry-compile-file
-                (multiple-value-bind (output-truename warnings-p failure-p)
-                    (if *compile-files-p*
-                        (compile-file fullname)
-                        (compile-file-pathname fullname))
-                  (declare (ignore warnings-p))
-                  (sb-int:/show "done compiling" fullname)
-                  (cond ((not output-truename)
-                         (error "COMPILE-FILE of ~S failed." fullname))
-                        (failure-p
-                         (unwind-protect
-                              (restart-case
-                                  (error "FAILURE-P was set when creating ~S."
-                                         output-truename)
-                                (recompile ()
-                                  :report report-recompile-restart
-                                  (go retry-compile-file))
-                                (continue ()
-                                  :report report-continue-restart
-                                  (setf failure-p nil)))
-                           ;; Don't leave failed object files lying around.
-                           (when (and failure-p (probe-file output-truename))
-                                 (delete-file output-truename)
-                                 (format t "~&deleted ~S~%" output-truename))))
-                        ;; Otherwise: success, just fall through.
-                        (t nil))
-                  (unless (handler-bind
-                              ((sb-kernel:redefinition-with-defgeneric
-                                #'muffle-warning))
-                            (load output-truename))
-                    (error "LOAD of ~S failed." output-truename))
-                  (sb-int:/show "done loading" output-truename))))))))
-
-   (let* ((ppd (copy-pprint-dispatch))
-          (sb-debug:*debug-print-variable-alist*
-           (list (cons '*print-pprint-dispatch* ppd)))
-          (*print-pprint-dispatch* ppd))
-     (set-pprint-dispatch
-      'sb-kernel:layout (lambda (stream obj)
-                          (print-unreadable-object (obj stream :type t)
-                            (write (sb-int:awhen (sb-kernel:layout-classoid obj)
-                                     (sb-kernel:classoid-name sb-int:it))
-                                   :stream stream))))
-     (set-pprint-dispatch
-      'sb-kernel:classoid (lambda (stream obj)
-                            (print-unreadable-object (obj stream :type t)
-                              (write (sb-kernel:classoid-name obj) :stream stream))))
-     (set-pprint-dispatch
-      'package (lambda (stream obj)
-                 (print-unreadable-object (obj stream :type t)
-                   (write (package-name obj) :stream stream))))
-     (set-pprint-dispatch
-      'pathname (lambda (stream obj)
-                  (write-string "#P" stream)
-                  (write (namestring obj) :stream stream)))
-     (set-pprint-dispatch
-      'sb-thread:thread (lambda (stream obj)
-                          (declare (ignore obj))
-                          (write-string "#<main-thread>" stream)))
-     (set-pprint-dispatch
-      'restart (lambda (stream obj)
-                 (print-unreadable-object (obj stream :type t :identity t)
-                   (write (restart-name obj) :stream stream))))
-     (with-compilation-unit ()
-       (let ((*compile-print* nil))
-         (do-srcs pcl-srcs)))
-     (when *compile-files-p*
-       (format t "~&; Done with PCL compilation~2%"))
-     (do-srcs other-srcs))))
 
 ;;;; setting package documentation
 
@@ -260,4 +208,3 @@
 #+sb-doc (setf (documentation (find-package "KEYWORD") t)
                "public: home of keywords")
 
-
