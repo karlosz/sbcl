@@ -13,7 +13,7 @@
 
 
 (defvar *warm-object-file-names*)
-(defvar *warm-obj-prefix* "obj/warm/")
+(setf *warm-obj-prefix* "obj/warm/")
 
 ;;;; general warm init compilation policy
 

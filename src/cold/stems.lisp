@@ -26,6 +26,8 @@
 ;;; by executing CL:ENSURE-DIRECTORIES-EXIST (on the xc host Common Lisp).
 (defvar *host-obj-prefix*)
 (defvar *target-obj-prefix*)
+(defvar *warm-obj-prefix*)
+
 
 (defvar *target-obj-suffix*
   ;; Target fasl files are LOADed (actually only quasi-LOADed, in
