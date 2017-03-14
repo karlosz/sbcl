@@ -21,10 +21,9 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 ;;;; DEFCLASS macro and close personal friends
-
 ;;; state for the current DEFCLASS expansion
 (defvar *initfunctions-for-this-defclass*)
 (defvar *readers-for-this-defclass*)
@@ -40,7 +39,16 @@
 ;;; After the metabraid has been setup, and the protocol for defining
 ;;; classes has been defined, the real definition of LOAD-DEFCLASS is
 ;;; installed by the file std-class.lisp
+#-sb-xc-host
 (defmacro defclass (&environment env name direct-superclasses direct-slots &rest options)
+  (%defclass-expander env name direct-superclasses direct-slots options))
+
+(defmacro def!class (&environment env name direct-superclasses direct-slots &rest options)
+  (%defclass-expander env name direct-superclasses direct-slots options))
+
+(defun %defclass-expander (env name direct-superclasses direct-slots options)
+  #+sb-xc-host
+  (declare (optimize (debug 3)))
   (check-class-name name nil)
   (let (*initfunctions-for-this-defclass*
         *readers-for-this-defclass* ;Truly a crock, but we got
@@ -52,8 +60,8 @@
         (canonize-defclass-options name options)
       ;; Check deprecation status of direct superclasses and
       ;; metaclass.
-      (mapc #'sb-int:check-deprecated-type direct-superclasses)
-      (sb-int:check-deprecated-type metaclass)
+      (mapc #'sb!int:check-deprecated-type direct-superclasses)
+      (sb!int:check-deprecated-type metaclass)
       (let ((canonical-slots (canonize-defclass-slots name direct-slots env))
             ;; DEFSTRUCT-P should be true if the class is defined
             ;; with a metaclass STRUCTURE-CLASS, so that a DEFSTRUCT
@@ -77,10 +85,13 @@
                                    ',*readers-for-this-defclass*
                                    ',*writers-for-this-defclass*
                                    ',*slot-names-for-this-defclass*
-                                   (sb-c:source-location)
+                                   (sb!c:source-location)
                                    ,@(and (safe-code-p env)
                                           '(t))))))
           (if defstruct-p
+              #+sb-xc-host
+              (error "DEFCLASS does not accept DEFSTRUCT-P on the host")
+              #-sb-xc-host
               (progn
                 ;; FIXME: (YUK!) Why do we do this? Because in order
                 ;; to make the defstruct form, we need to know what
@@ -117,7 +128,7 @@
                  ;; full-blown class, so the "a class of this name is
                  ;; coming" note we write here would be irrelevant.
                  (eval-when (:compile-toplevel)
-                   (sb-kernel::%compiler-defclass
+                   (sb!kernel::%compiler-defclass
                     ',name
                     ',*readers-for-this-defclass*
                     ',*writers-for-this-defclass*
@@ -174,15 +185,17 @@
       (values (or metaclass 'standard-class) (nreverse canonized-options))))
 
 (defun canonize-defclass-slots (class-name slots env)
+  #-sb-xc
+  (declare (ignore env))
   (let (canonized-specs)
     (dolist (spec slots)
-      (let ((location (or (and (boundp 'sb-c::*current-path*)
-                               (boundp 'sb-c::*source-paths*)
-                               (let ((sb-c::*current-path*
-                                       (or (sb-c::get-source-path spec)
-                                           sb-c::*current-path*)))
-                                 (sb-c::make-definition-source-location)))
-                          (sb-c::make-definition-source-location))))
+      (let ((location (or (and (boundp 'sb!c::*current-path*)
+                               (boundp 'sb!c::*source-paths*)
+                               (let ((sb!c::*current-path*
+                                       (or (sb!c::get-source-path spec)
+                                           sb!c::*current-path*)))
+                                 (sb!c::make-definition-source-location)))
+                          (sb!c::make-definition-source-location))))
         (when (atom spec)
           (setf spec (list spec)))
        (when (and (cdr spec) (null (cddr spec)))
@@ -201,6 +214,7 @@
               (unsupplied (list nil))
               (type t)
               (initform unsupplied))
+         #+sb-xc
          (check-slot-name-for-defclass name class-name env)
          (push name *slot-names-for-this-defclass*)
          (flet ((note-reader (x)
@@ -253,7 +267,7 @@
                  canonized-specs)))))
     (nreverse canonized-specs)))
 
-
+#+sb-xc
 (defun check-slot-name-for-defclass (name class-name env)
   (flet ((slot-name-illegal (reason)
            (error 'simple-program-error
@@ -289,7 +303,8 @@
                                (gensym)
                                `(function (lambda ()
                                   (declare (optimize
-                                            (sb-c:store-coverage-data 0)))
+                                            #-sb-xc-host
+                                            (sb!c:store-coverage-data 0)))
                                   ,initform))))
              (push entry *initfunctions-for-this-defclass*))
            (cadr entry)))))
@@ -449,7 +464,7 @@
   ;; SAFE-P is used by REAL-LOAD-DEFCLASS, but can be ignored here, since
   ;; during the bootstrap we won't have (SAFETY 3).
   (declare (ignore safe-p))
-  (sb-kernel::%%compiler-defclass name readers writers slot-names)
+  (sb!kernel::%%compiler-defclass name readers writers slot-names)
   (let ((ecd (!make-early-class-definition name
                                           source-location
                                           metaclass

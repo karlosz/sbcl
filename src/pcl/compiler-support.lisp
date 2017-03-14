@@ -29,54 +29,47 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-C")
+(in-package "SB!C")
 
 ;;;; very low-level representation of instances with meta-class
 ;;;; STANDARD-CLASS
 
-(deftransform sb-pcl::pcl-instance-p ((object))
-  (let* ((otype (lvar-type object))
-         (standard-object (specifier-type 'standard-object)))
-    (cond
-      ;; Flush tests whose result is known at compile time.
-      ((csubtypep otype standard-object) t)
-      ((not (types-equal-or-intersect otype standard-object)) nil)
-      (t
-       `(sb-pcl::%pcl-instance-p object)))))
-
-(defun sb-pcl::safe-code-p (&optional env)
+(defun sb!pcl::safe-code-p (&optional env)
+  #+sb-xc-host (declare (ignore env))
+  #+sb-xc
   (policy (or env (make-null-lexenv)) (eql safety 3)))
 
-(declaim (ftype function sb-pcl::parse-specialized-lambda-list))
+(declaim (ftype function sb!pcl::parse-specialized-lambda-list))
 (define-source-context defmethod (name &rest stuff)
   (let ((arg-pos (position-if #'listp stuff)))
     (if arg-pos
         `(defmethod ,name ,@(subseq stuff 0 arg-pos)
            ,(handler-case
-                (nth-value 2 (sb-pcl::parse-specialized-lambda-list
+                (nth-value 2 (sb!pcl::parse-specialized-lambda-list
                               (elt stuff arg-pos)))
               (error () "<illegal syntax>")))
         `(defmethod ,name "<illegal syntax>"))))
 
-(defvar sb-pcl::*internal-pcl-generalized-fun-name-symbols* nil)
+(defvar sb!pcl::*internal-pcl-generalized-fun-name-symbols* nil)
 
 (defmacro define-internal-pcl-function-name-syntax (name (var) &body body)
   `(progn
      (define-function-name-syntax ,name (,var) ,@body)
-     (pushnew ',name sb-pcl::*internal-pcl-generalized-fun-name-symbols*)))
+     (pushnew ',name sb!pcl::*internal-pcl-generalized-fun-name-symbols*)))
 
-(define-internal-pcl-function-name-syntax sb-pcl::slot-accessor (list)
+(define-internal-pcl-function-name-syntax sb!pcl::slot-accessor (list)
   (when (= (length list) 4)
     (destructuring-bind (class slot rwb) (cdr list)
-      (when (and (member rwb '(sb-pcl::reader sb-pcl::writer sb-pcl::boundp))
+      (when (and (member rwb '(sb!pcl::reader sb!pcl::writer sb!pcl::boundp))
                  (symbolp slot)
                  (symbolp class))
         (values t slot)))))
 
-(define-internal-pcl-function-name-syntax sb-pcl::fast-method (list)
+#+sb-xc
+(define-internal-pcl-function-name-syntax sb!pcl::fast-method (list)
   (valid-function-name-p (cadr list)))
 
-(define-internal-pcl-function-name-syntax sb-pcl::slow-method (list)
+(define-internal-pcl-function-name-syntax sb!pcl::slow-method (list)
   (valid-function-name-p (cadr list)))
 
 (defun interned-symbol-p (x) (and (symbolp x) (symbol-package x)))
@@ -88,7 +81,7 @@
            (let* ((type (lvar-type object))
                   (dd (when (structure-classoid-p type)
                         (find-defstruct-description
-                         (sb-kernel::structure-classoid-name type)))))
+                         (sb!kernel::structure-classoid-name type)))))
               (when dd
                 (find c-slot-name (dd-slots dd) :key #'dsd-name))))))
 
@@ -96,7 +89,7 @@
                              :node node)
     (cond ((struct-accessor-p object slot-name) t) ; always boundp
           (t (delay-ir1-transform node :constraint)
-             `(sb-pcl::accessor-slot-boundp object ',(lvar-value slot-name)))))
+             `(sb!pcl::accessor-slot-boundp object ',(lvar-value slot-name)))))
 
   (deftransform slot-value ((object slot-name) (t (constant-arg symbol)) *
                             :node node)
@@ -104,9 +97,9 @@
             `(,(dsd-accessor-name it) object))
            (t
             (delay-ir1-transform node :constraint)
-            `(sb-pcl::accessor-slot-value object ',(lvar-value slot-name)))))
+            `(sb!pcl::accessor-slot-value object ',(lvar-value slot-name)))))
 
-  (deftransform sb-pcl::set-slot-value ((object slot-name new-value)
+  (deftransform sb!pcl::set-slot-value ((object slot-name new-value)
                                         (t (constant-arg symbol) t)
                                         * :node node)
     (acond ((struct-accessor-p object slot-name)
@@ -117,5 +110,5 @@
             (give-up-ir1-transform "cannot use optimized accessor in safe code"))
            (t
             (delay-ir1-transform node :constraint)
-            `(sb-pcl::accessor-set-slot-value object ',(lvar-value slot-name)
+            `(sb!pcl::accessor-set-slot-value object ',(lvar-value slot-name)
                                               new-value)))))

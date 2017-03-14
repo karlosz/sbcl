@@ -172,6 +172,7 @@
  ("src/code/cas" :not-host)
  ("src/compiler/early-c")
  ("src/compiler/fun-info")
+ ("src/pcl/primordial-low")
  ("src/pcl/slot-name") ; for calls from 'info-vector'
  ;; 'info-vector' is needed at least as early as 'fdefinition' so that the
  ;; inlined INFO-VECTOR-FDEFINITION is available to %COERCE-CALLABLE-TO-FUN.
@@ -207,7 +208,6 @@
  ("src/code/misc-aliens" :not-host)
 
  ("src/code/early-float"   :not-host)
- ("src/pcl/early-low" :not-host)
  ("src/code/target-sxhash" :not-host) ; needs most-fooative-foo-float constants
 
  ("src/code/list"   :not-host)
@@ -432,6 +432,7 @@
  ;; Now that the type system is initialized, fix up UNKNOWN types that
  ;; have crept in.
  ("src/compiler/fixup-type")
+ ("src/pcl/early-low")
 
  ;; These define target types needed by fndb.lisp.
  ("src/code/package")
@@ -769,10 +770,12 @@
  ;; (arbitrary) linearization of the declared build
  ;; order dependencies from the old PCL defsys.lisp
  ;; dependency database.
- ("src/pcl/macros" :warm)
- ("src/pcl/compiler-support" :warm)
- ("src/pcl/defclass" :warm)
- ("src/pcl/defs" :warm)
+ ("src/pcl/declarations")
+
+ ("src/pcl/macros")
+ ("src/pcl/compiler-support")
+ ("src/pcl/defclass")
+ ("src/pcl/defs")
  ("src/pcl/fngen" :warm)
  ("src/pcl/wrapper" :warm)
  ("src/pcl/cache" :warm)
@@ -800,6 +803,7 @@
  ("src/pcl/print-object" :warm)
  ("src/pcl/precom1" :warm)
  ("src/pcl/precom2" :warm)
+ ("src/pcl/late-compiler-support" :warm)
 
  ;; other source files which can come during warm init
  ("src/code/setf-funs" :warm)
