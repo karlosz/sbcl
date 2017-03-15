@@ -24,7 +24,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 (defmacro wrapper-class (wrapper)
   `(classoid-pcl-class (layout-classoid ,wrapper)))
@@ -40,10 +40,10 @@
 ;;; Scavenging the self-pointer is unnecessary though harmless.
 ;;; This intricate calculation of #b110 makes it insensitive to the
 ;;; index of the trampoline slot.
-#+(and immobile-code compact-instance-header)
+#!+(and immobile-code compact-instance-header)
 (defconstant +fsc-layout-bitmap+
-  (logxor (1- (ash 1 sb-vm:funcallable-instance-info-offset))
-          (ash 1 (1- sb-vm:funcallable-instance-trampoline-slot))))
+  (logxor (1- (ash 1 sb!vm:funcallable-instance-info-offset))
+          (ash 1 (1- sb!vm:funcallable-instance-trampoline-slot))))
 
 ;;; This is called in BRAID when we are making wrappers for classes
 ;;; whose slots are not initialized yet, and which may be built-in
@@ -60,7 +60,7 @@
         layout))
      (t
       (make-wrapper-internal
-       :bitmap (cond #+(and immobile-code compact-instance-header)
+       :bitmap (cond #!+(and immobile-code compact-instance-header)
                      ((member name '(generic-function
                                      standard-generic-function))
                       +fsc-layout-bitmap+)
@@ -72,7 +72,7 @@
 ;;; In SBCL, as in CMU CL, the layouts (a.k.a wrappers) for built-in
 ;;; and structure classes already exist when PCL is initialized, so we
 ;;; don't necessarily always make a wrapper. Also, we help maintain
-;;; the mapping between CL:CLASS and SB-KERNEL:CLASSOID objects.
+;;; the mapping between CL:CLASS and SB!KERNEL:CLASSOID objects.
 (defun make-wrapper (length class)
   ;; SLOT-VALUE can't be inlined because we don't have the machinery
   ;; to perform ENSURE-ACCESSOR as yet.
@@ -81,7 +81,7 @@
     ((or (typep class 'std-class)
          (typep class 'forward-referenced-class))
      (make-wrapper-internal
-      :bitmap (cond #+(and immobile-code compact-instance-header)
+      :bitmap (cond #!+(and immobile-code compact-instance-header)
                     ((eq (class-of class) *the-class-funcallable-standard-class*)
                      +fsc-layout-bitmap+)
                     (t -1))

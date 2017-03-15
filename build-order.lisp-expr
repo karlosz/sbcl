@@ -351,7 +351,7 @@
  ;; around the compilation of "code/class". Why?
  ("src/code/class")
  ("src/pcl/pre-warm")
- ("src/pcl/low" :not-host)
+ ("src/pcl/low")
 
  ("src/code/debug-info")
  ("src/code/source-location")
@@ -776,10 +776,10 @@
  ("src/pcl/compiler-support")
  ("src/pcl/defclass")
  ("src/pcl/defs")
- ("src/pcl/fngen" :warm)
- ("src/pcl/wrapper" :warm)
- ("src/pcl/cache" :warm)
- ("src/pcl/dlisp" :warm)
+ ("src/pcl/fngen")
+ ("src/pcl/wrapper")
+ ("src/pcl/cache")
+ ("src/pcl/dlisp")
  ("src/pcl/boot" :warm)
  ("src/pcl/vector" :warm)
  ("src/pcl/slots-boot" :warm)

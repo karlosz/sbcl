@@ -28,7 +28,7 @@
 ;;;; released by Xerox Corporation", as at that time the whole cache
 ;;;; implementation was essentially redone from scratch.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 ;;;; Public API:
 ;;;;
@@ -63,10 +63,10 @@
 ;;;;
 ;;;; Subsequences of the cache vector are called cache lines.
 ;;;;
-;;;; The cache vector uses the symbol SB-PCL::..EMPTY.. as a sentinel
+;;;; The cache vector uses the symbol SB!PCL::..EMPTY.. as a sentinel
 ;;;; value, to allow storing NILs in the vector as well.
 
-(defstruct (cache (:constructor %make-cache)
+(def!struct (cache (:constructor %make-cache)
                   (:copier %copy-cache))
   ;; Number of keys the cache uses.
   (key-count 1 :type (integer 1 (#.call-arguments-limit)))
@@ -152,7 +152,7 @@
 ;;; Compute the starting index of the next cache line in the cache vector.
 (declaim (inline next-cache-index))
 (defun next-cache-index (mask index line-size)
-  (declare (type (unsigned-byte #.sb-vm:n-word-bits) index line-size mask))
+  (declare (type (unsigned-byte #.sb!vm:n-word-bits) index line-size mask))
   (logand mask (+ index line-size)))
 
 ;;; Returns the hash-value for layout, or executes ELSE if the layout
@@ -184,6 +184,7 @@
 ;;; number of keys and presence of values in the cache is known
 ;;; beforehand.
 (defun emit-cache-lookup (cache-var layout-vars miss-tag value-var)
+  #+sb-xc
   (declare (muffle-conditions code-deletion-note))
   (with-unique-names (probe n-vector n-depth n-mask
                       MATCH-WRAPPERS EXIT-WITH-HIT)
@@ -192,7 +193,7 @@
             ;; We don't need POINTER if the cache has 1 key and no value,
             ;; or if FOLD-INDEX-ADDRESSING is supported, in which case adding
             ;; a constant to the base index for each cell-ref yields better code.
-            #-(or x86 x86-64)
+            #!-(or x86 x86-64)
             (when (or (> num-keys 1) value-var) (make-symbol "PTR")))
            (line-size (power-of-two-ceiling (+ num-keys (if value-var 1 0)))))
       `(let ((,n-mask (cache-mask ,cache-var))
@@ -245,7 +246,8 @@
         (line-size (cache-line-size cache))
         (mask (cache-mask cache)))
     (flet ((probe-line (base)
-             (declare (optimize (sb-c::type-check 0)))
+             #+sb-xc
+             (declare (optimize (sb!c::type-check 0)))
              (tagbody
               ;; LAYOUTS can't be the empty list, because COMPUTE-CACHE-INDEX
               ;; takes its CAR, and would have borked if that weren't a LAYOUT.

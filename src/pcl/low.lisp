@@ -79,6 +79,7 @@
            ;; SB-MOP:FUNCALLABLE-STANDARD-OBJECT; at present, even
            ;; PCL's internal use of SET-FUNCALLABLE-INSTANCE-FUNCTION
            ;; doesn't obey this restriction.
+           #+sb-xc ;; MAYBE (import 'sb!kernel:funcallable-instance)
            (type funcallable-instance fin))
   (setf (funcallable-instance-fun fin) new-value))
 
