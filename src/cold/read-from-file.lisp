@@ -7,8 +7,6 @@
 ;;;; provided with absolutely no warranty. See the COPYING and CREDITS
 ;;;; files for more information.
 
-(in-package "SB-COLD")
-
 ;;; Return an expression read from the file named PATHNAME-DESIGNATOR.
 (export 'read-from-file)
 (defun read-from-file (pathname-designator)

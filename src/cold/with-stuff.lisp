@@ -10,8 +10,6 @@
 ;;;; provided with absolutely no warranty. See the COPYING and CREDITS
 ;;;; files for more information.
 
-(in-package "SB-COLD")
-
 ;;; a helper macro for WITH-ADDITIONAL-NICKNAME and WITHOUT-SOME-NICKNAME
 (defmacro with-given-nicknames ((package-designator nicknames) &body body)
   (let ((p (gensym "P"))

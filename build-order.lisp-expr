@@ -15,9 +15,9 @@
 ;;; under-construction target SBCL
 ;;;
 ;;; The keyword flags (:NOT-HOST, :NOT-TARGET, :ASSEM...) are
-;;; documented in the code which implements their effects. (As of
-;;; sbcl-0.7.10, the comments are on DEFPARAMETER *EXPECTED-STEM-FLAGS*
-;;; in src/cold/shared.lisp.)
+;;; documented in the code which implements their effects.
+;;; These comments are on DEFPARAMETER *EXPECTED-STEM-FLAGS*
+;;; in src/cold/stems.lisp.
 ;;;
 ;;; Of course, it'd be very nice to have this be a dependency DAG
 ;;; instead, so that we could do automated incremental recompilation.
@@ -740,4 +740,96 @@
  ;; anything else in cold build because after all it used to be
  ;; postponed 'til warm init with no problems.
 
- ("src/pcl/walk"))
+ ("src/pcl/walk")
+
+ ("src/code/warm-error" :warm)
+ ;; We re-nickname SB-SEQUENCE as SEQUENCE now.
+ ;; It could be done in genesis, but not earlier,
+ ;; since the host has a package of that name.
+ ("src/code/defpackage" :warm)
+
+ #!+sb-fasteval
+ ("src/interpreter/macros" :warm)
+ #!+sb-fasteval
+ ("src/interpreter/checkfuns" :warm)
+ #!+sb-fasteval
+ ("src/interpreter/env" :warm)
+ #!+sb-fasteval
+ ("src/interpreter/sexpr" :warm)
+ #!+sb-fasteval
+ ("src/interpreter/special-forms" :warm)
+ #!+sb-fasteval
+ ("src/interpreter/eval" :warm)
+ #!+sb-fasteval
+ ("src/interpreter/debug" :warm)
+
+ ;; CLOS, derived from the PCL reference implementation
+ ;;
+ ;; This PCL build order is based on a particular
+ ;; (arbitrary) linearization of the declared build
+ ;; order dependencies from the old PCL defsys.lisp
+ ;; dependency database.
+ ("src/pcl/macros" :warm)
+ ("src/pcl/compiler-support" :warm)
+ ("src/pcl/defclass" :warm)
+ ("src/pcl/defs" :warm)
+ ("src/pcl/fngen" :warm)
+ ("src/pcl/wrapper" :warm)
+ ("src/pcl/cache" :warm)
+ ("src/pcl/dlisp" :warm)
+ ("src/pcl/boot" :warm)
+ ("src/pcl/vector" :warm)
+ ("src/pcl/slots-boot" :warm)
+ ("src/pcl/combin" :warm)
+ ("src/pcl/dfun" :warm)
+ ("src/pcl/ctor" :warm)
+ ("src/pcl/braid" :warm)
+ ("src/pcl/dlisp3" :warm)
+ ("src/pcl/generic-functions" :warm)
+ ("src/pcl/slots" :warm)
+ ("src/pcl/init" :warm)
+ ("src/pcl/std-class" :warm)
+ ("src/pcl/cpl" :warm)
+ ("src/pcl/fsc" :warm)
+ ("src/pcl/methods" :warm)
+ ("src/pcl/fixup" :warm)
+ ("src/pcl/defcombin" :warm)
+ ("src/pcl/ctypes" :warm)
+ ("src/pcl/env" :warm)
+ ("src/pcl/documentation" :warm)
+ ("src/pcl/print-object" :warm)
+ ("src/pcl/precom1" :warm)
+ ("src/pcl/precom2" :warm)
+
+ ;; other source files which can come during warm init
+ ("src/code/setf-funs" :warm)
+ ;; miscellaneous functionality which depends on clos
+ ("src/code/late-condition" :warm)
+
+ ;; clos-level support for the gray oo streams
+ ;; extension (which is also supported by various
+ ;; lower-level hooks elsewhere in the code)
+ ("src/pcl/gray-streams-class" :warm)
+ ("src/pcl/gray-streams" :warm)
+
+ ;; clos-level support for user-extensible sequences.
+ ("src/pcl/sequence" :warm)
+
+ ;; other functionality not needed for cold init, moved
+ ;; to warm init to reduce peak memory requirement in
+ ;; cold init
+ ("src/code/describe" :warm)
+
+ ("src/code/describe-policy" :warm)
+ ("src/code/inspect" :warm)
+ ("src/code/profile" :warm)
+ ("src/code/ntrace" :warm)
+ ("src/code/step" :warm)
+ ("src/code/warm-lib" :warm)
+ #!+win32
+ ("src/code/warm-mswin" :warm)
+ ("src/code/run-program" :warm)
+
+ #!+immobile-code
+ ("src/code/immobile-code" :warm)
+ ("src/code/repack-xref" :warm))

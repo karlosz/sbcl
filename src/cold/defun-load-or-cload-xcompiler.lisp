@@ -225,7 +225,8 @@
       (funcall (intern "PARALLEL-MAKE-HOST-1" 'sb-cold)
                (make-host-1-parallelism))
       (do-stems-and-flags (stem flags)
-        (unless (find :not-host flags)
+        (unless (or (find :not-host flags)
+                    (find :warm flags))
           (funcall load-or-cload-stem stem flags)
           #!+sb-show (warn-when-cl-snapshot-diff *cl-snapshot*))))
 

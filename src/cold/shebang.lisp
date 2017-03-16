@@ -9,7 +9,6 @@
 ;;;; provided with absolutely no warranty. See the COPYING and CREDITS
 ;;;; files for more information.
 
-(in-package "SB-COLD")
 
 ;;;; definition of #!+ and #!- as a mechanism analogous to #+/#-, but
 ;;;; for *SHEBANG-FEATURES* instead of CL:*FEATURES*. (This is handy

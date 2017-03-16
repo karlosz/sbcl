@@ -11,6 +11,9 @@
 
 (in-package "COMMON-LISP-USER")
 
+
+(defvar *warm-object-file-names*)
+
 ;;;; general warm init compilation policy
 
 (proclaim '(optimize (compilation-speed 1)
@@ -66,158 +69,30 @@
 ;;; ecurity 3))))
 ;;;     ((:or :macro (:match "$EARLY-") (:match "$BOOT-"))
 ;;;     (declare (optimize (speed 0))))))
-;;;
-;;; FIXME: This has mutated into a hack which crudely duplicates
-;;; functionality from the existing mechanism to load files from
-;;; build-order.lisp-expr, without being quite parallel. (E.g. object
-;;; files end up alongside the source files instead of ending up in
-;;; parallel directory trees.) Maybe we could merge the filenames here
-;;; into build-order.lisp-expr with some new flag (perhaps :WARM) to
-;;; indicate that the files should be handled not in cold load but
-;;; afterwards.
-(let ((early-srcs
-              '("SRC;CODE;WARM-ERROR"
-                ;; We re-nickname SB-SEQUENCE as SEQUENCE now.
-                ;; It could be done in genesis, but not earlier,
-                ;; since the host has a package of that name.
-                "SRC;CODE;DEFPACKAGE"))
 
-      (interpreter-srcs
-              #+sb-fasteval
-              '("SRC;INTERPRETER;MACROS"
-                "SRC;INTERPRETER;CHECKFUNS"
-                "SRC;INTERPRETER;ENV"
-                "SRC;INTERPRETER;SEXPR"
-                "SRC;INTERPRETER;SPECIAL-FORMS"
-                "SRC;INTERPRETER;EVAL"
-                "SRC;INTERPRETER;DEBUG"))
-       (pcl-srcs
-              '(;; CLOS, derived from the PCL reference implementation
-                ;;
-                ;; This PCL build order is based on a particular
-                ;; (arbitrary) linearization of the declared build
-                ;; order dependencies from the old PCL defsys.lisp
-                ;; dependency database.
-                #+nil "src/pcl/walk" ; #+NIL = moved to build-order.lisp-expr
-                #+nil "SRC;PCL;EARLY-LOW"
-                "SRC;PCL;MACROS"
-                "SRC;PCL;COMPILER-SUPPORT"
-                #+nil "SRC;PCL;LOW"
-                #+nil "SRC;PCL;SLOT-NAME" ; moved to build-order.lisp-expr
-                "SRC;PCL;DEFCLASS"
-                "SRC;PCL;DEFS"
-                "SRC;PCL;FNGEN"
-                "SRC;PCL;WRAPPER"
-                "SRC;PCL;CACHE"
-                "SRC;PCL;DLISP"
-                "SRC;PCL;BOOT"
-                "SRC;PCL;VECTOR"
-                "SRC;PCL;SLOTS-BOOT"
-                "SRC;PCL;COMBIN"
-                "SRC;PCL;DFUN"
-                "SRC;PCL;CTOR"
-                "SRC;PCL;BRAID"
-                "SRC;PCL;DLISP3"
-                "SRC;PCL;GENERIC-FUNCTIONS"
-                "SRC;PCL;SLOTS"
-                "SRC;PCL;INIT"
-                "SRC;PCL;STD-CLASS"
-                "SRC;PCL;CPL"
-                "SRC;PCL;FSC"
-                "SRC;PCL;METHODS"
-                "SRC;PCL;FIXUP"
-                "SRC;PCL;DEFCOMBIN"
-                "SRC;PCL;CTYPES"
-                "SRC;PCL;ENV"
-                "SRC;PCL;DOCUMENTATION"
-                "SRC;PCL;PRINT-OBJECT"
-                "SRC;PCL;PRECOM1"
-                "SRC;PCL;PRECOM2"))
-      (other-srcs
-              '("SRC;CODE;SETF-FUNS"
-                ;; miscellaneous functionality which depends on CLOS
-                "SRC;CODE;LATE-CONDITION"
+;; make sure the target does not keep #!+- readers
+(let ((*readtable* (copy-readtable)))
+  (load "src/cold/stems.lisp"))
 
-                ;; CLOS-level support for the Gray OO streams
-                ;; extension (which is also supported by various
-                ;; lower-level hooks elsewhere in the code)
-                "SRC;PCL;GRAY-STREAMS-CLASS"
-                "SRC;PCL;GRAY-STREAMS"
+(setf *warm-obj-prefix* "obj/warm/")
 
-                ;; CLOS-level support for User-extensible sequences.
-                "SRC;PCL;SEQUENCE"
-
-                ;; other functionality not needed for cold init, moved
-                ;; to warm init to reduce peak memory requirement in
-                ;; cold init
-                "SRC;CODE;DESCRIBE"
-
-                "SRC;CODE;DESCRIBE-POLICY"
-                "SRC;CODE;INSPECT"
-                "SRC;CODE;PROFILE"
-                "SRC;CODE;NTRACE"
-                "SRC;CODE;STEP"
-                "SRC;CODE;WARM-LIB"
-                #+win32 "SRC;CODE;WARM-MSWIN"
-                "SRC;CODE;RUN-PROGRAM"
-
-                #+immobile-code "SRC;CODE;IMMOBILE-CODE"
-                "SRC;CODE;REPACK-XREF"))
-      (sb-c::*handled-conditions* sb-c::*handled-conditions*))
- (declare (special *compile-files-p*))
- (proclaim '(sb-ext:muffle-conditions
-             (or (satisfies unable-to-optimize-note-p)
-                 (satisfies optional+key-style-warning-p))))
- (flet
-    ((do-srcs (list)
-       (dolist (stem list)
-         (let ((fullname (concatenate 'string "SYS:" stem ".LISP")))
-           (sb-int:/show "about to compile" fullname)
-           (flet ((report-recompile-restart (stream)
-                    (format stream "Recompile file ~S" fullname))
-                  (report-continue-restart (stream)
-                    (format stream
-                            "Continue, using possibly bogus file ~S"
-                            (compile-file-pathname fullname))))
-             (tagbody
-              retry-compile-file
-                (multiple-value-bind (output-truename warnings-p failure-p)
-                    (ecase (if (boundp '*compile-files-p*) *compile-files-p* t)
-                     ((t)   (compile-file fullname))
-                     ((nil) (compile-file-pathname fullname)))
-                  (declare (ignore warnings-p))
-                  (sb-int:/show "done compiling" fullname)
-                  (cond ((not output-truename)
-                         (error "COMPILE-FILE of ~S failed." fullname))
-                        (failure-p
-                         (unwind-protect
-                              (restart-case
-                                  (error "FAILURE-P was set when creating ~S."
-                                         output-truename)
-                                (recompile ()
-                                  :report report-recompile-restart
-                                  (go retry-compile-file))
-                                (continue ()
-                                  :report report-continue-restart
-                                  (setf failure-p nil)))
-                           ;; Don't leave failed object files lying around.
-                           (when (and failure-p (probe-file output-truename))
-                                 (delete-file output-truename)
-                                 (format t "~&deleted ~S~%" output-truename))))
-                        ;; Otherwise: success, just fall through.
-                        (t nil))
-                  (unless (handler-bind
-                              ((sb-kernel:redefinition-with-defgeneric
-                                #'muffle-warning))
-                            (load output-truename))
-                    (error "LOAD of ~S failed." output-truename))
-                  (sb-int:/show "done loading" output-truename))))))))
-
-  (let ((*print-length* 10)
-        (*print-level* 5)
-        (*print-circle* t)
-        (*compile-print* nil))
-    (do-srcs early-srcs)
-    (with-compilation-unit () (do-srcs interpreter-srcs))
-    (with-compilation-unit () (do-srcs pcl-srcs))
-    (do-srcs other-srcs))))
+;; compile and warm load
+(setf *warm-object-file-names*
+      (let ((reversed-target-object-file-names nil)
+            ;; make sure warm init muffled conditions dont leak into final image
+            (sb-c::*handled-conditions* sb-c::*handled-conditions*))
+        (declaim (sb-ext:muffle-conditions
+                  (or (satisfies unable-to-optimize-note-p)
+                      (satisfies optional+key-style-warning-p))))
+        (with-compilation-unit ()
+          (do-stems-and-flags (stem flags)
+            (when (member :warm flags)
+              ;; we can do better, split it up into 2 stages instead of this spec var
+              (let ((filename (ecase (if (boundp '*compile-files-p*)
+                                      *compile-files-p*
+                                      t)
+                                ((t) (compile-stem stem flags :warm-compile))
+                                ((nil) (stem-object-path stem flags :warm-compile)))))
+                (load filename)
+                (push filename reversed-target-object-file-names)))))
+        (nreverse reversed-target-object-file-names)))
