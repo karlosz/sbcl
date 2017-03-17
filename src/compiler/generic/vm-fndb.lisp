@@ -452,25 +452,16 @@
 ;;; FDEFN -> FUNCTION, trapping if not FBOUNDP
 (defknown safe-fdefn-fun (fdefn) function ())
 
-;;; Given either a closure or a simple-fun, return the underlying simple-fun.
-;;; FIXME: %SIMPLE-FUN-SELF is a somewhat poor name for this function.
-;;; The x86[-64] code defines %CLOSURE-FUN as nothing more than %SIMPLE-FUN-SELF,
-;;; and it's not clear whether that's because callers need the "simple" accessor
-;;; to work on closures, versus reluctance to define a %CLOSURE/SIMPLE-FUN-FUN
-;;; reader. %FUN-FUN works on all three function subtypes, but is nontrivial.
-;;; Preferably at least one accessor should get a new name,
-;;; so that %SIMPLE-FUN-SELF can mean what it says.
-(defknown %simple-fun-self (function) function
-  (flushable))
-(defknown (setf %simple-fun-self) (function function) function
-  ())
 (defknown %simple-fun-type (function) t (flushable))
 
-(defknown %closure-fun (function) function
-  (flushable))
+#!+(or x86 x86-64) (defknown sb!vm::%closure-callee (function) fixnum (flushable))
+(defknown %closure-fun (function) function (flushable))
 
 (defknown %closure-index-ref (function index) t
   (flushable))
+
+;; T argument is for the 'fun' slot.
+(defknown sb!vm::%copy-closure (index t) function (flushable))
 
 (defknown %fun-fun (function) function (flushable recursive))
 

@@ -233,38 +233,22 @@
                    :disp (- fun-pointer-lowtag other-pointer-lowtag)))
     (inst add func code)))
 
-(define-vop (%simple-fun-self)
+;;; This vop is quite magical - because 'closure-fun' is a raw program counter,
+;;; as soon as it's loaded into a register, it prevents the underlying fun from
+;;; being transported by GC. It's even subtler in that sense than COMPUTE-FUN,
+;;; which doesn't pin a *different* object produced from thin air.
+;;; (It's output operand is embedded in the object pointed to by its input)
+(define-vop (%closure-fun)
   (:policy :fast-safe)
-  (:translate %simple-fun-self)
+  (:translate %closure-fun)
   (:args (function :scs (descriptor-reg)))
   (:results (result :scs (descriptor-reg)))
   (:generator 3
-    (loadw result function simple-fun-self-slot fun-pointer-lowtag)
+    (loadw result function closure-fun-slot fun-pointer-lowtag)
     (inst lea result
           (make-ea :byte :base result
                    :disp (- fun-pointer-lowtag
                             (* simple-fun-code-offset n-word-bytes))))))
-
-;;; The closure function slot is a pointer to raw code on X86 instead
-;;; of a pointer to the code function object itself. This VOP is used
-;;; to reference the function object given the closure object.
-(define-source-transform %closure-fun (closure)
-  `(%simple-fun-self ,closure))
-
-(define-vop (%set-fun-self)
-  (:policy :fast-safe)
-  (:translate (setf %simple-fun-self))
-  (:args (new-self :scs (descriptor-reg) :target result :to :result)
-         (function :scs (descriptor-reg) :to :result))
-  (:temporary (:sc any-reg :from (:argument 0) :to :result) temp)
-  (:results (result :scs (descriptor-reg)))
-  (:generator 3
-    (inst lea temp
-          (make-ea :byte :base new-self
-                   :disp (- (ash simple-fun-code-offset word-shift)
-                            fun-pointer-lowtag)))
-    (storew temp function simple-fun-self-slot fun-pointer-lowtag)
-    (move result new-self)))
 
 ;;;; symbol frobbing
 

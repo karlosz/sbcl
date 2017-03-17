@@ -1331,26 +1331,33 @@ component_ptr_from_pc(lispobj *pc)
 /* Scan an area looking for an object which encloses the given pointer.
  * Return the object start on success, or NULL on failure. */
 lispobj *
-gc_search_space3(lispobj *start, void* limit, void *pointer)
+gc_search_space3(void *pointer, lispobj *start, void *limit)
 {
     if (pointer < (void*)start || pointer >= limit) return NULL;
 
-    while ((void*)start < limit) {
+    size_t count;
+#if 0
+    /* CAUTION: this code is _significantly_ slower than the production version
+       due to the extra checks for forwarding.  Only use it if debugging */
+    for ( ; (void*)start < limit ; start += count) {
         lispobj *forwarded_start;
         if (forwarding_pointer_p(start))
             forwarded_start = native_pointer(forwarding_pointer_value(start));
         else
             forwarded_start = start;
         lispobj thing = *forwarded_start;
-        size_t count = 2;
-        if (!is_cons_half(thing))
-             count = (sizetab[widetag_of(thing)])(forwarded_start);
-
+        count = is_cons_half(thing) ? 2 : sizetab[widetag_of(thing)](forwarded_start);
         /* Check whether the pointer is within this object. */
         if (pointer < (void*)(start+count)) return start;
-
-        start += count;
     }
+#else
+    for ( ; (void*)start < limit ; start += count) {
+        lispobj thing = *start;
+        count = is_cons_half(thing) ? 2 : sizetab[widetag_of(thing)](start);
+        /* Check whether the pointer is within this object. */
+        if (pointer < (void*)(start+count)) return start;
+    }
+#endif
     return NULL;
 }
 
@@ -1813,7 +1820,7 @@ static void
 pair_interior_pointer(os_context_t *context, uword_t pointer,
                       uword_t *saved_offset, int *register_pair)
 {
-    int i;
+    unsigned int i;
 
     /*
      * I (RLT) think this is trying to find the boxed register that is
@@ -1826,7 +1833,7 @@ pair_interior_pointer(os_context_t *context, uword_t pointer,
     *register_pair = -1;
     for (i = 0; i < (sizeof(boxed_registers) / sizeof(int)); i++) {
         uword_t reg;
-        sword_t offset;
+        uword_t offset;
         int index;
 
         index = boxed_registers[i];
@@ -1858,7 +1865,7 @@ pair_interior_pointer(os_context_t *context, uword_t pointer,
 static void
 scavenge_interrupt_context(os_context_t * context)
 {
-    int i;
+    unsigned int i;
 
     /* FIXME: The various #ifdef noise here is precisely that: noise.
      * Is it possible to fold it into the macrology so that we have
@@ -1993,61 +2000,3 @@ int varint_unpack(struct varint_unpacker* unpacker, int* result)
     *result = accumulator;
     return 1;
 }
-
-// The following accessors, which take a valid native pointer as input
-// and return a Lisp string, are designed to be foolproof during GC,
-// hence all the forwarding checks.
-
-#if defined(LISP_FEATURE_SB_LDB)
-#include "genesis/classoid.h"
-struct vector * symbol_name(lispobj * sym)
-{
-  if (forwarding_pointer_p(sym))
-    sym = native_pointer(forwarding_pointer_value(sym));
-  if (lowtag_of(((struct symbol*)sym)->name) != OTHER_POINTER_LOWTAG)
-      return NULL;
-  lispobj * name = native_pointer(((struct symbol*)sym)->name);
-  if (forwarding_pointer_p(name))
-      name = native_pointer(forwarding_pointer_value(name));
-  return (struct vector*)name;
-}
-struct vector * classoid_name(lispobj * classoid)
-{
-  if (forwarding_pointer_p(classoid))
-      classoid = native_pointer(forwarding_pointer_value(classoid));
-  lispobj sym = ((struct classoid*)classoid)->name;
-  return lowtag_of(sym) != OTHER_POINTER_LOWTAG ? NULL
-    : symbol_name(native_pointer(sym));
-}
-struct vector * layout_classoid_name(lispobj * layout)
-{
-  if (forwarding_pointer_p(layout))
-      layout = native_pointer(forwarding_pointer_value(layout));
-  lispobj classoid = ((struct layout*)layout)->classoid;
-  return lowtag_of(classoid) != INSTANCE_POINTER_LOWTAG ? NULL
-    : classoid_name(native_pointer(classoid));
-}
-struct vector * instance_classoid_name(lispobj * instance)
-{
-  if (forwarding_pointer_p(instance))
-      instance = native_pointer(forwarding_pointer_value(instance));
-  lispobj layout = instance_layout(instance);
-  return lowtag_of(layout) != INSTANCE_POINTER_LOWTAG ? NULL
-    : layout_classoid_name(native_pointer(layout));
-}
-void safely_show_lstring(struct vector * string, int quotes, FILE *s)
-{
-  extern void show_lstring(struct vector*, int, FILE*);
-  if (forwarding_pointer_p((lispobj*)string))
-      string = (struct vector*)forwarding_pointer_value((lispobj*)string);
-  if (
-#ifdef SIMPLE_CHARACTER_STRING_WIDETAG
-      widetag_of(string->header) == SIMPLE_CHARACTER_STRING_WIDETAG ||
-#endif
-      widetag_of(string->header) == SIMPLE_BASE_STRING_WIDETAG)
-    show_lstring(string, quotes, s);
-  else {
-    fprintf(s, "#<[widetag=%02X]>", widetag_of(string->header));
-  }
-}
-#endif
