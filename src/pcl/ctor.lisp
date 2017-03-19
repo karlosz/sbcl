@@ -56,7 +56,7 @@
 ;;; for classes whose definitions are known at the time the function
 ;;; is called.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 ;;; ******************
 ;;; Utilities  *******
@@ -238,8 +238,8 @@
 (declaim (inline sxhash-symbol-or-class))
 (defun sxhash-symbol-or-class (x)
   (cond ((symbolp x) (sxhash x))
-        ((std-instance-p x) (sb-impl::std-instance-hash x))
-        ((fsc-instance-p x) (sb-impl::fsc-instance-hash x))
+        ((std-instance-p x) (sb!impl::std-instance-hash x))
+        ((fsc-instance-p x) (sb!impl::fsc-instance-hash x))
         (t
          (bug "Something strange where symbol or class expected."))))
 
@@ -412,7 +412,7 @@
 ;;; This used to be a compiler macro but compiler macros are invoked
 ;;; before FOP compilation, while source transforms aren't, there's no
 ;;; reason to optimize make-instance for top-level forms
-(sb-c:define-source-transform make-instance (&whole form &rest args &environment env)
+(sb!c:define-source-transform make-instance (&whole form &rest args &environment env)
   ;; Compiling an optimized constructor for a non-standard class means
   ;; compiling a lambda with (MAKE-INSTANCE #<SOME-CLASS X> ...) in it
   ;; -- need to make sure we don't recurse there.
@@ -421,7 +421,8 @@
         (make-instance->constructor-call form (safe-code-p env)))
       (values nil t)))
 
-(sb-c:define-source-transform allocate-instance (class &rest initargs)
+#+sb-xc
+(sb!c:define-source-transform allocate-instance (class &rest initargs)
   (if (or *compiling-optimized-constructor*
           initargs)
       (values nil t)
@@ -445,7 +446,7 @@
 
 (defun allocate-instance->constructor-call (class-arg)
   (flet ((make-allocator-form (class-or-name)
-           (sb-int:check-deprecated-type class-or-name)
+           (sb!int:check-deprecated-type class-or-name)
            (let ((function-name (list 'ctor 'allocator class-or-name)))
              ;; Return code constructing a ctor at load time, which,
              ;; when called, will set its funcallable instance
@@ -508,7 +509,7 @@
            (let* ((class-or-name (constant-form-value class-arg))
                   (function-name (make-ctor-function-name class-or-name keys
                                                           safe-code-p)))
-             (sb-int:check-deprecated-type class-or-name)
+             (sb!int:check-deprecated-type class-or-name)
              ;; Return code constructing a ctor at load time, which,
              ;; when called, will set its funcallable instance
              ;; function to an optimized constructor function.
@@ -738,6 +739,7 @@
 ;;; Not as good as the real optimizing generator, but faster than going
 ;;; via MAKE-INSTANCE: 1 GF call less, and no need to check initargs.
 (defun fast-make-instance (class &rest initargs)
+  #+sb-xc
   (declare #.*optimize-speed*)
   (declare (dynamic-extent initargs))
   (let ((.instance. (apply #'allocate-instance class initargs)))
@@ -784,7 +786,7 @@
          (allocation-function (raw-instance-allocator class))
          (slots-fetcher (slots-fetcher class)))
     (if (eq allocation-function 'allocate-standard-instance)
-        `(let ((.instance. (%make-standard-instance nil #-compact-instance-header 0))
+        `(let ((.instance. (%make-standard-instance nil #!-compact-instance-header 0))
                (.slots. (make-array
                          ,(layout-length wrapper)
                          ,@(when early-unbound-markers-p

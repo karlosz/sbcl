@@ -785,7 +785,7 @@
  ("src/pcl/slots-boot")
  ("src/pcl/combin")
  ("src/pcl/dfun")
- ("src/pcl/ctor" :warm)
+ ("src/pcl/ctor")
  ("src/pcl/braid" :warm)
  ("src/pcl/dlisp3" :warm)
  ("src/pcl/generic-functions" :warm)
