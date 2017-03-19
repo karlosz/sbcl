@@ -292,6 +292,7 @@
         &optional
         (proto nil proto-p)
         direct-slots slots direct-default-initargs default-initargs)
+  (/show0 "Bootstrapping a class")
   (flet ((classes (names) (mapcar #'find-class names))
          (set-slot (slot-name value)
            (!bootstrap-set-slot metaclass-name class slot-name value)))
@@ -299,6 +300,7 @@
     (set-slot 'finalized-p t)
     (set-slot 'source source)
     (set-slot 'safe-p nil)
+    (/show0 "Bootstrapping a class 2")
     (set-slot '%type (if (eq class (find-class t))
                          t
                          ;; FIXME: Could this just be CLASS instead
@@ -322,6 +324,7 @@
     (set-slot 'direct-methods (cons nil nil))
     (set-slot 'wrapper wrapper)
     (set-slot '%documentation nil)
+    (/show0 "Bootstrapping a class 3")
     (set-slot 'plist
               `(,@(and direct-default-initargs
                        `(direct-default-initargs ,direct-default-initargs))
@@ -368,8 +371,11 @@
       (condition-class
        (set-slot 'prototype (make-condition name)))
       (t
-       (set-slot 'prototype
-                 (if proto-p proto (allocate-standard-instance wrapper)))))
+       (/show0 "Bootstrapping a class 5c")
+       (if (and proto-p (consp proto) (eq :late (car proto)))
+           (set-slot 'prototype (eval (second proto)))
+           (set-slot 'prototype
+                     (if proto-p proto (allocate-standard-instance wrapper))))))
     class))
 
 (defun !bootstrap-make-slot-definitions (name class slots wrapper effective-p)

@@ -24,7 +24,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 (declaim (declaration
           ;; These nonstandard declarations seem to be used privately
@@ -74,15 +74,18 @@
       (error 'illegal-class-name-error :name thing)
       thing))
 
-(define-condition class-not-found-error (sb-kernel::cell-error)
-  ((sb-kernel::name :type (satisfies legal-class-name-p)))
+(define-condition class-not-found-error (sb!kernel::cell-error)
+  ((sb!kernel::name :type (satisfies legal-class-name-p)))
   (:report (lambda (condition stream)
              (format stream "~@<There is no class named ~
-                             ~/sb-impl:print-symbol-with-prefix/.~@:>"
-                     (sb-kernel::cell-error-name condition)))))
+                             ~/sb!impl:print-symbol-with-prefix/.~@:>"
+                     (sb!kernel::cell-error-name condition)))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *create-classes-from-internal-structure-definitions-p* t))
+
+;;; XXX WHY?
+#!+nil
 (declaim (always-bound *create-classes-from-internal-structure-definitions-p*))
 
 (declaim (ftype function ensure-non-standard-class))
@@ -99,6 +102,7 @@
         (check-class-name symbol)
         (error 'class-not-found-error :name symbol))))
 
+#+sb-xc
 (defun find-class (symbol &optional (errorp t) environment)
   (declare (ignore environment) (explicit-check))
   (find-class-from-cell symbol
@@ -106,12 +110,14 @@
                         errorp))
 
 
+#+sb-xc
 (define-compiler-macro find-class (&whole form
                                    symbol &optional (errorp t) environment)
   (declare (ignore environment))
   (if (and (constantp symbol)
            (legal-class-name-p (setf symbol (constant-form-value symbol)))
            (constantp errorp)
+           (boundp '**boot-state**)
            (member **boot-state** '(braid complete)))
       (let ((errorp (not (null (constant-form-value errorp))))
             (cell (make-symbol "CLASSOID-CELL")))
@@ -124,6 +130,7 @@
       form))
 
 (declaim (ftype function update-ctors))
+#+sb-xc
 (defun (setf find-class) (new-value name &optional errorp environment)
   (declare (ignore errorp environment))
   (check-class-name name)
@@ -148,20 +155,20 @@
          (aver (constantp slot-name env))
          `(funcall #',(funcall gf-nameize (constant-form-value slot-name env))
                    ,@newval ,object)))
-  (defmacro accessor-slot-boundp (object slot-name &environment env)
+  (sb-xc:defmacro accessor-slot-boundp (object slot-name &environment env)
     (call-gf 'slot-boundp-name object slot-name env))
 
-  (defmacro accessor-slot-value (object slot-name &environment env)
+  (sb-xc:defmacro accessor-slot-value (object slot-name &environment env)
     `(truly-the (values t &optional)
                 ,(call-gf 'slot-reader-name object slot-name env)))
 
-  (defmacro accessor-set-slot-value (object slot-name new-value &environment env)
+  (sb-xc:defmacro accessor-set-slot-value (object slot-name new-value &environment env)
     ;; Expand NEW-VALUE before deciding not to bind a temp var for OBJECT,
     ;; which should be eval'd first. We skip the binding if either new-value
     ;; is constant or a plain variable. This is still subtly wrong if NEW-VALUE
     ;; is a special, because we'll read it more than once.
-    (setq new-value (%macroexpand new-value env))
-    (let ((bind-object (unless (or (constantp new-value env) (atom new-value))
+    (setq new-value (sb!impl::%macroexpand new-value env))
+    (let ((bind-object (unless (or (sb-xc:constantp new-value env) (atom new-value))
                          (let* ((object-var (gensym))
                                 (bind `((,object-var ,object))))
                            (setf object object-var)

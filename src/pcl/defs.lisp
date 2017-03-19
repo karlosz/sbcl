@@ -21,7 +21,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 ;;; (These are left over from the days when PCL was an add-on package
 ;;; for a pre-CLOS Common Lisp. They shouldn't happen in a normal
@@ -38,7 +38,7 @@
            has already been partially loaded. This may not work, you may~%~
            need to get a fresh lisp (reboot) and then load PCL."))
 
-#-sb-fluid (declaim (inline gdefinition))
+#!-sb-fluid (declaim (inline gdefinition))
 (defun gdefinition (spec)
   ;; This is null layer right now, but once FDEFINITION stops bypasssing
   ;; fwrappers/encapsulations we can do that here.
@@ -48,7 +48,7 @@
   ;; This is almost a null layer right now, but once (SETF
   ;; FDEFINITION) stops bypasssing fwrappers/encapsulations we can do
   ;; that here.
-  (sb-c::note-name-defined spec :function) ; FIXME: do we need this? Why?
+  (sb!c::note-name-defined spec :function) ; FIXME: do we need this? Why?
   (setf (fdefinition spec) new-value))
 
 ;;;; type specifier hackery
@@ -155,7 +155,7 @@
 ;;; SUBTYPEP in place of just returning (VALUES NIL NIL) can be very
 ;;; slow. *SUBTYPEP is used by PCL itself, and must be fast.
 ;;;
-;;; FIXME: SB-KERNEL has fast-and-not-quite-precise type code for use
+;;; FIXME: SB!KERNEL has fast-and-not-quite-precise type code for use
 ;;; in the compiler. Could we share some of it here?
 (defvar *in-*subtypep* nil)
 
@@ -203,10 +203,10 @@
         nil)))
 
 ;;;; built-in classes
-
-;;; Grovel over SB-KERNEL::*!BUILT-IN-CLASSES* in order to set
-;;; SB-PCL:*BUILT-IN-CLASSES*.
-(/show "about to set up SB-PCL::*BUILT-IN-CLASSES*")
+;;; Grovel over SB!KERNEL::*!BUILT-IN-CLASSES* in order to set
+;;; SB!PCL:*BUILT-IN-CLASSES*.
+(/show "about to set up SB!PCL::*BUILT-IN-CLASSES*")
+#+sb-xc
 (defvar *built-in-classes*
   (labels ((direct-supers (class)
              (/noshow "entering DIRECT-SUPERS" (classoid-name class))
@@ -246,7 +246,10 @@
                          (layout-inherits
                           (classoid-layout class))))
                   ,(if prototype-form
-                       (eval prototype-form)
+                       (if (and (consp prototype-form)
+                                (eq :late (car prototype-form)))
+                           `',prototype-form
+                           (eval prototype-form))
                        ;; This is the default prototype value which
                        ;; was used, without explanation, by the CMU CL
                        ;; code we're derived from. Evidently it's safe
@@ -259,54 +262,54 @@
                                  ;; BUILT-IN-CLASS list
                                  '(t function stream sequence
                                      file-stream string-stream)))
-                       sb-kernel::*!built-in-classes*))))
-(/noshow "done setting up SB-PCL::*BUILT-IN-CLASSES*")
+                       sb!kernel::*!built-in-classes*))))
+(/noshow "done setting up SB!PCL::*BUILT-IN-CLASSES*")
 
 ;;;; the classes that define the kernel of the metabraid
 
-(defclass t () ()
+(def!class t () ()
   ;; AMOP specifies that the class named T should be an instance of
   ;; BUILT-IN-CLASS, but this conflicts with other specifications in
   ;; AMOP and CLHS.
   (:metaclass system-class))
 
-(defclass function (t) ()
+(def!class function (t) ()
   (:metaclass system-class))
 
-(defclass stream (t) ()
+(def!class stream (t) ()
   (:metaclass system-class))
 
-(defclass file-stream (stream) ()
+(def!class file-stream (stream) ()
   (:metaclass system-class))
 
-(defclass string-stream (stream) ()
+(def!class string-stream (stream) ()
   (:metaclass system-class))
 
-(defclass sequence (t) ()
+(def!class sequence (t) ()
   (:metaclass system-class))
 
-(defclass slot-object (t) ()
+(def!class slot-object (t) ()
   (:metaclass slot-class))
 
-(defclass condition (slot-object) ()
+(def!class condition (slot-object) ()
   (:metaclass condition-class))
 
-(defclass structure-object (slot-object) ()
+(def!class structure-object (slot-object) ()
   (:metaclass structure-class))
 
 (defstruct (dead-beef-structure-object
             (:constructor |STRUCTURE-OBJECT class constructor|)
             (:copier nil)))
 
-(defclass standard-object (slot-object) ())
+(def!class standard-object (slot-object) ())
 
-(defclass funcallable-standard-object (function standard-object)
+(def!class funcallable-standard-object (function standard-object)
   ()
   (:metaclass funcallable-standard-class))
 
-(defclass metaobject (standard-object) ())
+(def!class metaobject (standard-object) ())
 
-(defclass generic-function (dependent-update-mixin
+(def!class generic-function (dependent-update-mixin
                             definition-source-mixin
                             metaobject
                             funcallable-standard-object)
@@ -326,7 +329,7 @@
    (encapsulations :initform () :accessor generic-function-encapsulations))
   (:metaclass funcallable-standard-class))
 
-(defclass standard-generic-function (generic-function)
+(def!class standard-generic-function (generic-function)
   ((name
     :initform nil
     :initarg :name
@@ -357,15 +360,15 @@
     :accessor gf-dfun-state)
    ;; Used to make DFUN-STATE & FIN-FUNCTION updates atomic.
    (%lock
-    :initform (sb-thread:make-mutex :name "GF lock")
+    :initform (sb!thread:make-mutex :name "GF lock")
     :reader gf-lock))
   (:metaclass funcallable-standard-class)
   (:default-initargs :method-class *the-class-standard-method*
                      :method-combination *standard-method-combination*))
 
-(defclass method (metaobject) ())
+(def!class method (metaobject) ())
 
-(defclass standard-method (plist-mixin definition-source-mixin method)
+(def!class standard-method (plist-mixin definition-source-mixin method)
   ((%generic-function :initform nil :accessor method-generic-function)
    (qualifiers :initform () :initarg :qualifiers :reader method-qualifiers)
    (specializers :initform () :initarg :specializers
@@ -380,30 +383,30 @@
     :initarg simple-next-method-call
     :reader simple-next-method-call-p)))
 
-(defclass accessor-method (standard-method)
+(def!class accessor-method (standard-method)
   ((slot-name :initform nil :initarg :slot-name
               :reader accessor-method-slot-name)))
 
-(defclass standard-accessor-method (accessor-method)
+(def!class standard-accessor-method (accessor-method)
   ((%slot-definition :initform nil :initarg :slot-definition
                      :reader accessor-method-slot-definition)))
 
-(defclass standard-reader-method (standard-accessor-method) ())
-(defclass standard-writer-method (standard-accessor-method) ())
+(def!class standard-reader-method (standard-accessor-method) ())
+(def!class standard-writer-method (standard-accessor-method) ())
 ;;; an extension, apparently.
-(defclass standard-boundp-method (standard-accessor-method) ())
+(def!class standard-boundp-method (standard-accessor-method) ())
 
 ;;; for (SLOT-VALUE X 'FOO) / ACCESSOR-SLOT-VALUE optimization, which
 ;;; can't be STANDARD-READER-METHOD because there is no associated
 ;;; slot definition.
-(defclass global-reader-method (accessor-method) ())
-(defclass global-writer-method (accessor-method) ())
-(defclass global-boundp-method (accessor-method) ())
+(def!class global-reader-method (accessor-method) ())
+(def!class global-writer-method (accessor-method) ())
+(def!class global-boundp-method (accessor-method) ())
 
-(defclass method-combination (metaobject)
+(def!class method-combination (metaobject)
   ((%documentation :initform nil :initarg :documentation)))
 
-(defclass standard-method-combination (definition-source-mixin
+(def!class standard-method-combination (definition-source-mixin
                                        method-combination)
   ((type-name
     :reader method-combination-type-name
@@ -412,7 +415,7 @@
     :reader method-combination-options
     :initarg :options)))
 
-(defclass long-method-combination (standard-method-combination)
+(def!class long-method-combination (standard-method-combination)
   ((function
     :initarg :function
     :reader long-method-combination-function)
@@ -420,7 +423,7 @@
     :initarg :args-lambda-list
     :reader long-method-combination-args-lambda-list)))
 
-(defclass short-method-combination (standard-method-combination)
+(def!class short-method-combination (standard-method-combination)
   ((operator
     :reader short-combination-operator
     :initarg :operator)
@@ -428,7 +431,7 @@
     :reader short-combination-identity-with-one-argument
     :initarg :identity-with-one-argument)))
 
-(defclass slot-definition (metaobject)
+(def!class slot-definition (metaobject)
   ((name
     :initform nil
     :initarg :name
@@ -454,7 +457,7 @@
    (%class :initform nil :initarg :class :accessor slot-definition-class)
    (source :initform nil :initarg source :accessor definition-source)))
 
-(defclass standard-slot-definition (slot-definition)
+(def!class standard-slot-definition (slot-definition)
   ((allocation
     :initform :instance
     :initarg :allocation
@@ -464,7 +467,7 @@
     :initarg :allocation-class
     :accessor slot-definition-allocation-class)))
 
-(defclass condition-slot-definition (slot-definition)
+(def!class condition-slot-definition (slot-definition)
   ((allocation
     :initform :instance
     :initarg :allocation
@@ -474,7 +477,7 @@
     :initarg :allocation-class
     :accessor slot-definition-allocation-class)))
 
-(defclass structure-slot-definition (slot-definition)
+(def!class structure-slot-definition (slot-definition)
   ((defstruct-accessor-symbol
      :initform nil
      :initarg :defstruct-accessor-symbol
@@ -488,7 +491,7 @@
      :initarg :internal-writer-function
      :accessor slot-definition-internal-writer-function)))
 
-(defclass direct-slot-definition (slot-definition)
+(def!class direct-slot-definition (slot-definition)
   ((readers
     :initform nil
     :initarg :readers
@@ -498,7 +501,7 @@
     :initarg :writers
     :accessor slot-definition-writers)))
 
-(defclass effective-slot-definition (slot-definition)
+(def!class effective-slot-definition (slot-definition)
   ((accessor-flags
     :initform 0)
    (info
@@ -519,33 +522,33 @@
   (writer (missing-arg) :type function)
   (boundp (missing-arg) :type function))
 
-(defclass standard-direct-slot-definition (standard-slot-definition
+(def!class standard-direct-slot-definition (standard-slot-definition
                                            direct-slot-definition)
   ())
 
-(defclass standard-effective-slot-definition (standard-slot-definition
+(def!class standard-effective-slot-definition (standard-slot-definition
                                               effective-slot-definition)
   ((location ; nil, a fixnum, a cons: (slot-name . value)
     :initform nil
     :accessor slot-definition-location)))
 
-(defclass condition-direct-slot-definition (condition-slot-definition
+(def!class condition-direct-slot-definition (condition-slot-definition
                                             direct-slot-definition)
   ())
 
-(defclass condition-effective-slot-definition (condition-slot-definition
+(def!class condition-effective-slot-definition (condition-slot-definition
                                                effective-slot-definition)
   ())
 
-(defclass structure-direct-slot-definition (structure-slot-definition
+(def!class structure-direct-slot-definition (structure-slot-definition
                                             direct-slot-definition)
   ())
 
-(defclass structure-effective-slot-definition (structure-slot-definition
+(def!class structure-effective-slot-definition (structure-slot-definition
                                                effective-slot-definition)
   ())
 
-(defclass specializer (metaobject)
+(def!class specializer (metaobject)
   ;; KLUDGE: in sbcl-0.9.10.2 this was renamed from TYPE, which was an
   ;; external symbol of the CL package and hence potentially collides
   ;; with user code.  Renaming this to %TYPE, however, is the coward's
@@ -559,28 +562,28 @@
 ;;; STANDARD in this name doesn't mean "blessed by a standard" but
 ;;; "comes as standard with PCL"; that is, it includes CLASS-EQ
 ;;; and vestiges of PROTOTYPE specializers
-(defclass standard-specializer (specializer) ())
+(def!class standard-specializer (specializer) ())
 
 ;;; Note that this class cannot define the OBJECT slot and
 ;;; SPECIALIZER-OBJECT reader because of bootstrapping limitations.
-(defclass specializer-with-object (specializer) ())
+(def!class specializer-with-object (specializer) ())
 
-(defclass exact-class-specializer (specializer) ())
+(def!class exact-class-specializer (specializer) ())
 
-(defclass class-eq-specializer (standard-specializer
+(def!class class-eq-specializer (standard-specializer
                                 exact-class-specializer
                                 specializer-with-object)
   ((object :initarg :class
            :reader specializer-class
            :reader specializer-object)))
 
-(defclass class-prototype-specializer (standard-specializer
+(def!class class-prototype-specializer (standard-specializer
                                        specializer-with-object)
   ((object :initarg :class
            :reader specializer-class
            :reader specializer-object)))
 
-(defclass eql-specializer (standard-specializer
+(def!class eql-specializer (standard-specializer
                            exact-class-specializer
                            specializer-with-object)
   ((object :initarg :object :reader specializer-object
@@ -606,6 +609,7 @@
 (defglobal *eql-specializer-table*
   (make-hash-table :test 'eql :weakness :value))
 
+#-sb-xc-host ;;XXX WHY?
 (defun intern-eql-specializer (object)
   ;; Avoid style-warning about compiler-macro being unavailable.
   (declare (notinline make-instance))
@@ -616,7 +620,7 @@
         (setf (gethash object *eql-specializer-table*)
               (make-instance 'eql-specializer :object object)))))
 
-(defclass class (dependent-update-mixin
+(def!class class (dependent-update-mixin
                  definition-source-mixin
                  standard-specializer)
   ((name
@@ -652,7 +656,7 @@
 
 ;;; The class PCL-CLASS is an implementation-specific common
 ;;; superclass of all specified subclasses of the class CLASS.
-(defclass pcl-class (class)
+(def!class pcl-class (class)
   ((%class-precedence-list
     :reader class-precedence-list)
    ;; KLUDGE: see note in CPL-OR-NIL
@@ -672,7 +676,7 @@
     :initform nil
     :reader class-prototype)))
 
-(defclass slot-class (pcl-class)
+(def!class slot-class (pcl-class)
   ((direct-slots
     :initform ()
     :reader class-direct-slots)
@@ -683,39 +687,39 @@
 ;;; The class STD-CLASS is an implementation-specific common
 ;;; superclass of the classes STANDARD-CLASS and
 ;;; FUNCALLABLE-STANDARD-CLASS.
-(defclass std-class (slot-class)
+(def!class std-class (slot-class)
   ())
 
-(defclass standard-class (std-class)
+(def!class standard-class (std-class)
   ()
   (:default-initargs
    :direct-superclasses (list *the-class-standard-object*)))
 
-(defclass funcallable-standard-class (std-class)
+(def!class funcallable-standard-class (std-class)
   ()
   (:default-initargs
    :direct-superclasses (list *the-class-funcallable-standard-object*)))
 
-(defclass forward-referenced-class (pcl-class) ())
+(def!class forward-referenced-class (pcl-class) ())
 
-(defclass system-class (pcl-class) ())
+(def!class system-class (pcl-class) ())
 
-(defclass built-in-class (system-class) ())
+(def!class built-in-class (system-class) ())
 
-(defclass condition-class (slot-class) ())
+(def!class condition-class (slot-class) ())
 
-(defclass structure-class (slot-class)
+(def!class structure-class (slot-class)
   ((defstruct-form :initform () :accessor class-defstruct-form)
    (defstruct-constructor :initform nil :accessor class-defstruct-constructor)
    (from-defclass-p :initform nil :initarg :from-defclass-p)))
 
-(defclass definition-source-mixin (standard-object)
+(def!class definition-source-mixin (standard-object)
   ((source
     :initform nil
     :reader definition-source
     :initarg :definition-source)))
 
-(defclass plist-mixin (standard-object)
+(def!class plist-mixin (standard-object)
   ((plist :initform () :accessor object-plist :initarg plist)))
 
-(defclass dependent-update-mixin (plist-mixin) ())
+(def!class dependent-update-mixin (plist-mixin) ())
