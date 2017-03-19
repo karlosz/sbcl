@@ -21,7 +21,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 (defvar *!temporary-ensure-accessor-functions* nil)
 (defun ensure-accessor (fun-name)
@@ -397,6 +397,7 @@
          (instance-structure-protocol-error slotd
                                             'slot-boundp-using-class))))))
 
+#+sb-xc
 (defun get-accessor-from-svuc-method-function (class slotd sdfun name)
   (macrolet ((emf-funcall (emf &rest args)
                `(invoke-effective-method-function ,emf nil
@@ -417,6 +418,7 @@
         class-or-name
         (find-class class-or-name nil))))
 
+#+sb-xc
 (flet ((make-initargs (slot-name kind method-function)
          (let ((initargs (copy-tree method-function))
                (slot-names (list slot-name)))
@@ -550,7 +552,8 @@
 
 (defun find-slot-cell (wrapper slot-name)
   (declare (symbol slot-name))
-  (declare (optimize (sb-c::insert-array-bounds-checks 0)))
+  #+sb-xc
+  (declare (optimize (sb!c::insert-array-bounds-checks 0)))
   (let* ((vector (layout-slot-table wrapper))
          (modulus (truly-the index (svref vector 0)))
          ;; Can elide the 'else' branch of (OR symbol-hash ensure-symbol-hash)
@@ -581,7 +584,8 @@
          (vector (make-array n :initial-element nil)))
     (flet ((add-to-vector (name slot)
              (declare (symbol name)
-                      (optimize (sb-c::insert-array-bounds-checks 0)))
+                      #+sb-xc
+                      (optimize (sb!c::insert-array-bounds-checks 0)))
              (let ((index (rem (ensure-symbol-hash name) n)))
                (setf (svref vector index)
                      (acons name

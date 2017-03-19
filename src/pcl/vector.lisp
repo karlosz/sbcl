@@ -23,7 +23,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 ;;;; Up to 1.0.9.24 SBCL used to have a sketched out implementation
 ;;;; for optimizing GF calls inside method bodies using a PV approach,
@@ -38,7 +38,7 @@
 ;;;; to cache effective method functions.
 
 (declaim (inline make-pv-table))
-(defstruct (pv-table (:predicate pv-tablep)
+(def!struct (pv-table (:predicate pv-tablep)
                      (:copier nil))
   (cache nil :type (or cache null))
   (pv-size 0 :type fixnum)
@@ -59,7 +59,7 @@
 ;;; cases this lock might be grabbed in the course of method dispatch
 ;;; -- and mostly this is already under the *world-lock*
 (defvar *pv-lock*
-  (sb-thread:make-mutex :name "pv table index lock"))
+  (sb!thread:make-mutex :name "pv table index lock"))
 
 (defun intern-pv-table (&key slot-name-lists)
   (flet ((intern-slot-names (slot-names)
@@ -70,7 +70,7 @@
                (setf (gethash snl *pv-tables*)
                      (make-pv-table :slot-name-lists snl
                                     :pv-size (* 2 (reduce #'+ snl :key #'length)))))))
-    (sb-thread:with-mutex (*pv-lock*)
+    (sb!thread:with-mutex (*pv-lock*)
       (%intern-pv-table (mapcar #'intern-slot-names slot-name-lists)))))
 
 (defun use-standard-slot-access-p (class slot-name type)
@@ -173,8 +173,8 @@
                      ;; The class itself is never forward-referenced
                      ;; here, but its superclasses may be.
                      (unless (try-finalize-inheritance class)
-                       (when (boundp 'sb-c:*lexenv*)
-                         (sb-c:compiler-notify
+                       (when (boundp 'sb!c:*lexenv*)
+                         (sb!c:compiler-notify
                           "~@<Cannot optimize slot access, inheritance of ~S is not ~
                            yet finalizable due to forward-referenced superclasses:~
                            ~%  ~S~:@>"
@@ -192,7 +192,7 @@
 ;;; Check whether the binding of the named variable is modified in the
 ;;; method body.
 (defun parameter-modified-p (parameter-name env)
-  (let ((modified-variables (%macroexpand '%parameter-binding-modified env)))
+  (let ((modified-variables (sb!impl::%macroexpand '%parameter-binding-modified env)))
     (memq parameter-name modified-variables)))
 
 (defun optimize-slot-value (form slots required-parameters env)
@@ -585,12 +585,12 @@
 ;;; overridden.
 (define-symbol-macro pv-env-environment overridden)
 
-(defmacro pv-env (&environment env
+(sb-xc:defmacro pv-env (&environment env
                   (pv-table-form pv-parameters)
                   &rest forms)
   ;; Decide which expansion to use based on the state of the PV-ENV-ENVIRONMENT
   ;; symbol-macrolet.
-  (if (eq (macroexpand 'pv-env-environment env) 'default)
+  (if (eq (sb-xc:macroexpand 'pv-env-environment env) 'default)
       `(locally (declare (simple-vector .pv.))
          ,@forms)
       `(let* ((.pv-table. ,pv-table-form)
@@ -643,11 +643,11 @@
       (setq body (cdr body)))
     (values outer-decls inner-decls body)))
 
-;;; Convert a lambda expression containing a SB-PCL::%METHOD-NAME
+;;; Convert a lambda expression containing a SB!PCL::%METHOD-NAME
 ;;; declaration (which is a naming style internal to PCL) into an
-;;; SB-INT:NAMED-LAMBDA expression (which is a naming style used
+;;; SB!INT:NAMED-LAMBDA expression (which is a naming style used
 ;;; throughout SBCL, understood by the main compiler); or if there's
-;;; no SB-PCL::%METHOD-NAME declaration, then just return the original
+;;; no SB!PCL::%METHOD-NAME declaration, then just return the original
 ;;; lambda expression.
 (defun name-method-lambda (method-lambda)
   (let ((method-name *method-name*))

@@ -70,6 +70,7 @@
                           *the-class-structure-object*
                           *the-class-standard-object*
                           *the-class-funcallable-standard-object*
+                          *the-class-system-class*
                           *the-class-class*
                           *the-class-generic-function*
                           *the-class-built-in-class*

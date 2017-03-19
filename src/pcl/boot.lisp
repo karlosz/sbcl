@@ -21,7 +21,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 #|
 
@@ -80,6 +80,7 @@ bootstrapping.
 ;;; early definition. Do this in a way that makes sure that if we
 ;;; redefine one of the early definitions the redefinition will take
 ;;; effect. This makes development easier.
+#+sb-xc
 (loop for (name early-name) in *!early-functions*
    do (let ((early-name early-name))
         (setf (gdefinition name)
@@ -248,7 +249,7 @@ bootstrapping.
       ()
       short-compute-effective-method))))
 
-(defmacro defgeneric (fun-name lambda-list &body options)
+(sb-xc:defmacro defgeneric (fun-name lambda-list &body options)
   (declare (type list lambda-list))
   (unless (legal-fun-name-p fun-name)
     (error 'simple-program-error
@@ -348,14 +349,14 @@ bootstrapping.
          (eval-when (:compile-toplevel :load-toplevel :execute)
            (compile-or-load-defgeneric ',fun-name))
          (load-defgeneric ',fun-name ',lambda-list
-                          (sb-c:source-location) ,@initargs)
+                          (sb!c:source-location) ,@initargs)
          ,@(mapcar #'expand-method-definition methods)
          (fdefinition ',fun-name)))))
 
 (defun compile-or-load-defgeneric (fun-name)
   (proclaim-as-fun-name fun-name)
   (when (typep fun-name '(cons (eql setf)))
-    (sb-c::warn-if-setf-macro fun-name))
+    (sb!c::warn-if-setf-macro fun-name))
   (note-name-defined fun-name :function)
   (unless (eq (info :function :where-from fun-name) :declared)
     ;; Hmm. This is similar to BECOME-DEFINED-FUN-NAME
@@ -366,7 +367,7 @@ bootstrapping.
 
 (defun load-defgeneric (fun-name lambda-list source-location &rest initargs)
   (when (fboundp fun-name)
-    (warn 'sb-kernel:redefinition-with-defgeneric
+    (warn 'sb!kernel:redefinition-with-defgeneric
           :name fun-name
           :new-location source-location)
     (let ((fun (fdefinition fun-name)))
@@ -413,11 +414,12 @@ generic function lambda list ~S~:>"
 (defun check-method-lambda (method-lambda context)
   (unless (typep method-lambda '(cons (eql lambda)))
     (error "~@<The METHOD-LAMBDA argument to ~
-            ~/sb-impl:print-symbol-with-prefix/, ~S, is not a lambda ~
+            ~/sb!impl:print-symbol-with-prefix/, ~S, is not a lambda ~
             form.~@:>"
            context method-lambda))
   method-lambda)
 
+#+nil
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (fmakunbound 'defmethod))
 ;;; As per CLHS -
@@ -425,7 +427,7 @@ generic function lambda list ~S~:>"
 ;;; and we don't do much other than to make the function be defined,
 ;;; which means that checking of callers' arglists can only occur after called
 ;;; methods are actually loaded.
-(defmacro defmethod (name &rest args)
+(sb-xc:defmacro defmethod (name &rest args)
   (multiple-value-bind (qualifiers lambda-list body)
       (parse-defmethod args)
     `(progn
@@ -518,7 +520,7 @@ generic function lambda list ~S~:>"
   (binding* (;; ENV could be of type SB!INTERPRETER:BASIC-ENV but I
              ;; don't care to figure out what parts of PCL would have
              ;; to change to accept that, so coerce.
-             (env (sb-kernel:coerce-to-lexenv env))
+             (env (sb!kernel:coerce-to-lexenv env))
              ((nil unspecialized-lambda-list specializers)
               (parse-specialized-lambda-list lambda-list))
              (*method-name* `(,name ,@qualifiers ,specializers))
@@ -569,7 +571,8 @@ generic function lambda list ~S~:>"
 (defun make-defmethod-form
     (name qualifiers specializers unspecialized-lambda-list
      method-class-name initargs-form)
-  (declare (sb-ext:muffle-conditions sb-ext:code-deletion-note))
+  #+nil
+  (declare (sb!ext:muffle-conditions sb!ext:code-deletion-note))
   (let (fn
         fn-lambda)
     (if (and (interned-symbol-p (fun-name-block-name name))
@@ -577,8 +580,8 @@ generic function lambda list ~S~:>"
              (every (lambda (s)
                       (if (consp s)
                           (and (eq (car s) 'eql)
-                               (constantp (cadr s))
-                               (let ((sv (constant-form-value (cadr s))))
+                               (sb-xc:constantp (cadr s))
+                               (let ((sv (sb!impl::constant-form-value (cadr s))))
                                  (or (interned-symbol-p sv)
                                      (integerp sv)
                                      (and (characterp sv)
@@ -644,7 +647,7 @@ generic function lambda list ~S~:>"
     ,specializers-form
     ',unspecialized-lambda-list
     ,initargs-form
-    (sb-c:source-location)))
+    (sb!c:source-location)))
 
 (defmacro make-method-function (method-lambda &environment env)
   (binding* (((proto-gf proto-method)
@@ -748,7 +751,7 @@ generic function lambda list ~S~:>"
       ;;   (DEFSTRUCT BAR A B)
       ;;   (FOO (MAKE-BAR))
       ;; perhaps because of the way that STRUCTURE-OBJECT inherits
-      ;; both from SLOT-OBJECT and from SB-KERNEL:INSTANCE. In an
+      ;; both from SLOT-OBJECT and from SB!KERNEL:INSTANCE. In an
       ;; effort to sweep such problems under the rug, we exclude these
       ;; problem cases by blacklisting them here. -- WHN 2001-01-19
       ((eq specializer 'slot-object)
@@ -880,9 +883,9 @@ generic function lambda list ~S~:>"
                  (block ,(fun-name-block-name generic-function-name)
                    ,@real-body)))
              (constant-value-p (and (null (cdr real-body))
-                                    (constantp (car real-body))))
+                                    (sb-xc:constantp (car real-body))))
              (constant-value (when constant-value-p
-                               (constant-form-value (car real-body))))
+                               (sb!impl::constant-form-value (car real-body))))
              (plist (when (and constant-value-p
                                (or (typep constant-value '(or number character))
                                    (and (symbolp constant-value)
@@ -1022,9 +1025,9 @@ generic function lambda list ~S~:>"
            (warn condition
                  :format-control
                  "~@<Cannot find type for specializer ~
-                  ~/sb-ext:print-symbol-with-prefix/ when executing ~S ~
-                  for a ~/sb-ext:print-type-specifier/ of a ~
-                  ~/sb-ext:print-type-specifier/.~@:>"
+                  ~/sb!ext:print-symbol-with-prefix/ when executing ~S ~
+                  for a ~/sb!ext:print-type-specifier/ of a ~
+                  ~/sb!ext:print-type-specifier/.~@:>"
                  :format-arguments
                  (list name 'specializer-type-specifier
                        (class-name (class-of proto-method))
@@ -1286,7 +1289,7 @@ generic function lambda list ~S~:>"
 (defstruct (constant-method-call (:copier nil) (:include method-call))
   value)
 
-#-sb-fluid (declaim (sb-ext:freeze-type method-call))
+#!-sb-fluid (declaim (sb!ext:freeze-type method-call))
 
 (defmacro invoke-method-call1 (function args cm-args)
   `(let ((.function. ,function)
@@ -1312,7 +1315,7 @@ generic function lambda list ~S~:>"
              (:copier nil) (:include fast-method-call))
   value)
 
-#-sb-fluid (declaim (sb-ext:freeze-type fast-method-call))
+#!-sb-fluid (declaim (sb!ext:freeze-type fast-method-call))
 
 ;; The two variants of INVOKE-FAST-METHOD-CALL differ in how REST-ARGs
 ;; are handled. The first one will get REST-ARG as a single list (as
@@ -1336,7 +1339,7 @@ generic function lambda list ~S~:>"
                           (fast-method-call-next-method-call ,method-call)
                           ,@required-args
                           ,@(loop for x below ,n
-                                  collect `(sb-c::%more-arg ,more-context ,x)))))
+                                  collect `(sb!c::%more-arg ,more-context ,x)))))
     ;; The cases with only small amounts of required arguments passed
     ;; are probably very common, and special-casing speeds them up by
     ;; a factor of 2 with very little effect on the other
@@ -1349,16 +1352,16 @@ generic function lambda list ~S~:>"
             (values (fast-method-call-pv ,method-call))
             (values (fast-method-call-next-method-call ,method-call))
             ,@required-args
-            (sb-c::%more-arg-values ,more-context 0 ,more-count))))))
+            (sb!c::%more-arg-values ,more-context 0 ,more-count))))))
 
 (defstruct (fast-instance-boundp (:copier nil))
   (index 0 :type fixnum))
 
-#-sb-fluid (declaim (sb-ext:freeze-type fast-instance-boundp))
+#!-sb-fluid (declaim (sb!ext:freeze-type fast-instance-boundp))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *allow-emf-call-tracing-p* nil)
-  (defvar *enable-emf-call-tracing-p* #-sb-show nil #+sb-show t))
+  (defvar *enable-emf-call-tracing-p* #!-sb-show nil #!+sb-show t))
 
 ;;;; effective method functions
 
@@ -1371,7 +1374,7 @@ generic function lambda list ~S~:>"
 ;;; it might be useful someday, so I haven't deleted it.
 ;;; But it isn't documented and isn't used for anything now, so
 ;;; I've conditionalized it out of the base system. -- WHN 19991213
-#+sb-show
+#!+sb-show
 (defun show-emf-call-trace ()
   (when *emf-call-trace*
     (let ((j *emf-call-trace-index*)
@@ -1453,12 +1456,12 @@ generic function lambda list ~S~:>"
 ;;; involve the slot-accessor clause (where EMF is a FIXNUM) at all.
 (macrolet ((def (name &optional narrow)
              `(defmacro ,name (emf restp &key required-args rest-arg more-arg)
-                (unless (constantp restp)
+                (unless (sb-xc:constantp restp)
                   (error "The RESTP argument is not constant."))
-                (setq restp (constant-form-value restp))
+                (setq restp (sb!impl::constant-form-value restp))
                 (with-unique-names (emf-n)
                   `(locally
-                       (declare (optimize (sb-c:insert-step-conditions 0)))
+                       (declare (optimize (sb!c:insert-step-conditions 0)))
                      (let ((,emf-n ,emf))
                        (trace-emf-call ,emf-n ,restp (list ,@required-args ,@rest-arg))
                        (etypecase ,emf-n
@@ -1585,7 +1588,7 @@ generic function lambda list ~S~:>"
      &environment env)
   (let* ((next-method-p-def
           `((next-method-p ()
-              (declare (optimize (sb-c:insert-step-conditions 0)))
+              (declare (optimize (sb!c:insert-step-conditions 0)))
               (not (null ,next-method-call)))))
          (rebindings (when (or setq-p call-next-method-p)
                        (mapcar (lambda (x) (list x x)) parameters-setqd))))
@@ -1597,7 +1600,7 @@ generic function lambda list ~S~:>"
                     `((call-next-method (&rest cnm-args)
                         (declare (dynamic-extent cnm-args)
                                  (muffle-conditions code-deletion-note)
-                                 (optimize (sb-c:insert-step-conditions 0)))
+                                 (optimize (sb!c:insert-step-conditions 0)))
                         ,@(if (safe-code-p env)
                               `((%check-cnm-args cnm-args (list ,@args)
                                                  ',method-cell))
@@ -1740,7 +1743,7 @@ generic function lambda list ~S~:>"
         when (null tail) do
           ;; FIXME: Do we want to export this symbol? Or maybe use an
           ;; (ERROR 'SIMPLE-PROGRAM-ERROR) form?
-          (sb-c::%odd-key-args-error)
+          (sb!c::%odd-key-args-error)
         when (eq key keyword)
           return tail))
 
@@ -1786,7 +1789,7 @@ generic function lambda list ~S~:>"
                   (setq call-next-method-p t))
                 form)
                ((slot-value set-slot-value slot-boundp)
-                (if (constantp (third form) env)
+                (if (sb-xc:constantp (third form) env)
                     (let ((fun (ecase (car form)
                                  (slot-value #'optimize-slot-value)
                                  (set-slot-value #'optimize-set-slot-value)
@@ -1800,7 +1803,7 @@ generic function lambda list ~S~:>"
         ;;; trouble when doing code coverage. The rewrites should be
         ;;; removed, and the same operations done using
         ;;; compiler-macros or tranforms.
-        (values (if (sb-c:policy env (= sb-c:store-coverage-data 0))
+        (values (if (sb!c:policy env (= sb!c:store-coverage-data 0))
                     walked-lambda
                     method-lambda)
                 call-next-method-p
@@ -1847,7 +1850,7 @@ generic function lambda list ~S~:>"
                         (generic-function-methods gf)
                         (find-method gf qualifiers specializers nil))))
       (when method
-        (warn 'sb-kernel:redefinition-with-defmethod
+        (warn 'sb!kernel:redefinition-with-defmethod
               :name gf-spec
               :new-location source-location
               :old-method method
@@ -1912,7 +1915,7 @@ generic function lambda list ~S~:>"
 
 ;; FIXME: this does more than return an FTYPE from a lambda list -
 ;; it unions the type with an existing ctype object. It needs a better name,
-;; and to be reimplemented as "union and call sb-c::ftype-from-lambda-list".
+;; and to be reimplemented as "union and call sb!c::ftype-from-lambda-list".
 (defun ftype-declaration-from-lambda-list (lambda-list name)
   (multiple-value-bind (llks nrequired noptional keywords keyword-parameters)
       (analyze-lambda-list lambda-list)
@@ -1951,6 +1954,7 @@ generic function lambda list ~S~:>"
 ;; is that they'll be checked by ENSURE-GENERIC-FUNCTION-USING-CLASS.
 ;; Except we don't do that either, so I think the blame, if any, lies there
 ;; for not catching errant keywords.
+#+sb-xc
 (defun ensure-generic-function (fun-name &rest all-keys)
   (let ((existing (and (fboundp fun-name)
                        (gdefinition fun-name))))
@@ -1967,7 +1971,7 @@ generic function lambda list ~S~:>"
 (defun generic-clobbers-function (fun-name)
   (cerror "Replace the function binding"
           'simple-program-error
-          :format-control "~@<~/sb-impl:print-symbol-with-prefix/ ~
+          :format-control "~@<~/sb!impl:print-symbol-with-prefix/ ~
                            already names an ordinary function or a ~
                            macro.~@:>"
           :format-arguments (list fun-name)))
@@ -2034,7 +2038,7 @@ generic function lambda list ~S~:>"
   (gf-info-c-a-m-emf-std-p t)
   gf-info-fast-mf-p)
 
-#-sb-fluid (declaim (sb-ext:freeze-type arg-info))
+#!-sb-fluid (declaim (sb!ext:freeze-type arg-info))
 
 (defun arg-info-valid-p (arg-info)
   (not (null (arg-info-number-optional arg-info))))
@@ -2362,8 +2366,8 @@ generic function lambda list ~S~:>"
     (cond
       ((eq **boot-state** 'complete)
        ;; Check that we are under the lock.
-       #+sb-thread
-       (aver (eq sb-thread:*current-thread* (sb-thread:mutex-owner (gf-lock gf))))
+       #!+sb-thread
+       (aver (eq sb!thread:*current-thread* (sb!thread:mutex-owner (gf-lock gf))))
        (setf (safe-gf-dfun-state gf) new-state))
       (t
        (setf (clos-slots-ref (get-slots gf) +sgf-dfun-state-index+)
@@ -2568,7 +2572,7 @@ generic function lambda list ~S~:>"
 (defun !early-make-a-method (class qualifiers arglist specializers initargs doc
                             &key slot-name object-class method-class-function
                             definition-source)
-  (aver (notany #'sb-pcl::eql-specializer-p specializers))
+  (aver (notany #'sb!pcl::eql-specializer-p specializers))
   (binding*
       ;; Figure out whether we got class objects or class names as the
       ;; specializers and set parsed and unparsed appropriately. If we
@@ -2711,6 +2715,7 @@ generic function lambda list ~S~:>"
 ;;; This is the early version of ADD-METHOD. Later this will become a
 ;;; generic function. See !FIX-EARLY-GENERIC-FUNCTIONS which has
 ;;; special knowledge about ADD-METHOD.
+#+sb-xc
 (defun add-method (generic-function method)
   (when (not (fsc-instance-p generic-function))
     (error "Early ADD-METHOD didn't get a funcallable instance."))
@@ -2725,6 +2730,7 @@ generic function lambda list ~S~:>"
 
 ;;; This is the early version of REMOVE-METHOD. See comments on
 ;;; the early version of ADD-METHOD.
+#+sb-xc
 (defun remove-method (generic-function method)
   (when (not (fsc-instance-p generic-function))
     (error "An early remove-method didn't get a funcallable instance."))
@@ -2813,25 +2819,25 @@ generic function lambda list ~S~:>"
     (loop for (fspec method-combination . methods) in *!generic-function-fixups*
           for gf = (gdefinition fspec) do
           (labels ((translate-source-location (function)
-                     ;; This is lifted from sb-introspect, OAOO and all that.
-                     (let* ((function-object (sb-kernel::%fun-fun function))
-                            (function-header (sb-kernel:fun-code-header function-object))
-                            (debug-info (sb-kernel:%code-debug-info function-header))
-                            (debug-source (sb-c::debug-info-source debug-info))
+                     ;; This is lifted from sb!introspect, OAOO and all that.
+                     (let* ((function-object (sb!kernel::%fun-fun function))
+                            (function-header (sb!kernel:fun-code-header function-object))
+                            (debug-info (sb!kernel:%code-debug-info function-header))
+                            (debug-source (sb!c::debug-info-source debug-info))
                             (debug-fun (debug-info-debug-function function debug-info)))
-                       (sb-c::%make-definition-source-location
-                        (sb-c::debug-source-namestring debug-source)
-                        (sb-c::compiled-debug-info-tlf-number debug-info)
-                        (sb-c::compiled-debug-fun-form-number debug-fun))))
+                       (sb!c::%make-definition-source-location
+                        (sb!c::debug-source-namestring debug-source)
+                        (sb!c::compiled-debug-info-tlf-number debug-info)
+                        (sb!c::compiled-debug-fun-form-number debug-fun))))
                    (debug-info-debug-function (function debug-info)
-                     (let ((map (sb-c::compiled-debug-info-fun-map debug-info))
-                           (name (sb-kernel:%simple-fun-name (sb-kernel:%fun-fun function))))
+                     (let ((map (sb!c::compiled-debug-info-fun-map debug-info))
+                           (name (sb!kernel:%simple-fun-name (sb!kernel:%fun-fun function))))
                        (or
                         (find-if
                          (lambda (x)
                            (and
-                            (sb-c::compiled-debug-fun-p x)
-                            (eq (sb-c::compiled-debug-fun-name x) name)))
+                            (sb!c::compiled-debug-fun-p x)
+                            (eq (sb!c::compiled-debug-fun-name x) name)))
                          map)
                         (elt map 0))))
                    (make-method (spec)
@@ -2923,7 +2929,7 @@ generic function lambda list ~S~:>"
 
 (setq **boot-state** 'early)
 
-;;; FIXME: In here there was a #-CMU definition of SYMBOL-MACROLET
+;;; FIXME: In here there was a #!-CMU definition of SYMBOL-MACROLET
 ;;; which used %WALKER stuff. That suggests to me that maybe the code
 ;;; walker stuff was only used for implementing stuff like that; maybe
 ;;; it's not needed any more? Hunt down what it was used for and see.
@@ -2935,7 +2941,7 @@ generic function lambda list ~S~:>"
         (t
          form)))
 
-(defmacro with-slots (slots instance &body body)
+(sb-xc:defmacro with-slots (slots instance &body body)
   (let ((in (gensym)))
     `(let ((,in ,instance))
        (declare (ignorable ,in))
@@ -2957,7 +2963,7 @@ generic function lambda list ~S~:>"
                                  slots)
                         ,@body))))
 
-(defmacro with-accessors (slots instance &body body)
+(sb-xc:defmacro with-accessors (slots instance &body body)
   (let ((in (gensym)))
     `(let ((,in ,instance))
        (declare (ignorable ,in))

@@ -21,7 +21,7 @@
 ;;;; warranty about the software, its performance or its conformity to any
 ;;;; specification.
 
-(in-package "SB-PCL")
+(in-package "SB!PCL")
 
 (defun get-method-function (method &optional method-alist wrappers)
   (let ((fn (cadr (assoc method method-alist))))
@@ -218,6 +218,7 @@
 
 (defun expand-effective-method-function (gf effective-method &optional env)
   (declare (ignore env))
+  #+sb-xc
   (declare (muffle-conditions code-deletion-note))
   (multiple-value-bind (nreq applyp)
       (get-generic-fun-info gf)
@@ -249,7 +250,7 @@
          (let* ((required (make-dfun-required-args nreq))
                 (gf-args (if applyp
                              `(list* ,@required
-                                     (sb-c::%listify-rest-args
+                                     (sb!c::%listify-rest-args
                                       .dfun-more-context.
                                       (the (and unsigned-byte fixnum)
                                         .dfun-more-count.)))
@@ -270,7 +271,7 @@
   (declare (ignore gf metatypes applyp env))
   `(call-method ,(cdr form)))
 
-(defmacro call-method (&rest args)
+(sb-xc:defmacro call-method (&rest args)
   (declare (ignore args))
   ;; the PROGN is here to defend against premature macroexpansion by
   ;; RESTART-CASE.
@@ -569,7 +570,7 @@
     (declare (type index i more-count)
              (optimize speed))
     (flet ((current-value ()
-             (sb-c::%more-arg more-context i)))
+             (sb!c::%more-arg more-context i)))
       (declare (inline current-value))
       (collect ((invalid))
         (loop
@@ -588,7 +589,7 @@
                        :format-control "~@<keyword argument not a symbol: ~S.~@:>"
                        :format-arguments (list key)))
                ((= i more-count)
-                (sb-c::%odd-key-args-error))
+                (sb!c::%odd-key-args-error))
                ((eq key :allow-other-keys)
                 ;; only the leftmost :ALLOW-OTHER-KEYS has any effect
                 (unless allow-other-keys-seen
@@ -615,15 +616,17 @@
                                      combin
                                      applicable-methods))
 
+#+sb-xc
 (defun invalid-method-error (method format-control &rest format-arguments)
-  (let ((sb-debug:*stack-top-hint* (find-caller-frame)))
+  (let ((sb!debug:*stack-top-hint* (find-caller-frame)))
     (error "~@<invalid method error for ~2I~_~S ~I~_method: ~2I~_~?~:>"
            method
            format-control
            format-arguments)))
 
+#+sb-xc
 (defun method-combination-error (format-control &rest format-arguments)
-  (let ((sb-debug:*stack-top-hint* (find-caller-frame)))
+  (let ((sb!debug:*stack-top-hint* (find-caller-frame)))
     (error "~@<method combination error in CLOS dispatch: ~2I~_~?~:>"
            format-control
            format-arguments)))
