@@ -72,16 +72,12 @@ bootstrapping.
                     ensure-generic-function-using-class
                     add-method remove-method))
 
-(defvar *!early-functions*
-  '((make-a-method !early-make-a-method real-make-a-method)
-    (add-named-method !early-add-named-method real-add-named-method)))
-
 ;;; For each of the early functions, arrange to have it point to its
 ;;; early definition. Do this in a way that makes sure that if we
 ;;; redefine one of the early definitions the redefinition will take
 ;;; effect. This makes development easier.
 #+sb-xc
-(loop for (name early-name) in *!early-functions*
+(loop for (name early-name) in *!early-function-specs*
    do (let ((early-name early-name))
         (setf (gdefinition name)
               (set-fun-name
@@ -133,7 +129,7 @@ bootstrapping.
               *standard-method-combination*)
         (set-methods gf methods)))
 
-    (dolist (fn *!early-functions*)
+    (dolist (fn *!early-function-specs*)
       (/show fn)
       (setf (gdefinition (car fn)) (fdefinition (caddr fn))))
 

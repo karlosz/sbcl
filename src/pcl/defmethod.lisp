@@ -1771,54 +1771,56 @@
 ;;; be applied make a real method corresponding to this early one.
 ;;; Note that INITIALIZE-METHOD-FUNCTION is called with INITARGS and
 ;;; RESULT after RESULT is computed and before returning RESULT.
-(defun !early-make-a-method (class qualifiers arglist specializers initargs doc
-                            &key slot-name object-class method-class-function
-                            definition-source)
-  (aver (notany #'sb!pcl::eql-specializer-p specializers))
-  (binding*
-      ;; Figure out whether we got class objects or class names as the
-      ;; specializers and set parsed and unparsed appropriately. If we
-      ;; got class objects, then we can compute unparsed, but if we
-      ;; got class names we don't try to compute parsed.
-      (((parsed unparsed)
-        (if (every #'classp specializers)
-            (values specializers
-                    (mapcar (lambda (s)
-                              (if (eq s t) t (class-name s)))
-                            specializers))
-            (values () specializers)))
-       (result
-        (list :early-method
+(define-early-function (make-a-method !early-make-a-method real-make-a-method)
+    (:early
+     (class qualifiers arglist specializers initargs doc
+            &key slot-name object-class method-class-function
+            definition-source)
+     (aver (notany #'sb!pcl::eql-specializer-p specializers))
+     (binding*
+         ;; Figure out whether we got class objects or class names as the
+         ;; specializers and set parsed and unparsed appropriately. If we
+         ;; got class objects, then we can compute unparsed, but if we
+         ;; got class names we don't try to compute parsed.
+         (((parsed unparsed)
+           (if (every #'classp specializers)
+               (values specializers
+                       (mapcar (lambda (s)
+                                 (if (eq s t) t (class-name s)))
+                               specializers))
+               (values () specializers)))
+          (result
+           (list :early-method
 
-              (getf initargs :function)
-              (let ((mf (getf initargs :function)))
-                (aver mf)
-                (and (typep mf '%method-function)
-                     (%method-function-fast-function mf)))
+                 (getf initargs :function)
+                 (let ((mf (getf initargs :function)))
+                   (aver mf)
+                   (and (typep mf '%method-function)
+                        (%method-function-fast-function mf)))
 
-              ;; the parsed specializers. This is used by
-              ;; EARLY-METHOD-SPECIALIZERS to cache the parse.
-              ;; Note that this only comes into play when there is
-              ;; more than one early method on an early gf.
-              parsed
+                 ;; the parsed specializers. This is used by
+                 ;; EARLY-METHOD-SPECIALIZERS to cache the parse.
+                 ;; Note that this only comes into play when there is
+                 ;; more than one early method on an early gf.
+                 parsed
 
-              ;; A list to which REAL-MAKE-A-METHOD can be applied
-              ;; to make a real method corresponding to this early
-              ;; one.
-              (append
-               (list class qualifiers arglist unparsed
-                     initargs doc)
-               (when slot-name
-                 (list :slot-name slot-name :object-class object-class
-                       :method-class-function method-class-function))
-               (list :definition-source definition-source)))))
-    (initialize-method-function initargs result)
-    result))
+                 ;; A list to which REAL-MAKE-A-METHOD can be applied
+                 ;; to make a real method corresponding to this early
+                 ;; one.
+                 (append
+                  (list class qualifiers arglist unparsed
+                        initargs doc)
+                  (when slot-name
+                    (list :slot-name slot-name :object-class object-class
+                          :method-class-function method-class-function))
+                  (list :definition-source definition-source)))))
+       (initialize-method-function initargs result)
+       result)))
 
 (defun real-make-a-method
-       (class qualifiers lambda-list specializers initargs doc
-        &rest args &key slot-name object-class method-class-function
-        definition-source)
+    (class qualifiers lambda-list specializers initargs doc
+     &rest args &key slot-name object-class method-class-function
+                     definition-source)
   (if method-class-function
       (let* ((object-class (if (classp object-class) object-class
                                (sb-xc:find-class object-class)))
@@ -1892,27 +1894,29 @@
 (defun (setf early-method-initargs) (new-value early-method)
   (setf (fifth (fifth early-method)) new-value))
 
-(defun !early-add-named-method (generic-function-name qualifiers
-                               specializers arglist &rest initargs
-                               &key documentation definition-source
-                               &allow-other-keys)
-  (let* (;; we don't need to deal with the :generic-function-class
-         ;; argument here because the default,
-         ;; STANDARD-GENERIC-FUNCTION, is right for all early generic
-         ;; functions.  (See REAL-ADD-NAMED-METHOD)
-         (gf (sb-xc:ensure-generic-function generic-function-name))
-         (existing
-           (dolist (m (early-gf-methods gf))
-             (when (and (equal (early-method-specializers m) specializers)
-                        (equal (early-method-qualifiers m) qualifiers))
-               (return m)))))
-    (setf (getf (getf initargs 'plist) :name)
-          (make-method-spec gf qualifiers specializers))
-    (let ((new (make-a-method 'standard-method qualifiers arglist
-                              specializers initargs documentation
-                              :definition-source definition-source)))
-      (when existing (remove-method gf existing))
-      (add-method gf new))))
+(define-early-function (add-named-method !early-add-named-method real-add-named-method)
+    (:early
+     (generic-function-name qualifiers
+                            specializers arglist &rest initargs
+                            &key documentation definition-source
+                            &allow-other-keys)
+     (let* (;; we don't need to deal with the :generic-function-class
+            ;; argument here because the default,
+            ;; STANDARD-GENERIC-FUNCTION, is right for all early generic
+            ;; functions.  (See REAL-ADD-NAMED-METHOD)
+            (gf (sb-xc:ensure-generic-function generic-function-name))
+            (existing
+              (dolist (m (early-gf-methods gf))
+                (when (and (equal (early-method-specializers m) specializers)
+                           (equal (early-method-qualifiers m) qualifiers))
+                  (return m)))))
+       (setf (getf (getf initargs 'plist) :name)
+             (make-method-spec gf qualifiers specializers))
+       (let ((new (make-a-method 'standard-method qualifiers arglist
+                                 specializers initargs documentation
+                                 :definition-source definition-source)))
+         (when existing (remove-method gf existing))
+         (add-method gf new)))))
 
 ;;; This is the early version of ADD-METHOD. Later this will become a
 ;;; generic function. See !FIX-EARLY-GENERIC-FUNCTIONS which has

@@ -771,7 +771,7 @@
  ;; order dependencies from the old PCL defsys.lisp
  ;; dependency database.
  ("src/pcl/declarations")
-
+ ("src/pcl/bootstrapping-macros")
  ("src/pcl/macros")
  ("src/pcl/compiler-support")
  ("src/pcl/defclass")
