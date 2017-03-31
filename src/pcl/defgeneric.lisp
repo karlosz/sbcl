@@ -26,6 +26,165 @@
 ;;;; early generic function support
 (defvar *!early-generic-functions* ())
 
+;;; *!GENERIC-FUNCTION-FIXUPS* is used by !FIX-EARLY-GENERIC-FUNCTIONS
+;;; to convert the few functions in the bootstrap which are supposed
+;;; to be generic functions but can't be early on.
+;;;
+;;; each entry is a list of the form
+;;;
+;;;   (GENERIC-FUNCTION-NAME METHOD-COMBINATION-NAME METHODS)
+;;;
+;;; where methods is a list of lists of the form
+;;;
+;;;   (LAMBDA-LIST SPECIALIZERS QUALIFIERS METHOD-BODY-FUNCTION-NAME)
+;;;
+;;;,where SPECIALIZERS is a list of class names.
+(defvar *!generic-function-fixups*
+  '((add-method
+     standard
+     ((generic-function method)
+      (standard-generic-function method)
+      ()
+      real-add-method))
+
+    (remove-method
+     standard
+     ((generic-function method)
+      (standard-generic-function method)
+      ()
+      real-remove-method))
+
+    (get-method
+     standard
+     ((generic-function qualifiers specializers &optional (errorp t))
+      (standard-generic-function t t)
+      ()
+      real-get-method))
+
+    (ensure-generic-function-using-class
+     standard
+     ((generic-function fun-name
+                        &key generic-function-class environment
+                        &allow-other-keys)
+      (generic-function t)
+      ()
+      real-ensure-gf-using-class--generic-function)
+     ((generic-function fun-name
+                        &key generic-function-class environment
+                        &allow-other-keys)
+      (null t)
+      ()
+      real-ensure-gf-using-class--null))
+
+    (make-method-lambda
+     standard
+     ((proto-generic-function proto-method lambda-expression environment)
+      (standard-generic-function standard-method t t)
+      ()
+      real-make-method-lambda))
+
+    (make-method-lambda-using-specializers
+     standard
+     ((proto-generic-function proto-method qualifiers specializers
+                              lambda-expression environment)
+      (standard-generic-function standard-method t t t t)
+      ()
+      real-make-method-lambda-using-specializers))
+
+    (make-method-specializers-form
+     standard
+     ((proto-generic-function proto-method specializer-names environment)
+      (standard-generic-function standard-method t t)
+      ()
+      real-make-method-specializers-form))
+
+    (make-specializer-form-using-class
+     or
+     ((proto-generic-function proto-method specializer-name environment)
+      (standard-generic-function standard-method t t)
+      (or)
+      real-make-specializer-form-using-class/t)
+     ((proto-generic-function proto-method specializer-name environment)
+      (standard-generic-function standard-method specializer t)
+      (or)
+      real-make-specializer-form-using-class/specializer)
+     ((proto-generic-function proto-method specializer-name environment)
+      (standard-generic-function standard-method symbol t)
+      (or)
+      real-make-specializer-form-using-class/symbol)
+     ((proto-generic-function proto-method specializer-name environment)
+      (standard-generic-function standard-method cons t)
+      (or)
+      real-make-specializer-form-using-class/cons))
+
+    (specializer-type-specifier
+     standard
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method specializer)
+      ()
+      real-specializer-type-specifier/specializer)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method symbol)
+      ()
+      real-specializer-type-specifier/symbol)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method t)
+      ()
+      real-specializer-type-specifier/t)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method class-eq-specializer)
+      ()
+      real-specializer-type-specifier/class-eq-specializer)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method eql-specializer)
+      ()
+      real-specializer-type-specifier/eql-specializer)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method structure-class)
+      ()
+      real-specializer-type-specifier/structure-class)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method system-class)
+      ()
+      real-specializer-type-specifier/system-class)
+     ((proto-generic-function proto-method specializer)
+      (standard-generic-function standard-method class)
+      ()
+      real-specializer-type-specifier/class))
+
+    (parse-specializer-using-class
+     standard
+     ((generic-function specializer)
+      (standard-generic-function t)
+      ()
+      real-parse-specializer-using-class))
+
+    (unparse-specializer-using-class
+     standard
+     ((generic-function specializer)
+      (standard-generic-function t)
+      ()
+      real-unparse-specializer-using-class))
+
+    (make-method-initargs-form
+     standard
+     ((proto-generic-function proto-method
+                              lambda-expression
+                              lambda-list environment)
+      (standard-generic-function standard-method t t t)
+      ()
+      real-make-method-initargs-form))
+
+    (compute-effective-method
+     standard
+     ((generic-function combin applicable-methods)
+      (generic-function standard-method-combination t)
+      ()
+      standard-compute-effective-method)
+     ((generic-function combin applicable-methods)
+      (generic-function short-method-combination t)
+      ()
+      short-compute-effective-method))))
 
 (sb-xc:defmacro defgeneric (fun-name lambda-list &body options)
   (declare (type list lambda-list))
