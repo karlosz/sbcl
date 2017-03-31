@@ -111,7 +111,7 @@
   (%instancep x))
 
 ;;; When given a funcallable instance, SET-FUN-NAME *must* side-effect
-;;; that FIN to give it the name. When given any other kind of
+;;; that FUN to give it the name. When given any other kind of
 ;;; function SET-FUN-NAME is allowed to return a new function which is
 ;;; "the same" except that it has the name.
 ;;;
@@ -120,7 +120,7 @@
 ;;; the new value.)
 ;; This is an absolutely terrible name for a function which both assigns
 ;; the name slot of a function, and _sometimes_ binds a name to a function.
-#+sb-xc
+
 (defun set-fun-name (fun new-name)
   "Set the name of a compiled function object. Return the function."
   (when (valid-function-name-p fun)

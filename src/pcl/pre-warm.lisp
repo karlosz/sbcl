@@ -1,7 +1,6 @@
 ;;;; In support of PCL we compile some things into the cold image.
 ;;;; Not only does this simplify the PCL bootstrap ever so slightly,
-;;;; it is nice to be able to test for types SB!PCL::%METHOD-FUNCTION
-;;;; and CLASS (neither of which will have any instances too early).
+;;;; it is nice to be able to test for type CLASS
 
 ;;;; This software is part of the SBCL system. See the README file for more
 ;;;; information.
@@ -28,36 +27,6 @@
 
 (in-package "SB!PCL")
 
-
-;;; method function stuff.
-;;;
-;;; PCL historically included a so-called method-fast-function, which
-;;; is essentially a method function but with (a) a precomputed
-;;; continuation for CALL-NEXT-METHOD and (b) a permutation vector for
-;;; slot access.  [ FIXME: see if we can understand these two
-;;; optimizations before commit. ]  However, the presence of the
-;;; fast-function meant that we violated AMOP and the effect of the
-;;; :FUNCTION initarg, and furthermore got to potentially confusing
-;;; situations where the function and the fast-function got out of
-;;; sync, so that calling (method-function method) with the defined
-;;; protocol would do different things from (call-method method) in
-;;; method combination.
-;;;
-;;; So we define this internal method function structure, which we use
-;;; when we create a method function ourselves.  This means that we
-;;; can hang the various bits of information that we want off the
-;;; method function itself, and also that if a user overrides method
-;;; function creation there is no danger of having the system get
-;;; confused.
-#-sb-xc-host ; host doesn't need
-(!defstruct-with-alternate-metaclass %method-function
-  :slot-names (fast-function)
-  :boa-constructor %make-method-function
-  :superclass-name function
-  :metaclass-name static-classoid
-  :metaclass-constructor make-static-classoid
-  :dd-type funcallable-structure)
-
 ;;; Set up fake standard-classes.
 ;;; This is enough to fool the compiler into optimizing TYPEP into
 ;;; %INSTANCE-TYPEP.
@@ -68,6 +37,7 @@
     (exact-class-specializer exact-class-specializer-p)
     (class-eq-specializer class-eq-specializer-p)
     (eql-specializer eql-specializer-p)
+    (system-class system-class-p)
     (class classp)
     (slot-class slot-class-p)
     (std-class std-class-p)
