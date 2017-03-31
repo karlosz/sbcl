@@ -146,11 +146,11 @@
                       (gdefinition name))))
         (if (or (null gf?)
                 (not (generic-function-p gf?)))
-            (values (class-prototype (find-class 'standard-generic-function))
-                    (class-prototype (find-class 'standard-method)))
+            (values (class-prototype (sb-xc:find-class 'standard-generic-function))
+                    (class-prototype (sb-xc:find-class 'standard-method)))
             (values gf?
                     (class-prototype (or (generic-function-method-class gf?)
-                                         (find-class 'standard-method))))))))
+                                         (sb-xc:find-class 'standard-method))))))))
 
 ;;; These are used to communicate the method name and lambda-list to
 ;;; MAKE-METHOD-LAMBDA-INTERNAL.
@@ -616,7 +616,7 @@
 (defun real-make-specializer-form-using-class/symbol
     (proto-generic-function proto-method specializer-name environment)
   (declare (ignore proto-generic-function proto-method environment))
-  `(find-class ',specializer-name))
+  `(sb-xc:find-class ',specializer-name))
 
 (defun real-make-specializer-form-using-class/cons
     (proto-generic-function proto-method specializer-name environment)
@@ -628,7 +628,7 @@
     ((cons (eql eql) (cons t null))
      `(intern-eql-specializer ,(second specializer-name)))
     ((cons (eql class-eq) (cons t null))
-     `(class-eq-specializer (find-class ',(second specializer-name))))))
+     `(class-eq-specializer (sb-xc:find-class ',(second specializer-name))))))
 
 (defun real-make-specializer-form-using-class
     (proto-generic-function proto-method specializer-name environment)
@@ -777,7 +777,7 @@
       ;; Make sure SPECIALIZER has a proper class name and that name
       ;; designates the class SPECIALIZER in the global environment.
       (when (and (typep name '(and symbol (not null)))
-                 (eq specializer (find-class name nil)))
+                 (eq specializer (sb-xc:find-class name nil)))
         (class-name-type-specifier
          name proto-generic-function proto-method)))))
 
@@ -828,7 +828,7 @@
             (if (and (consp type) (eq (car type) 'class))
                 (let* ((class (cadr type))
                        (class-name (class-name class)))
-                  (if (eq class (find-class class-name nil))
+                  (if (eq class (sb-xc:find-class class-name nil))
                       class-name
                       type))
                 type))
@@ -1505,7 +1505,7 @@
                        :definition-source source-location
                        initargs)))
     (unless (or (eq method-class 'standard-method)
-                (eq (find-class method-class nil) (class-of method)))
+                (eq (sb-xc:find-class method-class nil) (class-of method)))
       ;; FIXME: should be STYLE-WARNING?
       (format *error-output*
               "~&At the time the method with qualifiers ~:S and~%~
@@ -1791,7 +1791,7 @@
         definition-source)
   (if method-class-function
       (let* ((object-class (if (classp object-class) object-class
-                               (find-class object-class)))
+                               (sb-xc:find-class object-class)))
              (slots (class-direct-slots object-class))
              (slot-definition (find slot-name slots
                                     :key #'slot-definition-name)))
@@ -1814,7 +1814,7 @@
   (values (cadr early-method) (caddr early-method)))
 
 (defun early-method-class (early-method)
-  (find-class (car (fifth early-method))))
+  (sb-xc:find-class (car (fifth early-method))))
 
 (defun early-method-standard-accessor-p (early-method)
   (let ((class (first (fifth early-method))))
@@ -1845,7 +1845,7 @@
       (cond ((eq objectsp t)
              (or (fourth early-method)
                  (setf (fourth early-method)
-                       (mapcar #'find-class (cadddr (fifth early-method))))))
+                       (mapcar #'sb-xc:find-class (cadddr (fifth early-method))))))
             (t
              (fourth (fifth early-method))))
       (error "~S is not an early-method." early-method)))
@@ -1870,7 +1870,7 @@
          ;; argument here because the default,
          ;; STANDARD-GENERIC-FUNCTION, is right for all early generic
          ;; functions.  (See REAL-ADD-NAMED-METHOD)
-         (gf (ensure-generic-function generic-function-name))
+         (gf (sb-xc:ensure-generic-function generic-function-name))
          (existing
            (dolist (m (early-gf-methods gf))
              (when (and (equal (early-method-specializers m) specializers)
@@ -1933,4 +1933,3 @@
               nil))
       (real-get-method generic-function qualifiers specializers errorp)))
 
-(setq **boot-state** 'early)

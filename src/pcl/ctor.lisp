@@ -456,7 +456,7 @@
     (cond
       ((classp class-arg)
        (make-allocator-form class-arg))
-      ((typep class-arg '(cons (eql find-class)
+      ((typep class-arg '(cons (eql sb-xc:find-class)
                                (cons (cons (eql quote) (cons symbol null)) null)))
        (let ((class-name (second (second class-arg))))
          (make-allocator-form class-name)))
@@ -538,7 +538,7 @@
     (let* ((class-or-name (ctor-class-or-name ctor))
            (class (ensure-class-finalized
                    (if (symbolp class-or-name)
-                       (find-class class-or-name)
+                       (sb-xc:find-class class-or-name)
                        class-or-name))))
       ;; We can have a class with an invalid layout here.  Such a class
       ;; cannot have a LAYOUT-INVALID of (:FLUSH ...) or (:OBSOLETE
@@ -566,7 +566,7 @@
     (let* ((class-or-name (ctor-class-or-name ctor))
            (class (ensure-class-finalized
                    (if (symbolp class-or-name)
-                       (find-class class-or-name)
+                       (sb-xc:find-class class-or-name)
                        class-or-name))))
       ;; We can have a class with an invalid layout here.  Such a class
       ;; cannot have a LAYOUT-INVALID of (:FLUSH ...) or (:OBSOLETE
@@ -1143,7 +1143,7 @@
             ;; point (where it is not legal to define a method
             ;; applicable to them on system functions).  -- CSR,
             ;; 2010-07-13
-            (reset (find-class 'standard-object) t t))
+            (reset (sb-xc:find-class 'standard-object) t t))
            ((initialize-instance shared-initialize)
             (reset (class-of-1st-method-param method) t t))
            ((reinitialize-instance)
@@ -1155,13 +1155,13 @@
                 ;; this looks awfully expensive, but given that one
                 ;; can specialize on the SLOTD argument, nothing is
                 ;; safe.  -- CSR, 2004-07-12
-                (reset (find-class 'standard-object))))))))))
+                (reset (sb-xc:find-class 'standard-object))))))))))
 
 (defun precompile-ctors ()
   (loop for ctor being the hash-values of *all-ctors*
         unless (ctor-class ctor)
         do
-        (let ((class (find-class (ctor-class-or-name ctor) nil)))
+        (let ((class (sb-xc:find-class (ctor-class-or-name ctor) nil)))
           (when (and class (class-finalized-p class))
             (install-optimized-constructor ctor)))))
 

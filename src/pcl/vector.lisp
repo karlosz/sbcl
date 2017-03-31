@@ -166,7 +166,7 @@
             (let* ((class-name (caddr (var-declaration '%class
                                                        parameter-or-nil
                                                        env)))
-                   (class (find-class class-name nil)))
+                   (class (sb-xc:find-class class-name nil)))
               (cond ((not (eq **boot-state** 'complete))
                      (setq class nil))
                     ((and class (not (class-finalized-p class)))

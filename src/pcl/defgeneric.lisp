@@ -153,7 +153,7 @@
         (loop for method in (generic-function-initial-methods fun)
               do (remove-method fun method))
         (setf (generic-function-initial-methods fun) '()))))
-  (apply #'ensure-generic-function
+  (apply #'sb-xc:ensure-generic-function
          fun-name
          :lambda-list lambda-list
          :definition-source source-location
@@ -203,8 +203,8 @@ generic function lambda list ~S~:>"
 ;; is that they'll be checked by ENSURE-GENERIC-FUNCTION-USING-CLASS.
 ;; Except we don't do that either, so I think the blame, if any, lies there
 ;; for not catching errant keywords.
-#+sb-xc
-(defun ensure-generic-function (fun-name &rest all-keys)
+
+(defun sb-xc:ensure-generic-function (fun-name &rest all-keys)
   (let ((existing (and (fboundp fun-name)
                        (gdefinition fun-name))))
     (cond ((and existing
@@ -212,7 +212,7 @@ generic function lambda list ~S~:>"
                 (null (generic-function-p existing)))
            (generic-clobbers-function fun-name)
            (fmakunbound fun-name)
-           (apply #'ensure-generic-function fun-name all-keys))
+           (apply #'sb-xc:ensure-generic-function fun-name all-keys))
           (t
            (apply #'ensure-generic-function-using-class
                   existing fun-name all-keys)))))
@@ -581,7 +581,7 @@ generic function lambda list ~S~:>"
 
 (labels ((resolve-class (context class-or-name environment)
            (cond ((symbolp class-or-name)
-                  (find-class class-or-name t environment))
+                  (sb-xc:find-class class-or-name t environment))
                  ((classp class-or-name)
                   class-or-name)
                  (t

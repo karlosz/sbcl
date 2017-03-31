@@ -324,7 +324,7 @@ bootstrapping.
                    (make-method (spec)
                      (destructuring-bind
                          (lambda-list specializers qualifiers fun-name) spec
-                       (let* ((specializers (mapcar #'find-class specializers))
+                       (let* ((specializers (mapcar #'sb-xc:find-class specializers))
                               (fun-name (or fun-name fspec))
                               (fun (fdefinition fun-name))
                               (initargs (list :function
@@ -358,6 +358,8 @@ bootstrapping.
          (third form))
         (t
          form)))
+
+(setq **boot-state** 'early)
 
 (sb-xc:defmacro with-slots (slots instance &body body)
   (let ((in (gensym)))

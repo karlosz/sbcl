@@ -67,7 +67,7 @@
             ;; with a metaclass STRUCTURE-CLASS, so that a DEFSTRUCT
             ;; is compiled for the class.
             (defstruct-p (and (eq **boot-state** 'complete)
-                              (let ((mclass (find-class metaclass nil)))
+                              (let ((mclass (sb-xc:find-class metaclass nil)))
                                 (and mclass
                                      (*subtypep
                                       mclass
@@ -105,11 +105,11 @@
                 ;; then use CLASS-DIRECT-SLOTS. -- CSR, 2002-06-07
                 (eval defclass-form)
                 (let* ((include (or (and direct-superclasses
-                                         (find-class (car direct-superclasses) nil))
+                                         (sb-xc:find-class (car direct-superclasses) nil))
                                     (and (not (eq name 'structure-object))
                                          *the-class-structure-object*)))
                        (defstruct-form (make-structure-class-defstruct-form
-                                        name (class-direct-slots (find-class name))
+                                        name (class-direct-slots (sb-xc:find-class name))
                                         include)))
                   `(progn
                      (eval-when (:compile-toplevel :load-toplevel :execute)

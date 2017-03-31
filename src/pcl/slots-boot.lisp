@@ -416,7 +416,7 @@
   (when (eq **boot-state** 'complete)
     (if (typep class-or-name 'class)
         class-or-name
-        (find-class class-or-name nil))))
+        (sb-xc:find-class class-or-name nil))))
 
 #+sb-xc
 (flet ((make-initargs (slot-name kind method-function)

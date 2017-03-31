@@ -56,7 +56,7 @@
 ;;; internal to this file
 (defun coerce-to-class (class &optional make-forward-referenced-class-p)
   (if (symbolp class)
-      (or (find-class class (not make-forward-referenced-class-p))
+      (or (sb-xc:find-class class (not make-forward-referenced-class-p))
           (ensure-class class))
       class))
 
@@ -65,7 +65,7 @@
   ;; Avoid style-warning about compiler-macro being unavailable.
   (declare (notinline make-instance))
   (when (symbolp type)
-    (return-from specializer-from-type (find-class type)))
+    (return-from specializer-from-type (sb-xc:find-class type)))
   (when (consp type)
     (setq args (cdr type) type (car type)))
   (cond ((symbolp type)
@@ -91,8 +91,8 @@
          specl)
         ((progn
            (when (symbolp specl)
-             ;;maybe (or (find-class specl nil) (ensure-class specl)) instead?
-             (setq specl (find-class specl)))
+             ;;maybe (or (sb-xc:find-class specl nil) (ensure-class specl)) instead?
+             (setq specl (sb-xc:find-class specl)))
            (or (not (eq **boot-state** 'complete))
                (specializerp specl)))
          (specializer-type specl))
@@ -127,7 +127,7 @@
                  (*normalize-type (car type))
                  type)))
         ((symbolp type)
-         (let ((class (find-class type nil)))
+         (let ((class (sb-xc:find-class type nil)))
            (if class
                (let ((type (specializer-type class)))
                  (ensure-list type))

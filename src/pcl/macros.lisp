@@ -102,17 +102,10 @@
         (check-class-name symbol)
         (error 'class-not-found-error :name symbol))))
 
-#+sb-xc
-(defun find-class (symbol &optional (errorp t) environment)
-  (declare (ignore environment) (explicit-check))
-  (find-class-from-cell symbol
-                        (find-classoid-cell symbol)
-                        errorp))
-
 
 #+sb-xc
-(define-compiler-macro find-class (&whole form
-                                   symbol &optional (errorp t) environment)
+(define-compiler-macro sb-xc:find-class (&whole form
+                                                symbol &optional (errorp t) environment)
   (declare (ignore environment))
   (if (and (constantp symbol)
            (legal-class-name-p (setf symbol (constant-form-value symbol)))
@@ -130,26 +123,6 @@
       form))
 
 (declaim (ftype function update-ctors))
-#+sb-xc
-(defun (setf find-class) (new-value name &optional errorp environment)
-  (declare (ignore errorp environment))
-  (check-class-name name)
-  (with-single-package-locked-error
-      (:symbol name "Using ~A as the class-name argument in ~
-                     (SETF FIND-CLASS)"))
-  (with-world-lock ()
-    (let ((cell (find-classoid-cell name :create new-value)))
-      (cond (new-value
-             (setf (classoid-cell-pcl-class cell) new-value)
-             (when (eq **boot-state** 'complete)
-               (let ((classoid (class-classoid new-value)))
-                 (setf (find-classoid name) classoid))))
-            (cell
-             (%clear-classoid name cell)))
-      (when (or (eq **boot-state** 'complete)
-                (eq **boot-state** 'braid))
-        (update-ctors 'setf-find-class :class new-value :name name))
-      new-value)))
 
 (flet ((call-gf (gf-nameize object slot-name env &optional newval)
          (aver (constantp slot-name env))
@@ -193,3 +166,35 @@
 
 (defun get-setf-fun-name (name)
   `(setf ,name))
+
+(defun sb-xc:find-class (symbol &optional (errorp t) environment)
+  (declare (ignore environment) (explicit-check))
+  #+sb-xc-host
+  (error "Unimplemented so far")
+  #+sb-xc
+  (find-class-from-cell symbol
+                        (find-classoid-cell symbol)
+                        errorp))
+
+(defun (setf sb-xc:find-class) (new-value name &optional errorp environment)
+  (declare (ignore errorp environment))
+  #+sb-xc-host
+  (error "Unimplemented so far")
+  #+sb-xc
+  (check-class-name name)
+  (with-single-package-locked-error
+      (:symbol name "Using ~A as the class-name argument in ~
+                     (SETF FIND-CLASS)"))
+  (with-world-lock ()
+    (let ((cell (find-classoid-cell name :create new-value)))
+      (cond (new-value
+             (setf (classoid-cell-pcl-class cell) new-value)
+             (when (eq **boot-state** 'complete)
+               (let ((classoid (class-classoid new-value)))
+                 (setf (find-classoid name) classoid))))
+            (cell
+             (%clear-classoid name cell)))
+      (when (or (eq **boot-state** 'complete)
+                (eq **boot-state** 'braid))
+        (update-ctors 'setf-find-class :class new-value :name name))
+      new-value)))
