@@ -20,10 +20,6 @@
 
 (defvar *readtable*)
 
-(defun !readtable-cold-init ()
-  (setq *empty-extended-char-table* (make-hash-table :rehash-size 1 :test #'eq)
-        *readtable* (make-readtable)))
-
 (setf (documentation '*readtable* 'variable)
       "Variable bound to current readtable.")
 
