@@ -170,7 +170,7 @@ distinct from the global value. Can also be SETF."
     ;; Do not use SYMBOL-INFO-VECTOR - this must not perform a slot read again.
     (setq current-vect (if (listp info-holder) (cdr info-holder) info-holder))
    inner-restart
-    (let ((new-vect (funcall update-fn (or current-vect +nil-packed-infos+))))
+    (let ((new-vect (funcall update-fn (or current-vect #.+nil-packed-infos+))))
       (unless (simple-vector-p new-vect)
         (aver (null new-vect))
         (return)) ; nothing to do

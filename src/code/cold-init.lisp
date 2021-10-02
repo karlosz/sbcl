@@ -41,7 +41,6 @@
 
 ;;; a list of toplevel things set by GENESIS
 (defvar *!cold-toplevels*)
-(defvar *!cold-defsymbols*)  ; "easy" DEFCONSTANTs
 
 ;;; a SIMPLE-VECTOR set by GENESIS
 (defvar *!load-time-values*)
@@ -55,10 +54,6 @@
        (,name)))
 
 (defun !c-runtime-noinform-p () (/= (extern-alien "lisp_startup_options" char) 0))
-
-(defun !format-cold-init ()
-  (sb-format::!late-format-init)
-  (sb-format::!format-directives-init))
 
 ;;; Allows the SIGNAL function to be called early.
 (defun !signal-function-cold-init ()
@@ -87,8 +82,7 @@
         *current-level-in-print* 0))
 
 ;;; called when a cold system starts up
-(defun !cold-init (&aux (real-choose-symbol-out-fun #'choose-symbol-out-fun)
-                        (real-failed-aver-fun #'%failed-aver))
+(defun !cold-init (&aux (real-failed-aver-fun #'%failed-aver))
   "Give the world a shove and hope it spins."
 
   (/show0 "entering !COLD-INIT")
@@ -97,19 +91,15 @@
   (sb-impl::!cold-stream-init)
   (show-and-call !signal-function-cold-init)
   (show-and-call !printer-control-init) ; needed before first instance of FORMAT or WRITE-STRING
-  (setq *unparse-fun-type-simplify* nil) ; needed by TLFs in target-error.lisp
+  (show-and-call sb-format::!format-init)
+  (show-and-call sb-format::!format-directives-init)
   (setq sb-unix::*unblock-deferrables-on-enabling-interrupts-p* nil) ; needed by LOAD-LAYOUT called by CLASSES-INIT
   (setq *print-length* 6
         *print-level* 3)
   (/show "testing '/SHOW" *print-length* *print-level*) ; show anything
-  ;; This allows FORMAT to work, and can go as early needed for
-  ;; debugging.
-  (show-and-call !format-cold-init)
+
   (unless (!c-runtime-noinform-p)
-    ;; I'd like FORMAT to remain working in cold-init, where it does work,
-    ;; hence the conditional.
-    #+(or x86 x86-64) (format t "COLD-INIT... ")
-    #-(or x86 x86-64) (write-string "COLD-INIT... "))
+    (write-string "COLD-INIT... "))
 
   ;; Anyone might call RANDOM to initialize a hash value or something;
   ;; and there's nothing which needs to be initialized in order for
@@ -135,13 +125,6 @@
   ;; OUTPUT-SYMBOL calls FIND-SYMBOL to determine accessibility. Also
   ;; allows IN-PACKAGE to work.
   (show-and-call !package-cold-init)
-  ;; debug machinery needed for printing symbols
-  #+sb-devel
-  (progn
-    (!readtable-cold-init)
-    ;; Because L-T-V forms have not executed, CHOOSE-SYMBOL-OUT-FUN doesn't work.
-    (setf (symbol-function 'choose-symbol-out-fun)
-          (lambda (&rest args) (declare (ignore args)) #'output-preserve-symbol)))
 
   ;; *RAW-SLOT-DATA* is essentially a compile-time constant
   ;; but isn't dumpable as such because it has functions in it.
@@ -158,10 +141,6 @@
   (show-and-call sb-kernel::!primordial-type-cold-init)
 
   (show-and-call !type-cold-init)
-  ;; FIXME: It would be tidy to make sure that that these cold init
-  ;; functions are called in the same relative order as the toplevel
-  ;; forms of the corresponding source files.
-
   (show-and-call !policy-cold-init-or-resanify)
   (/show0 "back from !POLICY-COLD-INIT-OR-RESANIFY")
 
@@ -170,33 +149,15 @@
   ;; to the subclasses of STRUCTURE-OBJECT.
   (show-and-call sb-kernel::!set-up-structure-object-class)
 
-  ;; Genesis is able to perform some of the work of DEFCONSTANT, but
-  ;; not all of it. It assigns symbol values, but can not manipulate
-  ;; globaldb. Therefore, a subtlety of these macros for bootstrap is
-  ;; that we see each DEFthing twice: once during cold-load and again
-  ;; here.
-  (setq sb-pcl::*!docstrings* nil) ; needed by %DEFCONSTANT
-  (dolist (x *!cold-defsymbols*)
-    (destructuring-bind (fun name source-loc . docstring) x
-      (aver (boundp name)) ; it's a bug if genesis didn't initialize
-      (ecase fun
-        (%defconstant
-         (apply #'%defconstant name (symbol-value name) source-loc docstring)))))
-
   (unless (!c-runtime-noinform-p)
-    #+(or x86 x86-64) (format t "[Length(TLFs)=~D]" (length *!cold-toplevels*))
-    #-(or x86 x86-64) (write `("Length(TLFs)=" ,(length *!cold-toplevels*)) :escape nil))
+    (write `("Length(TLFs)=" ,(length *!cold-toplevels*)) :escape nil))
 
+  (setq sb-pcl::*!docstrings* nil) ; needed before any documentation is set
   (setq sb-c::*queued-proclaims* nil) ; needed before any proclaims are run
 
-  (loop with *package* = *package* ; rebind to self, as if by LOAD
-        for index-in-cold-toplevels from 0
-        for toplevel-thing in (prog1 *!cold-toplevels*
-                                 (makunbound '*!cold-toplevels*))
-        do
-      #+sb-show
-      (when (zerop (mod index-in-cold-toplevels 1000))
-        (/show index-in-cold-toplevels))
+  (/show0 "calling cold toplevel forms and fixups")
+  (let ((*package* *package*)) ; rebind to self, as if by LOAD
+    (dolist (toplevel-thing *!cold-toplevels*)
       (typecase toplevel-thing
         (function
          (funcall toplevel-thing))
@@ -211,17 +172,11 @@
         ((cons (eql :begin-file))
          (unless (!c-runtime-noinform-p) (print (cdr toplevel-thing))))
         (t
-         (!cold-lose "bogus operation in *!COLD-TOPLEVELS*"))))
+         (!cold-lose "bogus operation in *!COLD-TOPLEVELS*")))))
   (/show0 "done with loop over cold toplevel forms and fixups")
   (unless (!c-runtime-noinform-p) (terpri))
 
-  ;; Precise GC seems to think these symbols are live during the final GC
-  ;; which in turn enlivens a bunch of other "*!foo*" symbols.
-  ;; Setting them to NIL helps a little bit.
-  (setq *!cold-defsymbols* nil *!cold-toplevels* nil)
-
-  ;; Now that L-T-V forms have executed, the symbol output chooser works.
-  (setf (symbol-function 'choose-symbol-out-fun) real-choose-symbol-out-fun)
+  (makunbound '*!cold-toplevels*) ; so it gets GC'd
 
   #+win32 (show-and-call reinit-internal-real-time)
 
