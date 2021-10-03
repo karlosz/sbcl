@@ -70,7 +70,11 @@
     (!register-meta-info
      (setf (aref *info-types* id)
            (!make-meta-info id category kind type-spec type-checker
-                            validate-function default)))))
+                            validate-function (if (functionp default)
+                                                  default
+                                                  (lambda (name)
+                                                    (declare (ignore name))
+                                                    default)))))))
 
 
 ;;;; info types, and type numbers, part II: what's
@@ -221,7 +225,7 @@
                          name info-number answer t))
               (return-from get-info-value (values answer t)))))))
     (let* ((def (meta-info-default (aref *info-types* info-number)))
-           (answer (if (functionp def) (funcall def name) def)))
+           (answer (funcall def name)))
       (when hookp
         (funcall (truly-the function (cdr hook)) name info-number answer nil))
       (values answer nil))))
