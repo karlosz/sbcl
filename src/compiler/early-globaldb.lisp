@@ -70,9 +70,8 @@
   ;; 2. a function of two arguments, a name and new-value, which performs
   ;;    any other checks and/or side-effects including signaling an error.
   (validate-function nil :type (or function null) :read-only t)
-  ;; If FUNCTIONP, then a function called when there is no information of
-  ;; this type. If not FUNCTIONP, then any object serving as a default.
-  (default nil :read-only t))
+  ;; a function called when there is no information of this type.
+  (default (lambda () (error "Type not defined yet.")) :type function :read-only t))
 
 (declaim (freeze-type meta-info))
 
