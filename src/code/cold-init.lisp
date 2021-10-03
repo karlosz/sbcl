@@ -20,14 +20,6 @@
   (%primitive print "too early in cold init to recover from errors")
   (%halt))
 
-(defun !cold-failed-aver (expr)
-  ;; output the message and invoke ldb monitor
-  (terpri)
-  (write-line "failed AVER:")
-  (write expr)
-  (terpri)
-  (%halt))
-
 ;;; last-ditch error reporting for things which should never happen
 ;;; and which, if they do happen, are sufficiently likely to torpedo
 ;;; the normal error-handling system that we want to bypass it
@@ -45,13 +37,13 @@
 ;;; a SIMPLE-VECTOR set by GENESIS
 (defvar *!load-time-values*)
 
-  ;; FIXME: Perhaps we should make SHOW-AND-CALL-AND-FMAKUNBOUND, too,
-  ;; and use it for most of the cold-init functions. (Just be careful
-  ;; not to use it for the COLD-INIT-OR-REINIT functions.)
+;; FIXME: Perhaps we should make SHOW-AND-CALL-AND-FMAKUNBOUND, too,
+;; and use it for most of the cold-init functions. (Just be careful
+;; not to use it for the COLD-INIT-OR-REINIT functions.)
 (defmacro show-and-call (name)
-    `(progn
-       (/show "Calling" ,(symbol-name name))
-       (,name)))
+  `(progn
+     (/show "Calling" ,(symbol-name name))
+     (,name)))
 
 (defun !c-runtime-noinform-p () (/= (extern-alien "lisp_startup_options" char) 0))
 
@@ -82,7 +74,7 @@
         *current-level-in-print* 0))
 
 ;;; called when a cold system starts up
-(defun !cold-init (&aux (real-failed-aver-fun #'%failed-aver))
+(defun !cold-init ()
   "Give the world a shove and hope it spins."
 
   (/show0 "entering !COLD-INIT")
@@ -110,8 +102,6 @@
   (/show0 "about to SHOW-AND-CALL !GLOBALDB-COLD-INIT")
   (show-and-call !globaldb-cold-init)
   (show-and-call !function-names-init)
-
-  (setf (symbol-function '%failed-aver) #'!cold-failed-aver)
 
   ;; And now *CURRENT-THREAD*
   (sb-thread::init-main-thread)
@@ -228,7 +218,6 @@
   (setf sb-kernel:*maximum-error-depth* 10)
   (/show0 "enabling internal errors")
   (setf (extern-alien "internal_errors_enabled" int) 1)
-  (setf (symbol-function '%failed-aver) real-failed-aver-fun)
 
   (show-and-call sb-disassem::!compile-inst-printers)
 
