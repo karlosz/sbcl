@@ -24,9 +24,12 @@
           (loop (gen-label))
           (not-list (generate-error-code vop 'object-not-list-error ptr)))
       (move ptr object)
+      #-64-bit
       (move count zero-tn)
+      #+64-bit
+      (inst li count 0)
 
-      (inst cmpw ptr null-tn)
+      (inst #-64-bit cmpw #+64-bit cmpd ptr null-tn)
       (inst beq done)
 
       (emit-label loop)
