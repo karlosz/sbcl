@@ -227,6 +227,7 @@
     (move res value)
     (load-stack-tn csp-tn sp)))
 
+#-64-bit
 (define-vop (nlx-entry-multiple)
   (:args (top :target result) (src) (count))
   ;; Again, no SC restrictions for the args, 'cause the loading would
@@ -266,6 +267,45 @@
       (emit-label done)
       (inst add csp-tn result num))))
 
+#+64-bit
+(define-vop (nlx-entry-multiple)
+  (:args (top :target result) (src) (count :target limit))
+  ;; Again, no SC restrictions for the args, 'cause the loading would
+  ;; happen before the entry label.
+  (:info label)
+  (:temporary (:scs (any-reg)) dst)
+  (:temporary (:scs (descriptor-reg)) temp limit)
+  (:results (result :scs (any-reg) :from (:argument 0))
+            (num :scs (any-reg) :from (:argument 0)))
+  (:save-p :force-to-stack)
+  (:vop-var vop)
+  (:generator 30
+    (emit-return-pc label)
+    (note-this-location vop :non-local-entry)
+
+    ;; Setup results, and test for the zero value case.
+    (load-stack-tn result top)
+    (inst cmpwi count 0)
+    (inst li num 0)
+    (inst beq done)
+    (inst slwi limit count (- word-shift n-fixnum-tag-bits))
+
+    ;; Compute dst as one slot down from result, because we inc the index
+    ;; before we use it.
+    (inst subi dst result n-word-bytes)
+
+    ;; Copy stuff down the stack.
+    LOOP
+    (inst ldx temp src num)
+    (inst addi num num n-word-bytes)
+    (inst cmpw num limit)
+    (inst stdx temp dst num)
+    (inst bne loop)
+
+    ;; Reset the CSP.
+    DONE
+    (inst add csp-tn result num)
+    (inst srwi num num (- word-shift n-fixnum-tag-bits))))
 
 ;;; This VOP is just to force the TNs used in the cleanup onto the stack.
 ;;;
