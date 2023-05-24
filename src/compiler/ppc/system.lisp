@@ -48,6 +48,22 @@
 
     DONE))
 
+#+64-bit
+(define-vop (layout-depthoid)
+  (:translate layout-depthoid)
+  (:policy :fast-safe)
+  (:args (object :scs (descriptor-reg)))
+  (:results (res :scs (any-reg)))
+  (:result-types fixnum)
+  (:temporary (:scs (non-descriptor-reg)) temp)
+  (:generator 1
+    (inst lr temp (- (+ #+little-endian 4
+                        (ash (+ instance-slots-offset
+                                (get-dsd-index layout sb-kernel::flags))
+                             word-shift))
+                     instance-pointer-lowtag))
+    (inst lwax res object temp)))
+
 (define-vop ()
   (:translate sb-c::%structure-is-a)
   (:args (x :scs (descriptor-reg)))
@@ -62,7 +78,7 @@
           (offset (+ (id-bits-offset)
                      (ash (- (layout-depthoid test-layout) 2) 2)
                      (- instance-pointer-lowtag))))
-      (inst lwz this-id x offset)
+      (inst #-64-bit lwz #+64-bit lwa this-id x offset)
       ;; Always prefer 'cmpwi' if compiling to memory.
       ;; 8-bit IDs are permanently assigned, so no fixup ever needed for those.
       (cond ((or (typep test-id '(and (signed-byte 8) (not (eql 0))))
@@ -70,7 +86,7 @@
                       (typep test-id '(signed-byte 16))))
              (inst cmpwi this-id test-id))
             (t
-             (inst lwz that-id code-tn
+             (inst #-64-bit lwz #+64-bit lwa that-id code-tn
                    (register-inline-constant `(:layout-id . ,test-layout) :word))
              (inst cmpw this-id that-id))))
     (inst b? (if not-p :ne :eq) target)))
@@ -101,8 +117,9 @@
   (:result-types positive-fixnum)
   (:generator 6
     (loadw res x 0 other-pointer-lowtag)
-    (inst srwi res res n-widetag-bits)))
+    (inst #-64-bit srwi #+64-bit srdi res res n-widetag-bits)))
 
+#-64-bit
 (define-vop (set-header-data)
   (:translate set-header-data)
   (:policy :fast-safe)
@@ -127,6 +144,19 @@
       (zero))
     (storew t1 x 0 other-pointer-lowtag)))
 
+#+64-bit
+(define-vop (set-header-data)
+  (:translate set-header-data)
+  (:policy :fast-safe)
+  (:args (x :scs (descriptor-reg))
+         (data :scs (any-reg)))
+  (:arg-types * positive-fixnum)
+  (:temporary (:scs (non-descriptor-reg)) t1 t2)
+  (:generator 6
+    (load-type t1 x (- other-pointer-lowtag))
+    (inst sldi t2 data (- n-widetag-bits n-fixnum-tag-bits))
+    (inst or t1 t1 t2)
+    (storew t1 x 0 other-pointer-lowtag)))
 
 (define-vop (pointer-hash)
   (:translate pointer-hash)
@@ -134,7 +164,7 @@
   (:results (res :scs (any-reg descriptor-reg)))
   (:policy :fast-safe)
   (:generator 1
-    (inst clrrwi res ptr n-fixnum-tag-bits)))
+    (inst #-64-bit clrrwi #+64-bit clrrdi res ptr n-fixnum-tag-bits)))
 
 
 ;;;; Allocation
@@ -166,10 +196,16 @@
   (:results (sap :scs (sap-reg)))
   (:result-types system-area-pointer)
   (:generator 10
+    #-64-bit
     (loadw ndescr code code-boxed-size-slot other-pointer-lowtag)
+    #+64-bit
+    (inst lwz ndescr code
+          (- (+ (ash code-boxed-size-slot word-shift) #+big-endian 4)
+             other-pointer-lowtag))
     (inst subi ndescr ndescr other-pointer-lowtag)
     (inst add sap code ndescr)))
 
+#-64-bit
 (define-vop (code-trailer-ref)
   (:translate code-trailer-ref)
   (:policy :fast-safe)
@@ -194,7 +230,12 @@
   (:results (func :scs (descriptor-reg)))
   (:temporary (:scs (non-descriptor-reg)) ndescr)
   (:generator 10
+    #-64-bit
     (loadw ndescr code code-boxed-size-slot other-pointer-lowtag)
+    #+64-bit
+    (inst lwz ndescr code
+          (- (+ (ash code-boxed-size-slot word-shift) #+big-endian 4)
+             other-pointer-lowtag))
     (inst add ndescr ndescr offset)
     (inst addi ndescr ndescr (- fun-pointer-lowtag other-pointer-lowtag))
     (inst add func code ndescr)))
@@ -220,8 +261,8 @@
   (:arg-types signed-num)
   (:policy :fast-safe)
   (:generator 2
-    (inst slwi n n word-shift)
-    (inst lwzx sap thread-base-tn n)))
+    (inst #-64-bit slwi #+64-bit sldi n n word-shift)
+    (inst #-64-bit lwzx #+64-bit ldx sap thread-base-tn n)))
 
 (define-vop (halt)
   (:generator 1
