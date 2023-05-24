@@ -24,14 +24,14 @@
   (:generator 1
     (inst mr dest last-nipped-ptr)
     (inst mr src last-preserved-ptr)
-    (inst cmplw csp-tn src)
+    (inst #-64-bit cmplw #+64-bit cmpld csp-tn src)
     (inst ble DONE)
     LOOP
     (loadw temp src)
     (inst addi dest dest n-word-bytes)
     (inst addi src src n-word-bytes)
     (storew temp dest -1)
-    (inst cmplw csp-tn src)
+    (inst #-64-bit cmplw #+64-bit cmpld csp-tn src)
     (inst bgt LOOP)
     DONE
     (inst mr csp-tn dest)
@@ -102,7 +102,7 @@
       (move start csp-tn)
 
       (emit-label loop)
-      (inst cmpw list null-tn)
+      (inst #-64-bit cmpw #+64-bit cmpd list null-tn)
       (loadw temp list cons-car-slot list-pointer-lowtag)
       (inst beq done)
       (loadw list list cons-cdr-slot list-pointer-lowtag)
@@ -112,7 +112,9 @@
       (cerror-call vop 'bogus-arg-to-values-list-error list)
 
       (emit-label done)
-      (inst sub count csp-tn start))))
+      (inst sub count csp-tn start)
+      (unless (= word-shift n-fixnum-tag-bits)
+        (inst #-64-bit srawi #+64-bit sradi count count (- word-shift n-fixnum-tag-bits))))))
 
 
 ;;; Copy the more arg block to the top of the stack so we can use them
@@ -134,12 +136,16 @@
     (inst mr start csp-tn)
     (inst beq done)
     (inst mr dst csp-tn)
-    (inst add csp-tn csp-tn count)
-    (inst mr i count)
+    (let ((delta (cond
+                   ((= n-fixnum-tag-bits word-shift) count)
+                   (t (inst slwi temp count (- word-shift n-fixnum-tag-bits))
+                      temp))))
+      (inst add csp-tn csp-tn delta)
+      (inst mr i delta))
     LOOP
-    (inst cmpwi i 4)
-    (inst subi i i 4)
-    (inst lwzx temp src i)
-    (inst stwx temp dst i)
+    (inst cmpwi i n-word-bytes)
+    (inst subi i i n-word-bytes)
+    (inst #-64-bit lwzx #+64-bit ldx temp src i)
+    (inst #-64-bit stwx #+64-bit stdx temp dst i)
     (inst bne loop)
     DONE))
