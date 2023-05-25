@@ -31,10 +31,11 @@
   ;; just use 4k everywhere.
 (defconstant +backend-page-bytes+ #+linux 65536 #-linux 4096)
 
-;;; The size in bytes of GENCGC cards, i.e. the granularity at which
-;;; writes to old generations are logged.  With mprotect-based write
-;;; barriers, this must be a multiple of the OS page size.
+;;; The size in bytes of GENCGC pages, i.e. the granularity at which
+;;; threads claim memory from the global heap.
 (defconstant gencgc-page-bytes +backend-page-bytes+)
+;;; Granularity at which writes to old generations are logged.
+(defconstant cards-per-page 32)
 ;;; The minimum size of new allocation regions.  While it doesn't
 ;;; currently make a lot of sense to have a card size lower than
 ;;; the alloc granularity, it will, once we are smarter about finding
@@ -45,11 +46,11 @@
 (defconstant gencgc-release-granularity +backend-page-bytes+)
 
 ;;; number of bits per word where a word holds one lisp descriptor
-(defconstant n-word-bits 32)
+(defconstant n-word-bits #-64-bit 32 #+64-bit 64)
 
 ;;; the natural width of a machine word (as seen in e.g. register width,
 ;;; address space)
-(defconstant n-machine-word-bits 32)
+(defconstant n-machine-word-bits #-64-bit 32 #+64-bit 64)
 
 (defconstant float-inexact-trap-bit (ash 1 0))
 (defconstant float-divide-by-zero-trap-bit (ash 1 1))
@@ -79,12 +80,15 @@
 (defconstant-eqx float-sticky-bits (byte 5 25) #'equalp)
 (defconstant-eqx float-traps-byte (byte 5 3) #'equalp)
 (defconstant-eqx float-exceptions-byte (byte 5 25) #'equalp)      ; cexc
+#+64-bit
+(defconstant-eqx float-invalid-byte (byte 6 19) #'equalp)
 
 (defconstant float-fast-bit 2)         ; Non-IEEE mode
 
 
 ;;;; Where to put the different spaces.
 
+#-64-bit
 (!gencgc-space-setup #x04000000
                      :read-only-space-size 0
                      :dynamic-space-start
@@ -92,8 +96,16 @@
                      #+netbsd  #x4f000000
                      #+openbsd #x4f000000)
 
+#+64-bit
+(!gencgc-space-setup #x04000000
+                     :read-only-space-size 0
+                     :dynamic-space-start #x1000000000)
+
 (defconstant alien-linkage-table-growth-direction :up)
+#-64-bit
 (defconstant alien-linkage-table-entry-size 16)
+#+64-bit
+(defconstant alien-linkage-table-entry-size #+little-endian 28 #+big-endian 24)
 
 
 (defenum (:start 8)
