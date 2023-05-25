@@ -45,11 +45,11 @@
          (inst andi. index x fixnum-tag-mask)
          (inst b? :ne otherwise)
          (inst addi index x (fixnumize (- min)))
-         (inst cmplwi index (fixnumize (- max min)))
+         (inst #-64-bit cmplwi #+64-bit cmpldi index (fixnumize (- max min)))
          (inst b? :gt otherwise)
          (let ((s (- word-shift n-fixnum-tag-bits)))
            (unless (zerop s)
-             (inst slwi index index s))))
+             (inst #-64-bit slwi #+64-bit sldi index index s))))
         (character
          (inst andi. index x widetag-mask)
          (inst cmpwi index character-widetag)
@@ -61,7 +61,7 @@
          (inst slwi index index word-shift)))
       (let ((table-label (register-inline-constant vector :jump-table)))
         (inst addi index index (make-fixup nil :code-object table-label)))
-      (inst lwzx lip code-tn index)
+      (inst #-64-bit lwzx #+64-bit ldx lip code-tn index)
       (inst mtctr lip)
       (inst bctr))))
 
@@ -73,12 +73,12 @@
 ;;;; Conditional VOPs:
 
 (define-vop (if-eq)
-  (:args (x :scs (any-reg descriptor-reg zero null))
-         (y :scs (any-reg descriptor-reg zero null)))
+  (:args (x :scs (any-reg descriptor-reg #-64-bit zero null))
+         (y :scs (any-reg descriptor-reg #-64-bit zero null)))
   (:conditional)
   (:info target not-p)
   (:policy :fast-safe)
   (:translate eq)
   (:generator 3
-    (inst cmpw x y)
+    (inst #-64-bit cmpw #+64-bit cmpd x y)
     (inst b? (if not-p :ne :eq) target)))
