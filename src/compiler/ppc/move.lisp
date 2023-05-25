@@ -12,7 +12,7 @@
 (in-package "SB-VM")
 
 (define-move-fun (load-immediate 1) (vop x y)
-  ((null immediate zero)
+  ((null immediate #-64-bit zero)
    (any-reg descriptor-reg))
   (let ((val (tn-value x)))
     (etypecase val
@@ -31,7 +31,7 @@
            (bug "immediate structure-object ~S" val))))))
 
 (define-move-fun (load-number 1) (vop x y)
-  ((immediate zero)
+  ((immediate #-64-bit zero)
    (signed-reg unsigned-reg))
   (inst lr y (tn-value x)))
 
@@ -45,7 +45,7 @@
 
 (define-move-fun (load-constant 5) (vop x y)
   ((constant) (descriptor-reg))
-  (loadw y code-tn (tn-offset x) other-pointer-lowtag))
+  (loadw y code-tn (tn-offset x) #-64-bit other-pointer-lowtag #+64-bit code-tn-lowtag))
 
 (define-move-fun (load-stack 5) (vop x y)
   ((control-stack) (any-reg descriptor-reg))
@@ -75,7 +75,7 @@
 ;;;; The Move VOP:
 (define-vop (move)
   (:args (x :target y
-            :scs (any-reg descriptor-reg zero null)
+            :scs (any-reg descriptor-reg #-64-bit zero null)
             :load-if (not (location= x y))))
   (:results (y :scs (any-reg descriptor-reg control-stack)
                :load-if (not (location= x y))))
@@ -94,7 +94,7 @@
 ;;; frame for argument or known value passing.
 (define-vop (move-arg)
   (:args (x :target y
-            :scs (any-reg descriptor-reg zero null))
+            :scs (any-reg descriptor-reg #-64-bit zero null))
          (fp :scs (any-reg)
              :load-if (not (sc-is y any-reg descriptor-reg))))
   (:results (y))
@@ -123,7 +123,7 @@
   (:arg-types tagged-num)
   (:note "fixnum untagging")
   (:generator 1
-    (inst srawi y x n-fixnum-tag-bits)))
+    (inst #-64-bit srawi #+64-bit sradi y x n-fixnum-tag-bits)))
 (define-move-vop move-to-word/fixnum :move
   (any-reg descriptor-reg) (signed-reg unsigned-reg))
 
@@ -136,8 +136,8 @@
     (cond ((sb-c::tn-leaf x)
            (inst lr y (tn-value x)))
           (t
-           (loadw y code-tn (tn-offset x) other-pointer-lowtag)
-           (inst srawi y y n-fixnum-tag-bits)))))
+           (loadw y code-tn (tn-offset x) #-64-bit other-pointer-lowtag #+64-bit code-tn-lowtag)
+           (inst #-64-bit srawi #+64-bit sradi y y n-fixnum-tag-bits)))))
 (define-move-vop move-to-word-c :move
   (constant) (signed-reg unsigned-reg))
 
@@ -150,7 +150,7 @@
   (:generator 4
     (let ((done (gen-label)))
       (inst andi. temp x fixnum-tag-mask)
-      (inst srawi y x n-fixnum-tag-bits)
+      (inst #-64-bit srawi #+64-bit sradi y x n-fixnum-tag-bits)
 
       (inst beq done)
       (loadw y x bignum-digits-offset other-pointer-lowtag)
@@ -167,12 +167,13 @@
   (:result-types tagged-num)
   (:note "fixnum tagging")
   (:generator 1
-    (inst slwi y x n-fixnum-tag-bits)))
+    (inst #-64-bit slwi #+64-bit sldi y x n-fixnum-tag-bits)))
 (define-move-vop move-from-word/fixnum :move
   (signed-reg unsigned-reg) (any-reg descriptor-reg))
 
 ;;; RESULT may be a bignum, so we have to check.  Use a worst-case
 ;;; cost to make sure people know they may be number consing.
+#-64-bit
 (define-vop (move-from-signed)
   (:args (arg :scs (signed-reg unsigned-reg) :target x))
   (:results (y :scs (any-reg descriptor-reg)))
@@ -192,9 +193,69 @@
     (with-fixed-allocation (y pa-flag temp bignum-widetag (1+ bignum-digits-offset))
       (storew x y bignum-digits-offset other-pointer-lowtag))
     DONE))
+#+64-bit
+(define-vop (move-from-signed)
+  (:args (arg :scs (signed-reg unsigned-reg) :target x))
+  (:results (y :scs (any-reg descriptor-reg)))
+  (:temporary (:scs (non-descriptor-reg) :from (:argument 0)) x temp)
+  (:temporary (:sc non-descriptor-reg :offset nl3-offset) pa-flag)
+  (:note "signed word to integer coercion")
+  (:generator 20
+    (move x arg)
+    ;; Don't even think about using mcrxr, you couldn't make up a
+    ;; slower instruction
+    (inst li temp-reg-tn 0) (inst mtxer temp-reg-tn) ; clear XER
+    (ecase n-fixnum-tag-bits
+      (1 (inst addo. y arg arg))
+      ;; result is not properly tagged until all shifts are performed,
+      ;; so don't move result into Y until the last step.
+      (2 (inst addo temp arg arg) (inst addo. y temp temp))
+      (3 (inst addo temp arg arg) (inst addo temp temp temp) (inst addo. y temp temp)))
+    (inst bns done) ; branch if no summary overflow
+    (with-fixed-allocation (y pa-flag temp bignum-widetag (1+ bignum-digits-offset))
+      (storew x y bignum-digits-offset other-pointer-lowtag))
+    DONE))
 (define-move-vop move-from-signed :move
   (signed-reg) (descriptor-reg))
 
+#+64-bit
+(macrolet ((define-move-from-fixnum+1 ()
+             `(define-vop (move-from-fixnum+1)
+                (:args (arg :scs (signed-reg unsigned-reg)
+                            ,@(when (> n-fixnum-tag-bits 1)
+                                '(:target x))))
+                ,@(when (> n-fixnum-tag-bits 1)
+                    '((:temporary (:scs (non-descriptor-reg) :from (:argument 0)) x)))
+                (:results (y :scs (any-reg descriptor-reg)))
+                (:vop-var vop)
+                (:generator 4
+                  (inst li temp-reg-tn 0) (inst mtxer temp-reg-tn) ; clear XER
+                  ;; this condition has to be done as part of the macroexpander
+                  ;; because the variable X does not exist for case 1.
+                  ,@(ecase n-fixnum-tag-bits
+                      (1 '((inst addo. y arg arg)))
+                      (2 '((inst addo x arg arg) (inst addo. y x x)))
+                      (3 '((inst addo x arg arg) (inst addo x x x) (inst addo. y x x))))
+                  (inst bns done) ; branch if no summary overflow
+                  (load-constant vop (emit-constant (1+ most-positive-fixnum)) y)
+                  DONE))))
+  (define-move-from-fixnum+1))
+
+#+64-bit
+(macrolet ((define-move-from-fixnum-1 ()
+             `(define-vop (move-from-fixnum-1 move-from-fixnum+1)
+                (:generator 4
+                  (inst li temp-reg-tn 0) (inst mtxer temp-reg-tn) ; clear XER
+                  ,@(ecase n-fixnum-tag-bits
+                      (1 '((inst addo. y arg arg)))
+                      (2 '((inst addo x arg arg) (inst addo. y x x)))
+                      (3 '((inst addo x arg arg) (inst addo x x x) (inst addo. y x x))))
+                  (inst bns done) ; branch if no summary overflow
+                  (load-constant vop (emit-constant (1- most-negative-fixnum)) y)
+                  DONE))))
+  (define-move-from-fixnum-1))
+
+#-64-bit
 (define-vop (move-from-fixnum+1)
   (:args (arg :scs (signed-reg unsigned-reg) :target x))
   (:results (y :scs (any-reg descriptor-reg)))
@@ -211,6 +272,7 @@
                    y)
     DONE))
 
+#-64-bit
 (define-vop (move-from-fixnum-1 move-from-fixnum+1)
   (:generator 4
     (move x arg)
@@ -226,6 +288,7 @@
 ;;; Check for fixnum, and possibly allocate one or two word bignum
 ;;; result.  Use a worst-case cost to make sure people know they may
 ;;; be number consing.
+#-64-bit
 (define-vop (move-from-unsigned)
   (:args (arg :scs (signed-reg unsigned-reg) :target x))
   (:results (y :scs (any-reg descriptor-reg)))
@@ -250,6 +313,28 @@
         (storew temp y 0 other-pointer-lowtag)
         (storew x y bignum-digits-offset other-pointer-lowtag))
       (emit-label done))))
+#+64-bit
+(define-vop (move-from-unsigned)
+  (:args (arg :scs (signed-reg unsigned-reg) :target x))
+  (:results (y :scs (any-reg descriptor-reg)))
+  (:temporary (:scs (non-descriptor-reg) :from (:argument 0)) x temp)
+  (:temporary (:sc non-descriptor-reg :offset nl3-offset) pa-flag)
+  (:note "unsigned word to integer coercion")
+  (:generator 20
+    (move x arg)
+    (inst clrrdi. temp x n-positive-fixnum-bits)
+    (inst sldi y x n-fixnum-tag-bits)
+    (inst beq done)
+    (with-fixed-allocation
+        (y pa-flag temp bignum-widetag (+ 2 bignum-digits-offset))
+      ;; rotate the sign bit into the LSB of the size in the header
+      (inst rldicl temp x (1+ n-widetag-bits) 0)
+      (inst andi. temp temp (ash 1 n-widetag-bits)) ; mask only that bit
+      ;; cause the size to be either 1 or 2 bigdigits, and add the widetag
+      (inst addi temp temp (logior (ash 1 n-widetag-bits) bignum-widetag))
+      (storew temp y 0 other-pointer-lowtag)
+      (storew x y bignum-digits-offset other-pointer-lowtag))
+    DONE))
 (define-move-vop move-from-unsigned :move
   (unsigned-reg) (descriptor-reg))
 
