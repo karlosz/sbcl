@@ -130,18 +130,18 @@
        ,@(when sign-extend-byte
            `((inst extsb value value))))))
 
-(define-indexer word-index-ref           3 nil ld  ldx) ;; Word means Lisp Word
-(define-indexer 32-bits-index-ref        2 nil lwz lwzx)
-(define-indexer signed-32-bits-index-ref 2 nil lwa lwax :multiple-of-four t)
-(define-indexer 16-bits-index-ref        1 nil lhz lhzx)
-(define-indexer signed-16-bits-index-ref 1 nil lha lhax)
-(define-indexer byte-index-ref           0 nil lbz lbzx)
-(define-indexer signed-byte-index-ref    0 nil lbz lbzx :sign-extend-byte t)
+(define-indexer doubleword-index-ref      3 nil ld  ldx)
+(define-indexer word-index-ref            2 nil lwz lwzx)
+(define-indexer signed-word-index-ref     2 nil lwa lwax :multiple-of-four t)
+(define-indexer halfword-index-ref        1 nil lhz lhzx)
+(define-indexer signed-halfword-index-ref 1 nil lha lhax)
+(define-indexer byte-index-ref            0 nil lbz lbzx)
+(define-indexer signed-byte-index-ref     0 nil lbz lbzx :sign-extend-byte t)
 
-(define-indexer word-index-set           3 t   std stdx)
-(define-indexer 32-bits-index-set        2 t   stw stwx)
-(define-indexer 16-bits-index-set        1 t   sth sthx)
-(define-indexer byte-index-set           0 t   stb stbx)
+(define-indexer doubleword-index-set      3 t   std stdx)
+(define-indexer word-index-set            2 t   stw stwx)
+(define-indexer halfword-index-set        1 t   sth sthx)
+(define-indexer byte-index-set            0 t   stb stbx)
 
 (define-vop (word-index-cas)
   (:args (object :scs (descriptor-reg))

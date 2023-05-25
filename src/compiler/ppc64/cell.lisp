@@ -432,7 +432,7 @@
 
 ;;;; Closure indexing.
 
-(define-vop (closure-index-ref word-index-ref)
+(define-vop (closure-index-ref doubleword-index-ref)
   (:variant closure-info-offset fun-pointer-lowtag)
   (:translate %closure-index-ref))
 
@@ -440,7 +440,7 @@
   (:variant closure-info-offset fun-pointer-lowtag)
   (:translate %closure-index-set))
 
-(define-vop (funcallable-instance-info word-index-ref)
+(define-vop (funcallable-instance-info doubleword-index-ref)
   (:variant funcallable-instance-info-offset fun-pointer-lowtag)
   (:translate %funcallable-instance-info))
 
@@ -486,7 +486,7 @@
     (loadw res struct 0 instance-pointer-lowtag)
     (inst srwi res res instance-length-shift)))
 
-(define-vop (instance-index-ref word-index-ref)
+(define-vop (instance-index-ref doubleword-index-ref)
   (:policy :fast-safe)
   (:translate %instance-ref)
   (:variant instance-slots-offset instance-pointer-lowtag)
@@ -577,14 +577,14 @@
 
 (macrolet ((def (suffix sc primtype)
              `(progn
-                (define-vop (,(symbolicate "%RAW-INSTANCE-REF/" suffix) word-index-ref)
+                (define-vop (,(symbolicate "%RAW-INSTANCE-REF/" suffix) doubleword-index-ref)
                   (:policy :fast-safe)
                   (:translate ,(symbolicate "%RAW-INSTANCE-REF/" suffix))
                   (:variant instance-slots-offset instance-pointer-lowtag)
                   (:arg-types instance positive-fixnum)
                   (:results (value :scs (,sc)))
                   (:result-types ,primtype))
-                (define-vop (,(symbolicate "%RAW-INSTANCE-SET/" suffix) word-index-set)
+                (define-vop (,(symbolicate "%RAW-INSTANCE-SET/" suffix) doubleword-index-set)
                   (:policy :fast-safe)
                   (:translate ,(symbolicate "%RAW-INSTANCE-SET/" suffix))
                   (:variant instance-slots-offset instance-pointer-lowtag)

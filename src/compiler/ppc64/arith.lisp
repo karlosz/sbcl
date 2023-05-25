@@ -876,13 +876,13 @@
   (:translate sb-bignum:%bignum-set-length)
   (:policy :fast-safe))
 
-(define-vop (bignum-ref word-index-ref)
+(define-vop (bignum-ref doubleword-index-ref)
   (:variant bignum-digits-offset other-pointer-lowtag)
   (:translate sb-bignum:%bignum-ref)
   (:results (value :scs (unsigned-reg)))
   (:result-types unsigned-num))
 
-(define-vop (bignum-set word-index-set)
+(define-vop (bignum-set doubleword-index-set)
   (:variant bignum-digits-offset other-pointer-lowtag)
   (:translate sb-bignum:%bignum-set)
   (:args (object :scs (descriptor-reg))

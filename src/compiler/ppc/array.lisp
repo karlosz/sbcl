@@ -24,12 +24,15 @@
   (:temporary (:sc non-descriptor-reg :offset nl3-offset) pa-flag)
   (:temporary (:scs (non-descriptor-reg)) ndescr)
   (:temporary (:scs (non-descriptor-reg)) gc-temp)
+  #-gencgc (:ignore gc-temp)
   (:results (result :scs (descriptor-reg)))
   (:generator 0
+    #+64-bit
+    (inst sldi ndescr rank (- word-shift n-fixnum-tag-bits))
+    (inst addi ndescr #-64-bit rank #+64-bit ndescr (+ (* array-dimensions-offset n-word-bytes)
+                              lowtag-mask))
+    (inst clrrwi ndescr ndescr n-lowtag-bits)
     (pseudo-atomic (pa-flag)
-      (inst addi ndescr rank (+ (* array-dimensions-offset n-word-bytes)
-                                lowtag-mask))
-      (inst clrrwi ndescr ndescr n-lowtag-bits)
       (allocation nil ndescr other-pointer-lowtag header
                   :temp-tn gc-temp
                   :flag-tn pa-flag)
@@ -46,12 +49,12 @@
 
 
 ;;;; Additional accessors and setters for the array header.
-(define-vop (%array-dimension word-index-ref)
+(define-vop (%array-dimension #-64-bit word-index-ref #+64-bit doubleword-index-ref)
   (:translate %array-dimension)
   (:policy :fast-safe)
   (:variant array-dimensions-offset other-pointer-lowtag))
 
-(define-vop (%set-array-dimension word-index-set)
+(define-vop (%set-array-dimension #-64-bit word-index-set #+64-bit doubleword-index-set)
   (:translate %set-array-dimension)
   (:policy :fast-safe)
   (:variant array-dimensions-offset other-pointer-lowtag))
@@ -63,9 +66,7 @@
   (:results (res :scs (unsigned-reg)))
   (:result-types positive-fixnum)
   (:generator 6
-    ;; convert ARRAY-RANK-POSITION to byte index and compensate for endianness
-    ;; ASSUMPTION: n-widetag-bits = 8 and rank is adjacent to widetag
-    (inst lbz res x (- 2 other-pointer-lowtag)) ; big-endian only
+    (inst lbz res x (- (/ array-rank-position n-byte-bits) other-pointer-lowtag))
     (inst addi res res 1)
     (inst andi. res res array-rank-mask)))
 
@@ -85,7 +86,7 @@
     (let ((error (generate-error-code vop 'invalid-array-index-error
                                       array bound index)))
       (%test-fixnum index temp error t)
-      (inst cmplw index bound)
+      (inst #-64-bit cmplw #+64-bit cmpld index bound)
       (inst bge error))))
 
 
@@ -105,21 +106,54 @@
        (:arg-types ,type positive-fixnum)
        (:results (value :scs ,scs))
        (:result-types ,element-type))
-     (define-vop (,(symbolicate "DATA-VECTOR-SET/" (string type))
+     ,(if #-64-bit nil #+64-bit (eq type 'simple-vector)
+    `(define-vop (,(symbolicate "DATA-VECTOR-SET/" (string type)))
+       (:note "inline array store")
+       (:translate data-vector-set)
+       (:arg-types ,type positive-fixnum ,element-type)
+       (:args (object :scs (descriptor-reg))
+              (index :scs (any-reg immediate))
+              (value :scs ,scs))
+       (:arg-types  simple-vector positive-fixnum *)
+       (:policy :fast-safe)
+       (:temporary (:scs (non-descriptor-reg)) ea t1)
+       (:vop-var vop)
+       (:generator 5
+         ;; To ensure the right card gets marked, the exact element address must
+         ;; be computed. Alternatively, we could allow some leeway in which card(s)
+         ;; we look at in GC to decide whether a vector page was touched.
+         ;; i.e there are games that could be played to make the boundaries fuzzy
+         ;; which might obviate the need to perform two ADDs here,
+         ;; at the expense of some precision in which cards to re-protect.
+         ;; Probably better to just compute effective address precisely.
+         (cond ((sc-is index immediate)
+                (let ((disp (- (ash (+ vector-data-offset (tn-value index)) word-shift)
+                               other-pointer-lowtag)))
+                  (cond ((typep disp '(signed-byte 16))
+                         (inst addi ea object disp))
+                        (t ; doesn't fit in ADDI
+                         (inst lr ea disp)
+                         (inst add ea object ea)))))
+               (t
+                (inst addi ea index (- (ash vector-data-offset word-shift) other-pointer-lowtag))
+                (inst add ea object ea)))
+         (emit-gengc-barrier object ea (list t1) (vop-nth-arg 2 vop) value)
+         (inst std value ea 0)))
+    `(define-vop (,(symbolicate "DATA-VECTOR-SET/" (string type))
                   ,(symbolicate (string variant) "-SET"))
        (:note "inline array store")
        (:variant vector-data-offset other-pointer-lowtag)
        (:translate data-vector-set)
        (:arg-types ,type positive-fixnum ,element-type)
        (:args (object :scs (descriptor-reg))
-              (index :scs (any-reg zero immediate))
-              (value :scs ,scs))))))
+              (index :scs (any-reg #-64-bit zero immediate))
+              (value :scs ,scs)))))))
   (def-data-vector-frobs simple-base-string byte-index
     character character-reg)
   #+sb-unicode
   (def-data-vector-frobs simple-character-string word-index
     character character-reg)
-  (def-data-vector-frobs simple-vector word-index
+  (def-data-vector-frobs simple-vector #-64-bit word-index #+64-bit doubleword-index
     * descriptor-reg any-reg)
   (def-data-vector-frobs simple-array-unsigned-byte-7 byte-index
     positive-fixnum unsigned-reg)
@@ -133,12 +167,21 @@
     unsigned-num unsigned-reg)
   (def-data-vector-frobs simple-array-unsigned-byte-32 word-index
     unsigned-num unsigned-reg)
+  #+64-bit
+  (def-data-vector-frobs simple-array-unsigned-byte-63 doubleword-index
+    unsigned-num unsigned-reg)
+  #+64-bit
+  (def-data-vector-frobs simple-array-unsigned-byte-64 doubleword-index
+    unsigned-num unsigned-reg)
 
-  (def-data-vector-frobs simple-array-unsigned-fixnum word-index
+  (def-data-vector-frobs simple-array-unsigned-fixnum #-64-bit word-index #+64-bit doubleword-index
     positive-fixnum any-reg)
-  (def-data-vector-frobs simple-array-fixnum word-index
+  (def-data-vector-frobs simple-array-fixnum #-64-bit word-index #+64-bit doubleword-index
     tagged-num any-reg)
   (def-data-vector-frobs simple-array-signed-byte-32 word-index
+    signed-num signed-reg)
+  #+64-bit
+  (def-data-vector-frobs simple-array-signed-byte-64 doubleword-index
     signed-num signed-reg))
 
 (define-vop (%compare-and-swap-svref word-index-cas)
@@ -148,12 +191,24 @@
   (:translate %compare-and-swap-svref)
   (:arg-types simple-vector positive-fixnum * *))
 
-;;; Integer vectors whos elements are smaller than a byte.  I.e. bit, 2-bit,
+;;; Integer vectors whose elements are smaller than a byte.  I.e. bit, 2-bit,
 ;;; and 4-bit vectors.
 ;;;
 
 (macrolet ((def-small-data-vector-frobs (type bits)
-  (let* ((elements-per-word (floor n-word-bits bits))
+  ;; We're treating the read/writable quantum as 32 bits here
+  ;; rather than 64 so that the code is the same as for 32-bit ppc.
+  ;; It looks like we can get the single bit read access
+  ;; down a few instructions.
+  ;; This C code to access char array 'b' as bits compiles to 5 instructions:
+  ;;  { int index = bit >> shift; return (int8_t)(b[index]<<(bit & mask)) < 0; }
+  ;;        srdi 9,3,3
+  ;;        rlwinm 3,3,0,29,31
+  ;;        lbzx 9,4,9
+  ;;        slw 3,9,3
+  ;;        rldicl 3,3,57,63
+  ;; We of course have to add in vector-data-offset, and fixnumize the result.
+  (let* ((elements-per-word (floor 32 bits))
          (bit-shift (1- (integer-length elements-per-word))))
     `(progn
        (define-vop (,(symbolicate 'data-vector-ref/ type))
@@ -173,6 +228,7 @@
                                    other-pointer-lowtag))
            (inst lwzx result object temp)
            (inst andi. temp index ,(1- elements-per-word))
+           #+big-endian
            (inst xori temp temp ,(1- elements-per-word))
            ,@(unless (= bits 1)
                `((inst slwi temp temp ,(1- (integer-length bits)))))
@@ -191,26 +247,34 @@
          (:generator 15
            (multiple-value-bind (word extra)
                (floor index ,elements-per-word)
+             #+big-endian
              (setf extra (logxor extra (1- ,elements-per-word)))
-             (let ((offset (- (* (+ word vector-data-offset)
-                                 n-word-bytes)
+             (let ((offset (- (+ (* word 4)
+                                 (* vector-data-offset n-word-bytes))
                               other-pointer-lowtag)))
                (cond ((typep offset '(signed-byte 16))
                       (inst lwz result object offset))
                      (t
                       (inst lr temp offset)
                       (inst lwzx result object temp))))
+             #-64-bit
              (unless (zerop extra)
                (inst srwi result result (* ,bits extra)))
+             #-64-bit
              (unless (= extra ,(1- elements-per-word))
-               (inst andi. result result ,(1- (ash 1 bits)))))))
+               (inst andi. result result ,(1- (ash 1 bits))))
+             #+64-bit
+             (cond ((zerop extra)
+                    (inst rlwinm result result 0 (- 32 ,bits) 31))
+                   (t
+                    (inst rlwinm result result (- 32 (* ,bits extra)) (- 32 ,bits) 31))))))
        (define-vop (,(symbolicate 'data-vector-set/ type))
          (:note "inline array store")
          (:translate data-vector-set)
          (:policy :fast-safe)
          (:args (object :scs (descriptor-reg))
                 (index :scs (unsigned-reg) :target shift)
-                (value :scs (unsigned-reg zero immediate)))
+                (value :scs (unsigned-reg #-64-bit zero immediate)))
          (:arg-types ,type positive-fixnum positive-fixnum)
          (:temporary (:scs (non-descriptor-reg)) temp old offset)
          (:temporary (:scs (non-descriptor-reg) :from (:argument 1)) shift)
@@ -221,6 +285,7 @@
                                        other-pointer-lowtag))
            (inst lwzx old object offset)
            (inst andi. shift index ,(1- elements-per-word))
+           #+big-endian
            (inst xori shift shift ,(1- elements-per-word))
            ,@(unless (= bits 1)
                `((inst slwi shift shift ,(1- (integer-length bits)))))
@@ -229,7 +294,7 @@
              (inst lr temp ,(1- (ash 1 bits)))
              (inst slw temp temp shift)
              (inst andc old old temp))
-           (unless (sc-is value zero)
+           (unless #-64-bit (sc-is value zero) #+64-bit nil
              (sc-case value
                (immediate
                 (inst lr temp (logand (tn-value value) ,(1- (ash 1 bits)))))
@@ -242,7 +307,7 @@
          (:translate data-vector-set)
          (:policy :fast-safe)
          (:args (object :scs (descriptor-reg))
-                (value :scs (unsigned-reg zero immediate)))
+                (value :scs (unsigned-reg #-64-bit zero immediate)))
          (:arg-types ,type
                      (:constant index)
                      positive-fixnum)
@@ -250,7 +315,10 @@
          (:temporary (:scs (non-descriptor-reg)) offset-reg temp old)
          (:generator 20
            (multiple-value-bind (word extra) (floor index ,elements-per-word)
-             (let ((offset (- (* (+ word vector-data-offset) n-word-bytes)
+             #+big-endian
+             (setf extra (logxor extra ,(1- elements-per-word)))
+             (let ((offset (- (+ (* word 4)
+                                 (* vector-data-offset n-word-bytes))
                               other-pointer-lowtag)))
                (cond ((typep offset '(signed-byte 16))
                       (inst lwz old object offset))
@@ -259,23 +327,24 @@
                       (inst lwzx old object offset-reg)))
                (unless (and (sc-is value immediate)
                             (= (tn-value value) ,(1- (ash 1 bits))))
-                 (cond ((zerop extra)
+                 (cond #+big-endian
+                       ((= extra ,(1- elements-per-word))
                         (inst clrlwi old old ,bits))
+                       #+little-endian
+                       ((= extra 0)
+                        (inst rlwinm old old 0 0 (- 31 ,bits)))
                        (t
                         (inst lr temp
                               (lognot (ash ,(1- (ash 1 bits))
-                                           (* (logxor extra
-                                                      ,(1- elements-per-word))
-                                              ,bits))))
+                                           (* extra ,bits))))
                         (inst and old old temp))))
                (sc-case value
+                 #-64-bit
                  (zero)
                  (immediate
                   (let ((value (ash (logand (tn-value value)
                                             ,(1- (ash 1 bits)))
-                                    (* (logxor extra
-                                               ,(1- elements-per-word))
-                                       ,bits))))
+                                    (* extra ,bits))))
                     (cond ((typep value '(unsigned-byte 16))
                            (inst ori old old value))
                           (t
@@ -283,7 +352,7 @@
                            (inst or old old temp)))))
                  (unsigned-reg
                   (inst slwi temp value
-                        (* (logxor extra ,(1- elements-per-word)) ,bits))
+                        (* extra ,bits))
                   (inst or old old temp)))
                (if (typep offset '(signed-byte 16))
                    (inst stw old object offset)
@@ -296,6 +365,46 @@
 ;;; And the float variants.
 ;;;
 
+(defmacro compute-lispword-offset () ; for {tagged word, double float, complex single}
+  #-64-bit
+  '(progn
+    (inst slwi offset index 1)
+    (inst addi offset offset (- (* vector-data-offset n-word-bytes)
+                                other-pointer-lowtag)))
+  #+64-bit
+  '(progn
+    (unless (= word-shift n-fixnum-tag-bits)
+      (inst sldi offset index (- word-shift n-fixnum-tag-bits))
+      (setf index offset))
+    (inst addi offset index (- (* vector-data-offset n-word-bytes)
+                             other-pointer-lowtag))))
+
+(defmacro compute-sfloat-offset ()
+  #-64-bit
+  (inst addi offset index (- (* vector-data-offset n-word-bytes)
+                             other-pointer-lowtag))
+  #+64-bit
+  '(progn
+    (case n-fixnum-tag-bits
+      (1 (inst sldi offset index 1))
+      (3 (inst srdi offset index 1)))
+    (inst addi offset offset (- (* vector-data-offset n-word-bytes)
+                              other-pointer-lowtag))))
+
+(defmacro compute-cplx-dfloat-offset ()
+  #-64-bit
+  '(progn
+    (inst slwi offset index 2)
+    (inst addi offset offset (- (* vector-data-offset n-word-bytes)
+                                other-pointer-lowtag)))
+  #+64-bit
+  '(progn
+    (unless (= (1+ word-shift) n-fixnum-tag-bits)
+      (inst sldi offset index (- (1+ word-shift) n-fixnum-tag-bits))
+      (setf index offset))
+    (inst addi offset index (- (* vector-data-offset n-word-bytes)
+                             other-pointer-lowtag))))
+
 (define-vop (data-vector-ref/simple-array-single-float)
   (:note "inline array access")
   (:translate data-vector-ref)
@@ -307,8 +416,7 @@
   (:temporary (:scs (non-descriptor-reg)) offset)
   (:result-types single-float)
   (:generator 5
-    (inst addi offset index (- (* vector-data-offset n-word-bytes)
-                              other-pointer-lowtag))
+    (compute-sfloat-offset)
     (inst lfsx value object offset)))
 
 
@@ -322,9 +430,7 @@
   (:arg-types simple-array-single-float positive-fixnum single-float)
   (:temporary (:scs (non-descriptor-reg)) offset)
   (:generator 5
-    (inst addi offset index
-          (- (* vector-data-offset n-word-bytes)
-             other-pointer-lowtag))
+    (compute-sfloat-offset)
     (inst stfsx value object offset)))
 
 (define-vop (data-vector-ref/simple-array-double-float)
@@ -338,9 +444,7 @@
   (:result-types double-float)
   (:temporary (:scs (non-descriptor-reg)) offset)
   (:generator 7
-    (inst slwi offset index 1)
-    (inst addi offset offset (- (* vector-data-offset n-word-bytes)
-                                other-pointer-lowtag))
+    (compute-lispword-offset)
     (inst lfdx value object offset)))
 
 (define-vop (data-vector-set/simple-array-double-float)
@@ -353,9 +457,7 @@
   (:arg-types simple-array-double-float positive-fixnum double-float)
   (:temporary (:scs (non-descriptor-reg)) offset)
   (:generator 20
-    (inst slwi offset index 1)
-    (inst addi offset offset (- (* vector-data-offset n-word-bytes)
-                        other-pointer-lowtag))
+    (compute-lispword-offset)
     (inst stfdx value object offset)))
 
 
@@ -372,14 +474,10 @@
   (:temporary (:scs (non-descriptor-reg) :from (:argument 1)) offset)
   (:result-types complex-single-float)
   (:generator 5
-    (let ((real-tn (complex-single-reg-real-tn value)))
-      (inst slwi offset index 1)
-      (inst addi offset offset (- (* vector-data-offset n-word-bytes)
-                                  other-pointer-lowtag))
-      (inst lfsx real-tn object offset))
-    (let ((imag-tn (complex-single-reg-imag-tn value)))
-      (inst addi offset offset n-word-bytes)
-      (inst lfsx imag-tn object offset))))
+    (compute-lispword-offset)
+    (inst lfsx (complex-single-reg-real-tn value) object offset)
+    (inst addi offset offset 4)
+    (inst lfsx (complex-single-reg-imag-tn value) object offset)))
 
 (define-vop (data-vector-set/simple-array-complex-single-float)
   (:note "inline array store")
@@ -392,14 +490,10 @@
               complex-single-float)
   (:temporary (:scs (non-descriptor-reg) :from (:argument 1)) offset)
   (:generator 5
-    (let ((value-real (complex-single-reg-real-tn value)))
-      (inst slwi offset index 1)
-      (inst addi offset offset (- (* vector-data-offset n-word-bytes)
-                                  other-pointer-lowtag))
-      (inst stfsx value-real object offset))
-    (let ((value-imag (complex-single-reg-imag-tn value)))
-      (inst addi offset offset n-word-bytes)
-      (inst stfsx value-imag object offset))))
+    (compute-lispword-offset)
+    (inst stfsx (complex-single-reg-real-tn value) object offset)
+    (inst addi offset offset 4)
+    (inst stfsx (complex-single-reg-imag-tn value) object offset)))
 
 
 (define-vop (data-vector-ref/simple-array-complex-double-float)
@@ -413,14 +507,10 @@
   (:result-types complex-double-float)
   (:temporary (:scs (non-descriptor-reg) :from (:argument 1)) offset)
   (:generator 7
-    (let ((real-tn (complex-double-reg-real-tn value)))
-      (inst slwi offset index 2)
-      (inst addi offset offset (- (* vector-data-offset n-word-bytes)
-                                  other-pointer-lowtag))
-      (inst lfdx real-tn object offset))
-    (let ((imag-tn (complex-double-reg-imag-tn value)))
-      (inst addi offset offset (* 2 n-word-bytes))
-      (inst lfdx imag-tn object offset))))
+    (compute-cplx-dfloat-offset)
+    (inst lfdx (complex-double-reg-real-tn value) object offset)
+    (inst addi offset offset 8)
+    (inst lfdx (complex-double-reg-imag-tn value) object offset)))
 
 (define-vop (data-vector-set/simple-array-complex-double-float)
   (:note "inline array store")
@@ -433,32 +523,28 @@
               complex-double-float)
   (:temporary (:scs (non-descriptor-reg) :from (:argument 1)) offset)
   (:generator 20
-    (let ((value-real (complex-double-reg-real-tn value)))
-      (inst slwi offset index 2)
-      (inst addi offset offset (- (* vector-data-offset n-word-bytes)
-                                  other-pointer-lowtag))
-      (inst stfdx value-real object offset))
-    (let ((value-imag (complex-double-reg-imag-tn value)))
-      (inst addi offset offset (* 2 n-word-bytes))
-      (inst stfdx value-imag object offset))))
+    (compute-cplx-dfloat-offset)
+    (inst stfdx (complex-double-reg-real-tn value) object offset)
+    (inst addi offset offset 8)
+    (inst stfdx (complex-double-reg-imag-tn value) object offset)))
 
 
 ;;; These vops are useful for accessing the bits of a vector irrespective of
 ;;; what type of vector it is.
 ;;;
 
-(define-vop (vector-raw-bits word-index-ref)
+(define-vop (vector-raw-bits #-64-bit word-index-ref #+64-bit doubleword-index-ref)
   (:note "vector-raw-bits VOP")
   (:translate %vector-raw-bits)
   (:results (value :scs (unsigned-reg)))
   (:result-types unsigned-num)
   (:variant vector-data-offset other-pointer-lowtag))
 
-(define-vop (set-vector-raw-bits word-index-set)
+(define-vop (set-vector-raw-bits #-64-bit word-index-set #+64-bit doubleword-index-set)
   (:note "setf vector-raw-bits VOP")
   (:translate %set-vector-raw-bits)
   (:args (object :scs (descriptor-reg))
-         (index :scs (any-reg zero immediate))
+         (index :scs (any-reg #-64-bit zero immediate))
          (value :scs (unsigned-reg)))
   (:arg-types * positive-fixnum unsigned-num)
   (:variant vector-data-offset other-pointer-lowtag))
@@ -479,7 +565,7 @@
   (:translate data-vector-set)
   (:arg-types simple-array-signed-byte-8 positive-fixnum tagged-num)
   (:args (object :scs (descriptor-reg))
-         (index :scs (any-reg zero immediate))
+         (index :scs (any-reg #-64-bit zero immediate))
          (value :scs (signed-reg))))
 
 (define-vop (data-vector-ref/simple-array-signed-byte-16
@@ -497,8 +583,28 @@
   (:translate data-vector-set)
   (:arg-types simple-array-signed-byte-16 positive-fixnum tagged-num)
   (:args (object :scs (descriptor-reg))
-         (index :scs (any-reg zero immediate))
+         (index :scs (any-reg #-64-bit zero immediate))
          (value :scs (signed-reg))))
+
+#+64-bit
+(define-vop (data-vector-ref/simple-array-signed-byte-32 signed-word-index-ref)
+  (:note "inline array access")
+  (:variant vector-data-offset other-pointer-lowtag)
+  (:translate data-vector-ref)
+  (:arg-types simple-array-signed-byte-32 positive-fixnum)
+  (:results (value :scs (signed-reg)))
+  (:result-types tagged-num))
+
+#+64-bit
+(define-vop (data-vector-set/simple-array-signed-byte-32 word-index-set)
+  (:note "inline array store")
+  (:variant vector-data-offset other-pointer-lowtag)
+  (:translate data-vector-set)
+  (:arg-types simple-array-signed-byte-32 positive-fixnum tagged-num)
+  (:args (object :scs (descriptor-reg))
+         (index :scs (any-reg #-64-bit zero immediate))
+         (value :scs (signed-reg))))
+
 
 ;;;; ATOMIC-INCF for arrays
 
@@ -514,16 +620,14 @@
   (:temporary (:sc unsigned-reg :from (:argument 1)) offset)
   (:temporary (:sc non-descriptor-reg) sum)
   (:generator 4
-    (inst addi offset index
-          (- (* vector-data-offset n-word-bytes)
-             other-pointer-lowtag))
+    (compute-lispword-offset)
     ;; load the slot value, add DIFF, write the sum back, and return
     ;; the original slot value, atomically, and include a memory
     ;; barrier.
     (inst sync)
     LOOP
-    (inst lwarx result offset object)
+    (inst #-64-bit lwarx #+64-bit ldarx result offset object)
     (inst add sum result diff)
-    (inst stwcx. sum offset object)
+    (inst #-64-bit stwcx. #+64-bit stdcx. sum offset object)
     (inst bne LOOP)
     (inst isync)))
