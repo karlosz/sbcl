@@ -27,6 +27,7 @@
   (:generator 1
     (move res cfp-tn)))
 
+#-64-bit
 (define-vop ()
   (:translate stack-ref)
   (:policy :fast-safe)
@@ -38,6 +39,21 @@
   (:generator 5
     (inst lwzx result sap offset)))
 
+#+64-bit
+(define-vop ()
+  (:translate stack-ref)
+  (:policy :fast-safe)
+  (:args (sap :scs (sap-reg))
+         (offset :scs (any-reg)))
+  (:arg-types system-area-pointer positive-fixnum)
+  (:results (result :scs (descriptor-reg)))
+  (:temporary (:scs (unsigned-reg)) temp)
+  (:result-types *)
+  (:generator 5
+    (inst sldi temp offset (- word-shift n-fixnum-tag-bits))
+    (inst ldx result sap temp)))
+
+#-64-bit
 (define-vop ()
   (:translate %set-stack-ref)
   (:policy :fast-safe)
@@ -47,6 +63,19 @@
   (:arg-types system-area-pointer positive-fixnum *)
   (:generator 5
     (inst stwx value sap offset)))
+
+#+64-bit
+(define-vop ()
+  (:translate %set-stack-ref)
+  (:policy :fast-safe)
+  (:args (sap :scs (sap-reg))
+         (offset :scs (any-reg))
+         (value :scs (descriptor-reg)))
+  (:arg-types system-area-pointer positive-fixnum *)
+  (:temporary (:scs (unsigned-reg)) temp)
+  (:generator 5
+    (inst sldi temp offset (- word-shift n-fixnum-tag-bits))
+    (inst stdx value sap temp)))
 
 (define-vop (code-from-mumble)
   (:policy :fast-safe)
@@ -58,7 +87,7 @@
     (let ((bogus (gen-label))
           (done (gen-label)))
       (loadw temp thing 0 lowtag)
-      (inst srwi temp temp n-widetag-bits)
+      (inst #-64-bit srwi #+64-bit srdi temp temp n-widetag-bits)
       (inst cmpwi temp 0)
       (inst slwi temp temp word-shift)
       (inst beq bogus)
