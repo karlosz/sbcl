@@ -353,8 +353,16 @@
   ;;   #bxxxxxxx..xxxxxxxx00101010 (header widetag = #x2A)
   ;; so we don't need to right shift out all 8 widetag bits and then
   ;; left-shift by 2 (= word-shift). We could just right-shift 6, and mask.
-  (ash (ldb (byte 24 sb-vm:n-widetag-bits) (function-header-word simple-fun))
-       sb-vm:word-shift))
+  (flet ((displacement (simple-fun)
+           (ash (ldb (byte 24 sb-vm:n-widetag-bits) (function-header-word simple-fun))
+                sb-vm:word-shift)))
+    #+pie-for-elf
+    (let ((displacement (displacement simple-fun)))
+      (if (> displacement (code-object-size (fun-code-header simple-fun)))
+          (displacement (real-simple-fun-from-proxy simple-fun))
+          displacement))
+    #-pie-for-elf
+    (displacement simple-fun)))
 
 ;;;; CODE-COMPONENT
 
@@ -436,6 +444,15 @@
     (truly-the function
       (values (%primitive sb-c:compute-fun code-obj
                           (%code-fun-offset code-obj fun-index))))))
+
+;;; Get the real simple fun from the proxy fun.
+#+pie-for-elf
+(defun real-simple-fun-from-proxy (fun)
+  (let ((entry-address
+          (sap-ref-sap (int-sap (- (get-lisp-obj-address fun) sb-vm:fun-pointer-lowtag))
+                       (ash sb-vm:simple-fun-self-slot sb-vm:word-shift))))
+    (sb-vm::%simple-fun-from-entrypoint (fun-code-header fun)
+                                        (sap-int entry-address))))
 
 ;;; Return the 0-based index of SIMPLE-FUN within its code component.
 ;;; Computed via binary search.
