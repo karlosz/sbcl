@@ -143,7 +143,10 @@
   (enable-pie nil)
   (dstate (make-dstate nil) :read-only t)
   (seg (%make-segment :sap-maker (lambda () (error "Bad sap maker"))
-                      :virtual-location 0) :read-only t))
+                      :virtual-location 0) :read-only t)
+  ;; Calculate the amount of space needed to hold all simple funs in
+  ;; the core.
+  (simple-fun-space-size 0))
 
 (defglobal *editcore-ppd*
   ;; copy no entries for macros/special-operators (flet, etc)
