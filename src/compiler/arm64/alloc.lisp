@@ -105,6 +105,7 @@
         (inst adr lr label (ash simple-fun-insts-offset word-shift))
         (storew-pair temp 0 lr closure-fun-slot tmp-tn)))))
 
+#-pie-for-elf
 (define-vop (reference-closure)
   (:info label)
   (:results (result :scs (descriptor-reg)))
