@@ -365,6 +365,15 @@ bool gc_managed_addr_p(lispobj addr)
 {
     struct thread *th;
 
+#ifdef PIECORE
+    extern char* simple_fun_space;
+    extern char* simple_fun_space_end;
+    extern int simple_fun_space_size;
+    if (&simple_fun_space <= addr &&
+        addr <= &simple_fun_space + simple_fun_space_size)
+      return 1;
+#endif
+
     if (gc_managed_heap_space_p(addr))
         return 1;
     for_each_thread(th) {

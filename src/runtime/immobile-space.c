@@ -1393,11 +1393,15 @@ static struct tempspace {
   int n_bytes;
 } fixedobj_tempspace, text_tempspace;
 
+static inline bool immobile_code_ptr_p(void *pointer) {
+    return (void*)TEXT_SPACE_START <= pointer && pointer < (void*)text_space_highwatermark;
+}
+
 // Find the object that encloses pointer.
 lispobj *
 search_immobile_space(void *pointer)
 {
-    if ((void*)TEXT_SPACE_START <= pointer && pointer < (void*)text_space_highwatermark) {
+    if (immobile_code_ptr_p(pointer)) {
         if (!page_attributes_valid)lose("Can't search");
         return search_immobile_code(pointer);
     } else if ((void*)FIXEDOBJ_SPACE_START <= pointer
@@ -2184,3 +2188,186 @@ void* expropriate_memory_from_tlsf(size_t amount)
 #endif
   return start;
 }
+
+#ifdef PIECORE
+extern void *simple_fun_space;
+
+// Adjust the words in range [where,where+n_words)
+// skipping any words that have non-pointer nature.
+static void pie_adjust_pointers(lispobj *where, sword_t n_words) {
+    long i;
+    for (i=0;i<n_words;++i) {
+        lispobj word = where[i];
+        if (is_lisp_pointer(word))
+            if (immobile_code_ptr_p((lispobj*)word) &&
+                (header_widetag(*(lispobj*)native_pointer(word)) == SIMPLE_FUN_WIDETAG)) {
+                where[i] = make_lispobj(((char*)&simple_fun_space + ((struct simple_fun*)native_pointer(word))->self), FUN_POINTER_LOWTAG);
+    }
+    }
+}
+
+#ifndef LISP_FEATURE_EXECUTABLE_FUNINSTANCES
+# define FUNINSTANCE_BITMAP -4
+#elif defined LISP_FEATURE_COMPACT_INSTANCE_HEADER
+# define FUNINSTANCE_BITMAP -8
+#else
+# define FUNINSTANCE_BITMAP -24
+#endif
+
+static void pie_fix_up_simple_fun_references(uword_t start, lispobj* end)
+{
+    lispobj *where = (lispobj*)start;
+    int widetag;
+    long nwords;
+    struct code* code;
+    int i;
+    for ( ; where < end ; where += nwords ) {
+        lispobj word = *where;
+        if (!is_header(word)) {
+            pie_adjust_pointers(where, 2);
+            nwords = 2;
+            continue;
+        }
+        widetag = header_widetag(word);
+        nwords = sizetab[widetag](where);
+        switch (widetag) {
+        case INSTANCE_WIDETAG: {
+            struct bitmap bitmap = get_layout_bitmap(LAYOUT(layout_of(where)));
+            {
+            lispobj* slots = where+1;
+            for (i=0; i<(nwords-1); ++i) // -1 from nwords because 'slots' is +1 from 'where'
+                if (bitmap_logbitp(i, bitmap)) pie_adjust_pointers(slots+i, 1);
+            }
+            continue;
+        }
+        case FUNCALLABLE_INSTANCE_WIDETAG: {
+            const int mask = FUNINSTANCE_BITMAP;
+            gc_assert((mask & (1<<0)) == 0); // bitmap must reflect it as untagged
+            {
+            lispobj* slots = where+1;
+            // slots[0] is where[1] which we just adjusted, so skip it.
+            for (i=1; i<(nwords-1); ++i) // -1 from nwords because 'slots' is +1 from 'where'
+                if ((1<<i) & mask) pie_adjust_pointers(slots+i, 1);
+            }
+            continue;
+        }
+        case SYMBOL_WIDETAG:
+            { // Copied from scav_symbol() in gc-common
+            struct symbol* s = (void*)where;
+            pie_adjust_pointers(&s->value, 3); // value, fdefn, info
+            }
+            continue;
+        case FDEFN_WIDETAG:
+            pie_adjust_pointers(where+1, 2);
+            continue;
+        case CODE_HEADER_WIDETAG:
+            // Fixup the constant pool. The word at where+1 is a fixnum.
+            code = (struct code*)where;
+            pie_adjust_pointers(where+2, code_header_words(code)-2);
+            continue;
+        case CLOSURE_WIDETAG:
+            // FIXME: what about platforms with actual fun objects in closure?
+            break;
+        case SIMPLE_VECTOR_WIDETAG:
+          if (vector_flagp(*where, VectorAddrHashing)) {
+              struct vector* v = (struct vector*)where;
+              // If you could make a hash-table vector with space for exactly 1 k/v pair,
+              // it would have length 5.
+              gc_assert(vector_len(v) >= 5); // KLUDGE: need a manifest constant for fixed overhead
+              lispobj* data = (lispobj*)v->data;
+              pie_adjust_pointers(&data[vector_len(v)-1], 1);
+              int hwm = KV_PAIRS_HIGH_WATER_MARK(data);
+              bool needs_rehash = 0;
+              lispobj *where = &data[2], *end = &data[2*(hwm+1)];
+              // Adjust the elements, checking for need to rehash.
+              for ( ; where < end ; where += 2) {
+                  // Really we should use the hash values to figure out which
+                  // keys were address-sensitive. This simply overapproximates
+                  // by assuming that any change forces rehash.
+                  // (Similar issue exists in 'fixup_space' in immobile-space.c)
+                  lispobj ptr = *where; // key
+                  if (is_lisp_pointer(ptr) &&
+                      immobile_code_ptr_p((void*)ptr) &&
+                      (header_widetag(*(lispobj*)native_pointer(ptr)) == SIMPLE_FUN_WIDETAG)) {
+                      *where = make_lispobj(((char*)&simple_fun_space + ((struct simple_fun*)native_pointer(word))->self), FUN_POINTER_LOWTAG);
+                      needs_rehash = 1;
+                  }
+                  pie_adjust_pointers(where + 1, 1);
+              }
+              if (needs_rehash) // set v->data[1], the need-to-rehash bit
+                  KV_PAIRS_REHASH(data) |= make_fixnum(1);
+              continue;
+          }
+        // All the array header widetags.
+        case SIMPLE_ARRAY_WIDETAG:
+#ifdef COMPLEX_CHARACTER_STRING_WIDETAG
+        case COMPLEX_CHARACTER_STRING_WIDETAG:
+#endif
+        case COMPLEX_BASE_STRING_WIDETAG:
+        case COMPLEX_BIT_VECTOR_WIDETAG:
+        case COMPLEX_VECTOR_WIDETAG:
+        case COMPLEX_ARRAY_WIDETAG:
+        // And the rest of the purely descriptor objects.
+        case VALUE_CELL_WIDETAG:
+        case WEAK_POINTER_WIDETAG:
+        case RATIO_WIDETAG:
+        case COMPLEX_WIDETAG:
+            break;
+
+        // Other
+        case SAP_WIDETAG:
+            continue;
+        default:
+          if (other_immediate_lowtag_p(widetag) && leaf_obj_widetag_p(widetag))
+              continue;
+          else
+              lose("Unrecognized heap object: @%p: %"OBJ_FMTX, where, *where);
+        }
+        pie_adjust_pointers(where+1, nwords-1);
+    }
+}
+
+/* After loading a PIE core, copy all embedded simple funs into the
+ * simple fun space. The entry point word contains the place to
+ * dislocate the simple fun into. Then fixup all references to
+ * embedded simple funs to the copies in the simple fun space. The GC
+ * doesn't need to see this space because all code is immobile and
+ * immortal in this scenario. */
+void pie_dislocate_simple_funs() {
+    extern int simple_fun_space_size;
+    // Check for double-word alignment (as real simple funs are).
+    gc_assert(((uword_t)&simple_fun_space & LOWTAG_MASK) == 0);
+    lispobj *where = (lispobj*) TEXT_SPACE_START;
+    lispobj *end = text_space_highwatermark;
+    int widetag;
+    long nwords;
+    struct simple_fun *to;
+    struct code* code;
+    for ( ; where < end ; where += nwords ) {
+        lispobj word = *where;
+        if (!is_header(word)) {
+            nwords = 2;
+            continue;
+        }
+
+        widetag = header_widetag(word);
+        nwords = sizetab[widetag](where);
+        if (widetag == CODE_HEADER_WIDETAG) {
+            code = (struct code*) where;
+            for_each_simple_fun(i, f, code, 1, {
+                to = (struct simple_fun*)((char*)(&simple_fun_space) + f->self);
+                unsigned long disp = ((unsigned long)to - (unsigned long)code) >> WORD_SHIFT;
+                to->header = (disp << N_WIDETAG_BITS) | SIMPLE_FUN_WIDETAG;
+                to->self = (lispobj)&f->insts;
+              });
+        }
+        else
+            continue;
+    }
+    pie_fix_up_simple_fun_references(FIXEDOBJ_SPACE_START, fixedobj_free_pointer);
+    pie_fix_up_simple_fun_references(DYNAMIC_SPACE_START, (lispobj*)dynamic_space_highwatermark());
+    pie_fix_up_simple_fun_references(STATIC_SPACE_OBJECTS_START, static_space_free_pointer);
+    pie_fix_up_simple_fun_references(TEXT_SPACE_START, text_space_highwatermark);
+}
+
+#endif

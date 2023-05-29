@@ -1171,6 +1171,11 @@ void gc_load_corefile_ptes(int card_table_nbits,
     // and desired addresses.
     if (adj->n_ranges) relocate_heap(adj);
 
+#ifdef PIECORE
+    extern void pie_dislocate_simple_funs();
+    pie_dislocate_simple_funs();
+#endif
+
 #ifdef LISP_FEATURE_IMMOBILE_SPACE
     /* Now determine page characteristics such as object spacing
      * (tbh it would be better to output the immobile-space page tables to the core file).
