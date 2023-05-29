@@ -329,6 +329,20 @@ static void adjust_pointers(lispobj *where, sword_t n_words, struct heap_adjust*
             FIXUP(where[i] = word + adjustment, where+i);
         }
     }
+#ifdef PIECORE
+    /* Fix up any references to simple funs in text space to the their
+     * copies in the simple fun space. */
+    extern void *simple_fun_space;
+    for (i=0;i<n_words;++i) {
+        lispobj word = where[i];
+        if (is_lisp_pointer(word))
+            if (TEXT_SPACE_START <= word && word < (uintptr_t)text_space_highwatermark &&
+                (header_widetag(*(lispobj*)native_pointer(word)) == SIMPLE_FUN_WIDETAG))
+                where[i] = make_lispobj(((char*)&simple_fun_space +
+                                         ((struct simple_fun*)native_pointer(word))->self),
+                                        FUN_POINTER_LOWTAG);
+    }
+#endif
 }
 
 #include "var-io.h"
@@ -499,12 +513,9 @@ static void fix_space(uword_t start, lispobj* end, struct heap_adjust* adj)
                   // (Similar issue exists in 'fixup_space' in immobile-space.c)
                   lispobj ptr = *where; // key
                   if (is_lisp_pointer(ptr) && (delta = calc_adjustment(adj, ptr)) != 0) {
-                      FIXUP(*where = ptr + delta, where);
                       needs_rehash = 1;
                   }
-                  ptr = where[1]; // value
-                  if (is_lisp_pointer(ptr) && (delta = calc_adjustment(adj, ptr)) != 0)
-                      FIXUP(where[1] = ptr + delta, where+1);
+                  adjust_pointers(where, 2, adj); // key, value.
               }
               if (needs_rehash) // set v->data[1], the need-to-rehash bit
                   KV_PAIRS_REHASH(data) |= make_fixnum(1);
@@ -1216,6 +1227,10 @@ void gc_load_corefile_ptes(int card_table_nbits,
      * (below it: visit only if touched, above it: always visit) */
     permgen_bounds[1] = (uword_t)permgen_space_free_pointer;
 
+#ifdef PIECORE
+    extern void pie_copy_simple_funs();
+    pie_copy_simple_funs();
+#endif
     // Adjust for discrepancies between actually-allocated space addresses
     // and desired addresses.
     relocate_heap(adj);

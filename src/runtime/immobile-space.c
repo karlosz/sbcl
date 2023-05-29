@@ -2191,3 +2191,43 @@ void* expropriate_memory_from_tlsf(size_t amount)
 #endif
   return start;
 }
+
+#ifdef PIECORE
+/* Copy all embedded simple funs in text space into the simple fun
+ * space. The entry point word contains the place to dislocate the
+ * simple fun into. The GC doesn't need to see this space because all
+ * code is immobile and immortal in this scenario. */
+void pie_copy_simple_funs() {
+    extern struct simple_fun simple_fun_space;
+
+    // Check for double-word alignment (as real simple funs are).
+    gc_assert(((uword_t)&simple_fun_space & LOWTAG_MASK) == 0);
+    lispobj *where = (lispobj*) TEXT_SPACE_START;
+    lispobj *end = text_space_highwatermark;
+    int widetag;
+    long nwords;
+    struct simple_fun *to;
+    struct code* code;
+    for ( ; where < end ; where += nwords ) {
+        lispobj word = *where;
+        if (!is_header(word)) {
+            nwords = 2;
+            continue;
+        }
+
+        widetag = header_widetag(word);
+        nwords = sizetab[widetag](where);
+        if (widetag == CODE_HEADER_WIDETAG) {
+            code = (struct code*) where;
+            for_each_simple_fun(i, f, code, 1, {
+                to = (struct simple_fun *)((uintptr_t)&simple_fun_space + f->self);
+                ptrdiff_t disp = ((uintptr_t)to - (uintptr_t)code) >> WORD_SHIFT;
+                to->header = (disp << N_WIDETAG_BITS) | SIMPLE_FUN_WIDETAG;
+                to->self = (lispobj)&f->insts;
+              });
+        }
+        else
+            continue;
+    }
+}
+#endif

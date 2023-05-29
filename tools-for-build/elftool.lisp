@@ -411,6 +411,7 @@
          (text (sap-int text-sap))
          ;; Like CODE-INSTRUCTIONS, but where the text virtually was
          (text-vaddr (+ vaddr (* (code-header-words code) n-word-bytes)))
+         (enable-pie (core-enable-pie core))
          (max-end 0))
     ;; There is *always* at least 1 word of unboxed data now
     (aver (eq (caar ranges) :data))
@@ -439,8 +440,15 @@
         ;; now that simple-fun headers don't hold any boxed words.
         ;; (generality here is without merit)
         (funcall dumpwords (sap+ text-sap start) simple-fun-insts-offset output
-                 #(nil #.(format nil ".+~D" (* (1- simple-fun-insts-offset)
-                                             n-word-bytes))))
+                 ;; When PIE, emit where to dislocate the simple fun
+                 ;; in the simple fun space instead of the entry
+                 ;; point, which can't be calculated at executable
+                 ;; link-time without text relocations.
+                 (if enable-pie
+                     (vector nil (format nil "~D" (core-simple-fun-space-size core)))
+                     #(nil #.(format nil ".+~D" (* (1- simple-fun-insts-offset)
+                                                 n-word-bytes)))))
+        (incf (core-simple-fun-space-size core) (* n-word-bytes simple-fun-insts-offset))
         (incf start (* simple-fun-insts-offset n-word-bytes))
         ;; Pass the current physical address at which to disassemble,
         ;; the notional core address (which changes after linker relocation),
@@ -1381,7 +1389,19 @@
                (loop for s across (core-alien-linkage-symbols core)
                      do (format asm-file " .quad ~:[~;-1, ~]~a~%"
                                 (consp s)
-                                (if (consp s) (car s) s))))
+                                (if (consp s) (car s) s)))
+               (format asm-file " .globl ~A~%~:*~A: .quad ~D ~%"
+                       (labelize "simple_fun_space_size ")
+                       (core-simple-fun-space-size core))
+               ;; write out simple-fun spacemap
+               (format asm-file "~%.section .bss~%")
+               (format asm-file ".align ~D~%"
+                       ;; double-word alignment
+                       (* 2 n-word-bytes))
+               (format asm-file " .globl ~A~%.comm ~:*~A, ~D, ~D~%"
+                       (labelize "simple_fun_space")
+                       (core-simple-fun-space-size core)
+                       (* 2 n-word-bytes)))
               (t
                (format asm-file "~% .section .rodata~%")
                (format asm-file " .globl anchor_junk~%")
