@@ -589,9 +589,22 @@ static void relocate_heap(struct heap_adjust* adj)
 #endif
     relocate_space(DYNAMIC_SPACE_START, (lispobj*)dynamic_space_highwatermark(),
                    adj);
+#ifdef LISP_FEATURE_IMMOBILE_SPACE
+ /* There's no need to relocate text space on a PIE core. Also we want
+  * text to be read-only if possible. */
+#ifndef PIECORE
     // FIXME: This fixes pointers in the space but I think it won't work
     // if the space itself fails to map where requested.
     relocate_space(TEXT_SPACE_START, text_space_highwatermark, adj);
+#endif
+#ifdef PIECORE
+    extern void *component_boxed_space;
+    extern void *component_boxed_space_end;
+    relocate_space((uword_t)&component_boxed_space,
+                   (lispobj *)&component_boxed_space_end,
+                   adj);
+#endif
+#endif
 }
 
 #if defined(LISP_FEATURE_ELF) && defined(LISP_FEATURE_IMMOBILE_SPACE)
@@ -749,6 +762,10 @@ process_directory(int count, struct ndir_entry *entry,
         ALIEN_LINKAGE_TABLE_SPACE_START =
             (uword_t)os_alloc_gc_space(ALIEN_LINKAGE_TABLE_CORE_SPACE_ID, 0, 0,
                                        ALIEN_LINKAGE_TABLE_SPACE_SIZE);
+        // unprotect the pages
+#ifndef PIECORE
+        os_protect((void*)TEXT_SPACE_START, text_space_size, OS_VM_PROT_ALL);
+#endif
 #endif
     } else
 #endif

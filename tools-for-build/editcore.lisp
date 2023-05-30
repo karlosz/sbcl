@@ -137,12 +137,13 @@
   (seg (%make-segment :sap-maker (lambda () (error "Bad sap maker"))
                       :virtual-location 0) :read-only t)
   (fixup-addrs nil)
-  ;; Calculate the amount of space needed to hold all simple funs in
-  ;; the core.
-  (simple-fun-space-size 0)
-  (call-inst nil :read-only t)
-  (jmp-inst nil :read-only t)
-  (pop-inst nil :read-only t))
+  ;; A table translating the addresses of boxed constants to the
+  ;; location of their word in the constant component area.
+  (component-boxed-space-table (make-hash-table :test #'eq))
+  ;; The boxed space for all code components.
+  (component-boxed-space (make-array 1000 :fill-pointer 0 :adjustable t))
+  ;; The amount of space needed to hold all simple fun objects.
+  (simple-fun-space-size 0))
 
 (defglobal *editcore-ppd*
     ;; copy no entries for macros/special-operators (flet, etc)
@@ -522,6 +523,27 @@
           (setf (gethash string ambiguous-symbols) t))))
     core))
 
+;;; Return the boxed area table entry for CONSTANT. adding an entry
+;;; for the constant in the component boxed space if it doesn't
+;;; already exist.
+(defun dislocate-code-constant (core constant)
+  (let* ((table (core-component-boxed-space-table core))
+         (space (core-component-boxed-space core))
+         (fill (length space))
+         (code-bounds (core-code-bounds core)))
+    (multiple-value-bind (table-offset foundp)
+        (gethash constant table)
+      (cond (foundp table-offset)
+            (t
+             (let ((value
+                     (if (and (is-lisp-pointer constant)
+                              (in-bounds-p constant code-bounds))
+                         (format nil "CS+0x~x"
+                                 (- constant (bounds-low code-bounds)))
+                         constant)))
+               (vector-push-extend value space))
+             (setf (gethash constant table) fill))))))
+
 ;;; Emit .byte or .quad directives dumping memory from SAP for COUNT units
 ;;; (bytes or qwords) to STREAM.  SIZE specifies which direcive to emit.
 ;;; EXCEPTIONS specify offsets at which a specific string should be
@@ -583,6 +605,8 @@
         (inst-b (load-time-value (find-inst #x17FFFFE4 (get-inst-space))))
         (inst-adrp (load-time-value (find-inst #xB0FFA560 (get-inst-space))))
         (inst-add (load-time-value (find-inst #x91003F7C (get-inst-space))))
+        (inst-nop (load-time-value (find-inst #xD503201F (get-inst-space))))
+        (inst-ldr (load-time-value (find-inst #x58FFE876 (get-inst-space))))
         (adrp-reg/addr nil))
     (setf (seg-virtual-location seg) load-addr
           (seg-length seg) length
@@ -602,10 +626,10 @@
                             (find-inst next-dchunk (load-time-value (get-inst-space))))
                         (= reg (ldb (byte 5 0) next-dchunk))
                         (= reg (ldb (byte 5 5) next-dchunk)))
-                   ;; Rewrite any ADRP, ADD sequences which compute addresses
-                   ;; into the linkage table into references into the GOT.
                    (let ((target-addr (+ (ash (+ current-page page-displacement) 12)
                                          (ldb (byte 12 10) next-dchunk))))
+                     ;; Rewrite any ADRP, ADD sequences which compute addresses
+                     ;; into the linkage table into references into the GOT.
                      (when (or (in-bounds-p target-addr (core-fixedobj-bounds core))
                                (in-bounds-p target-addr (core-linkage-bounds core)))
                        (push (list (dstate-cur-offs dstate)
@@ -643,6 +667,26 @@
                                    target-addr
                                    (format nil "x~d" reg))
                              list)))))))
+         ((eq inst inst-ldr)
+          ;; Rewrite constant loads to pc-relative loads to component boxed space.
+          (let ((reg (ldb (byte 5 0) dchunk))
+                (target-addr (+ (dstate-cur-addr dstate)
+                                (ash (sign-extend (ldb (byte 19 5) dchunk) 19) 2)))
+                (next-dchunk (sb-arm64-asm::current-instruction dstate 4)))
+            (when (and (in-bounds-p target-addr (core-code-bounds core))
+                       (eq inst-nop (find-inst next-dchunk (load-time-value (get-inst-space)))))
+              (push (list (dstate-cur-offs dstate)
+                          4    ; length
+                          "adrp-constant"
+                          target-addr
+                          (format nil "x~d" reg))
+                    list)
+              (push (list (+ 4 (dstate-cur-offs dstate))
+                          4    ; length
+                          "ldr-constant"
+                          target-addr
+                          (format nil "x~d" reg))
+                    list))))
          ((or (eq inst inst-bl) (eq inst inst-b))
           ;; Rewrite any BLs which jump to the trampoline in linkage
           ;; space to instead jump directly to the alien function in
@@ -731,7 +775,7 @@
           (pop (core-fixup-addrs core))
           (setq next-fixup-addr (or (car (core-fixup-addrs core)) most-positive-word)))
          ((or (eq inst inst-jmp) (eq inst inst-call))
-          (let ((target-addr (+ (near-jump-displacement dchunk dstate)
+          (let ((target-addr (+ (sb-x86-64-asm::near-jump-displacement dchunk dstate)
                                 (dstate-next-addr dstate))))
             (when (or (in-bounds-p target-addr (core-fixedobj-bounds core))
                       (in-bounds-p target-addr (core-linkage-bounds core)))
@@ -741,7 +785,7 @@
                            target-addr)
                     list))))
          ((eq inst inst-jmpz)
-          (let ((target-addr (+ (near-cond-jump-displacement dchunk dstate)
+          (let ((target-addr (+ (sb-x86-64-asm::near-cond-jump-displacement dchunk dstate)
                                 (dstate-next-addr dstate))))
             (when (in-bounds-p target-addr (core-linkage-bounds core))
               (push (list* (dstate-cur-offs dstate) 6 "je" target-addr)
@@ -814,6 +858,8 @@
                 (list-textual-instructions (int-sap paddr) count core vaddr emit-cfi)
                 #'< :key #'car))
         (extra-fixup-locs)
+        #+arm64
+        (spaces (core-spacemap core))
         (ptr paddr))
     (symbol-macrolet ((cur-offset (- ptr paddr)))
       (loop
@@ -877,6 +923,30 @@
                                    (core-enable-pie core)
                                    #+arm64 nil ; arm64 doesn't need the extra @PLT
                                    ))
+                          #+arm64
+                          ((or (string= opcode "ldr-constant")
+                               (string= opcode "adrp-constant"))
+                           (let ((index
+                                   (dislocate-code-constant
+                                    core
+                                    (sap-ref-word
+                                     (int-sap
+                                      (translate-ptr (car operand) spaces))
+                                     0))))
+                             (cond
+                               ((string= opcode "adrp-constant")
+                                (format stream
+                                        " adrp ~A,component_boxed_space_~d~%"
+                                        (cadr operand)
+                                        index))
+                               ((string= opcode "ldr-constant")
+                                (format stream " ldr ~A, [~A, #:lo12:component_boxed_space_~d]~%"
+                                        (cadr operand)
+                                        (cadr operand)
+                                        index))
+                               (t (error "unreachable")))))
+                          ((string= opcode "nop")
+                           (format stream "nop"))
                           ((or #+x86-64 (string= opcode "mov-gotpcrel")
                                #+arm64 (string= opcode "ldr-gotpcrel")
                                #+arm64 (string= opcode "adrp-gotpcrel"))
@@ -1238,7 +1308,7 @@
              (dotimes (i (if logical-addr count 0))
                (unless (and (< i (length exceptions)) (svref exceptions i))
                  (let ((word (sap-ref-word sap (* i n-word-bytes))))
-                   (when (and (= (logand word 3) 3) ; is a pointer
+                   (when (and (is-lisp-pointer word) ; is a pointer
                               (in-bounds-p word code-bounds)) ; to code space
                      #+nil
                      (format t "~&~(~x: ~x~)~%" (+ logical-addr  (* i n-word-bytes))
@@ -1247,8 +1317,10 @@
                      (setf exceptions (adjust-array exceptions (max (length exceptions) (1+ i))
                                                     :initial-element nil)
                            (svref exceptions i)
-                           (format nil "CS+0x~x"
-                                   (- word (bounds-low code-bounds))))))))
+                           (if enable-pie
+                               (format nil "0xdeadbeef")
+                               (format nil "CS+0x~x"
+                                       (- word (bounds-low code-bounds)))))))))
              (emit-asm-directives :qword sap count stream exceptions)))
 
     (let ((skip (output-lisp-asm-routines core spacemap code-addr output)))
@@ -2077,12 +2149,27 @@
                (format asm-file " .globl ~A~%~:*~A: .quad ~D ~%"
                     (labelize "simple_fun_space_size ")
                     (core-simple-fun-space-size core))
-               ;; write out simple-fun space
-               (format asm-file "~%.section .bss~%")
-               (format asm-file ".align ~D~%"
-                       ;; double-word alignment
-                       (* 2 n-word-bytes))
-               (format asm-file " .globl ~A~%.comm ~:*~A, ~D, ~D~%"
+            (format asm-file ".align ~d~%" n-word-bytes)
+            ;; write out component boxed space
+            (format asm-file " .globl ~A~%~:*~A:~%"
+                    (labelize "component_boxed_space"))
+            (let ((boxed-space (core-component-boxed-space core)))
+              (dotimes (i (length boxed-space))
+                (let ((value (aref boxed-space i)))
+                  (if (stringp value)
+                      (format asm-file " component_boxed_space_~d: .quad ~a~%"
+                              i value)
+                      (format asm-file
+                              " component_boxed_space_~d: .quad 0x~X~%"
+                              i value)))))
+            (format asm-file " .globl ~A~%~:*~A:~%"
+                    (labelize "component_boxed_space_end"))
+            (format asm-file "~%.section .bss~%")
+            ;; write out simple-fun space
+            (format asm-file ".align ~D~%"
+                    ;; double-word alignment
+                    (* 2 n-word-bytes))
+            (format asm-file " .globl ~A~%.comm ~:*~A, ~D, ~D~%"
                     (labelize "simple_fun_space")
                     (core-simple-fun-space-size core)
                     (* 2 n-word-bytes)))
