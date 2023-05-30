@@ -288,6 +288,11 @@ void execute_full_mark_phase()
     trace_object(NIL_SYMBOL_SLOTS_START);
     scav_static_range((lispobj*)STATIC_SPACE_OBJECTS_START, static_space_free_pointer);
     scav_static_range((lispobj*)PERMGEN_SPACE_START, permgen_space_free_pointer);
+#ifdef PIECORE
+    extern lispobj component_boxed_space;
+    extern lispobj component_boxed_space_end;
+    scav_static_range(&component_boxed_space, &component_boxed_space_end);
+#endif
 #ifndef LISP_FEATURE_IMMOBILE_SPACE
     // if NO immobile-space, then text space is equivalent to static space
     scav_static_range((lispobj*)TEXT_SPACE_START, text_space_highwatermark);
@@ -487,6 +492,9 @@ void execute_full_sweep_phase()
     memset(words_zeroed, 0, sizeof words_zeroed);
 #ifdef LISP_FEATURE_IMMOBILE_SPACE
     sweep_fixedobj_pages();
+    // We can't sweep the text ELF section, since its read-only on a
+    // PIECORE.
+#ifndef PIECORE
     sweep((lispobj*)TEXT_SPACE_START, text_space_highwatermark, words_zeroed);
     // Recompute generation masks for text space
     int npages = (ALIGN_UP((uword_t)text_space_highwatermark, IMMOBILE_CARD_BYTES)
@@ -497,6 +505,7 @@ void execute_full_sweep_phase()
         if (widetag_of(where) == CODE_HEADER_WIDETAG)
             text_page_genmask[find_text_page_index(where)]
                 |= (1 << immobile_obj_gen_bits(where));
+#endif
 #endif
     walk_generation(sweep_possibly_large, -1, words_zeroed);
     if (gencgc_verbose) {

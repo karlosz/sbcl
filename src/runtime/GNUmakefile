@@ -138,7 +138,7 @@ libsbcl.so: $(PIC_OBJS)
 %.pic.o: %.c
 	$(CC) -fPIC -DPIECORE -c $(CPPFLAGS) $(filter-out -fno-pie,$(CFLAGS)) $< -o $@
 %.pic.o: %.S # (-fPIC doesn't affect hand-written assembly source)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) $< -o $@ -DLIBSBCL
+	$(CC) -c -DPIECORE $(CPPFLAGS) $(CFLAGS) $< -o $@ -DLIBSBCL
 
 SHRINKWRAP_DEPS = ../../output/sbcl.core ../../tools-for-build/elftool.lisp
 shrinkwrap-sbcl.s shrinkwrap-sbcl-core.o: $(SHRINKWRAP_DEPS)
@@ -155,7 +155,7 @@ shrinkwrap-sbcl: shrinkwrap-sbcl.s shrinkwrap-sbcl-core.o $(LIBSBCL)
 	$(CC) -no-pie $(filter-out -Wl$(comma)--export-dynamic, $(LINKFLAGS)) \
  $(CFLAGS) -o $@ $^ $(filter-out -ldl, $(LIBS))
 pie-shrinkwrap-sbcl: pie-shrinkwrap-sbcl.s pie-shrinkwrap-sbcl-core.o $(PIC_OBJS)
-	$(CC) -pie -o $@ $^ $(LIBS)
+	$(CC) -pie -Wl,-z,text -o $@ $^ $(LIBS)
 semiwrap-sbcl: shrinkwrap-sbcl.s $(LIBSBCL)
 	$(CC) $(LINKFLAGS) $(CFLAGS) -o $@ $^ $(LIBS)
 

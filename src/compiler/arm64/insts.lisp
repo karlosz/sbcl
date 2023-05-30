@@ -2687,8 +2687,7 @@
           #'multi-instruction-emitter)
          (emit-back-patch segment 4 #'one-instruction-emitter)))))
 
-(define-instruction load-constant (segment dest index &optional lip)
-  (:vop-var vop)
+(define-instruction load-constant (segment dest index)
   (:emitter
    (labels ((compute-delta (position &optional magic-value)
               (+ (- (label-position (segment-origin segment)
@@ -2698,21 +2697,9 @@
                     position)
                  index))
             (multi-instruction-emitter (segment position)
-              (let* ((delta (compute-delta position))
-                     (negative (minusp delta))
-                     (low (ldb (byte 19 0) delta))
-                     (high (ldb (byte 16 19) delta)))
-                ;; ADR
-                (emit-pc-relative segment 0
-                                  (ldb (byte 2 0) low)
-                                  (ldb (byte 19 2) low)
-                                  (gpr-offset lip))
-                (assemble (segment vop)
-                  (inst movz dest high 16)
-                  (inst ldr dest (@ lip (extend dest (if negative
-                                                         :sxtw
-                                                         :lsl)
-                                                3))))))
+              (one-instruction-emitter segment position)
+              (assemble (segment)
+                (inst nop)))
             (one-instruction-emitter (segment position)
               (emit-ldr-literal segment
                                 #b01
@@ -2723,17 +2710,20 @@
                                 (reg-offset dest)))
             (multi-instruction-maybe-shrink (segment chooser posn magic-value)
               (declare (ignore chooser))
+              ;; When we want to force constants onto R/W
+              ;; non-executable pages, we can no longer rely on 21-bit
+              ;; displacements being enough.
+              #+pie-for-elf (declare (ignore segment chooser posn magic-value))
+              #-pie-for-elf
               (let ((delta (compute-delta posn magic-value)))
                 (when (typep delta '(signed-byte 21))
                   (emit-back-patch segment 4
                                    #'one-instruction-emitter)
                   t))))
-     (if lip
-         (emit-chooser
-          segment 12 2
-          #'multi-instruction-maybe-shrink
-          #'multi-instruction-emitter)
-         (emit-back-patch segment 4 #'one-instruction-emitter)))))
+     (emit-chooser
+      segment 8 2
+      #'multi-instruction-maybe-shrink
+      #'multi-instruction-emitter))))
 
 ;;; SIMD
 (def-emitter simd-three-diff

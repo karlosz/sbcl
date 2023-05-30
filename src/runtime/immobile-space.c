@@ -1246,6 +1246,7 @@ void immobile_space_coreparse(uword_t fixedobj_len,
     for (page = 0; page < n_pages ; ++page)
         if (text_page_scan_start(page)) text_page_genmask[page] |= 1<<gen;
 
+#ifndef PIECORE // There's no jit area on PIECORE
     // Create a TLSF pool
     char *tlsf_memory_end = (char*)TEXT_SPACE_START + text_space_size;
     int tlsf_memory_size = tlsf_memory_end - (char*)tlsf_mem_start;
@@ -1253,6 +1254,7 @@ void immobile_space_coreparse(uword_t fixedobj_len,
     int n_tlsf_pages = tlsf_memory_size / IMMOBILE_CARD_BYTES;
     tlsf_page_sso = malloc(n_tlsf_pages * sizeof (short int));
     memset(tlsf_page_sso, 0xff, n_tlsf_pages * sizeof (short int));
+#endif
 
     // Set the WP bits for pages occupied by the core file.
     // (There can be no inter-generation pointers.)
