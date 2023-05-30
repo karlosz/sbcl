@@ -627,7 +627,18 @@ static void relocate_heap(struct heap_adjust* adj)
     fix_space(FIXEDOBJ_SPACE_START, fixedobj_free_pointer, adj);
 #endif
     fix_space(DYNAMIC_SPACE_START, (lispobj*)dynamic_space_highwatermark(), adj);
+#ifndef PIECORE
+ /* There's no need to relocate text space on a PIE core. Also we want
+  * text to be read-only if possible. */
     fix_space(TEXT_SPACE_START, text_space_highwatermark, adj);
+#endif
+#ifdef PIECORE
+    extern lispobj component_boxed_space;
+    extern lispobj component_boxed_space_end;
+    fix_space((uword_t)&component_boxed_space,
+              &component_boxed_space_end,
+              adj);
+#endif
 #if defined LISP_FEATURE_X86_64 && defined LISP_FEATURE_IMMOBILE_SPACE
     /* Update the static-space asm routine indirection vector */
     struct vector* v = (void*)static_space_trailer_start;
@@ -783,8 +794,11 @@ process_directory(int count, struct ndir_entry *entry,
                (uword_t)&lisp_code_start, (uword_t)&lisp_code_end,
                text_space_highwatermark);
 #endif
-        // unprotect the pages
+        // unprotect the pages (except if PIECORE, in which case there
+        // should be no need).
+#ifndef PIECORE
         os_protect((void*)TEXT_SPACE_START, text_space_size, OS_VM_PROT_ALL);
+#endif
 
 #ifdef LISP_FEATURE_IMMOBILE_SPACE
         // ELF core without immobile space has alien linkage space below static space.

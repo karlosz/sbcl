@@ -144,8 +144,12 @@
   (dstate (make-dstate nil) :read-only t)
   (seg (%make-segment :sap-maker (lambda () (error "Bad sap maker"))
                       :virtual-location 0) :read-only t)
-  ;; Calculate the amount of space needed to hold all simple funs in
-  ;; the core.
+  ;; A table translating the addresses of boxed constants to the
+  ;; location of their word in the constant component area.
+  (component-boxed-space-table (make-hash-table :test #'eq))
+  ;; The boxed space for all code components.
+  (component-boxed-space (make-array 1000 :fill-pointer 0 :adjustable t))
+  ;; The amount of space needed to hold all simple fun objects.
   (simple-fun-space-size 0))
 
 (defglobal *editcore-ppd*
@@ -401,6 +405,27 @@
   (let* ((di-sap (int-sap (get-lisp-obj-address (%code-debug-info code))))
          (proxy-di (extract-object-from-core di-sap core)))
     (sb-di::uncompact-fun-map proxy-di)))
+
+;;; Return the boxed area table entry for CONSTANT. adding an entry
+;;; for the constant in the component boxed space if it doesn't
+;;; already exist.
+(defun dislocate-code-constant (core constant)
+  (let* ((table (core-component-boxed-space-table core))
+         (space (core-component-boxed-space core))
+         (fill (length space))
+         (code-bounds (core-code-bounds core)))
+    (multiple-value-bind (table-offset foundp)
+        (gethash constant table)
+      (cond (foundp table-offset)
+            (t
+             (let ((value
+                     (if (and (is-lisp-pointer constant)
+                              (in-bounds-p constant code-bounds))
+                         (format nil "CS+0x~x"
+                                 (- constant (bounds-low code-bounds)))
+                         constant)))
+               (vector-push-extend value space))
+             (setf (gethash constant table) fill))))))
 
 ;;; Examine CODE, returning a list of lists describing how to emit
 ;;; the contents into the assembly file.
