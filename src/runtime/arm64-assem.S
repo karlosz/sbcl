@@ -121,7 +121,14 @@ GNAME(call_into_lisp):
         adrp    reg_NULL, _STATIC_SPACE_START@PAGE
         ldr     reg_NULL, [reg_NULL, _STATIC_SPACE_START@PAGEOFF]
 #else
-        ldr     reg_NULL, STATIC_SPACE_START
+#ifdef PIECORE
+        adrp    reg_NULL, :got:STATIC_SPACE_START
+        ldr     reg_NULL, [reg_NULL, #:got_lo12:STATIC_SPACE_START]
+        ldr     reg_NULL, [reg_NULL]
+#else
+        adrp    reg_NULL, STATIC_SPACE_START
+        ldr     reg_NULL, [reg_NULL, #:lo12:STATIC_SPACE_START]
+#endif
 #endif
         add     reg_NULL, reg_NULL, #NIL_VALUE_OFFSET
 #else
