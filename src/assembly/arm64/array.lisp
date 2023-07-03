@@ -34,7 +34,6 @@
     (allocation nil ndescr other-pointer-lowtag result
                 :flag-tn pa-flag)
 
-    (move lr lra-save)
     (inst lsr ndescr type n-fixnum-tag-bits)
     ;; Touch the last element, to ensure that null-terminated strings
     ;; passed to C do not cause a WP violation in foreign code.
@@ -42,7 +41,11 @@
     ;; space, but may have non-zero length.
     #-generational
     (storew zr-tn pa-flag -1)
-    (storew-pair ndescr 0 length vector-length-slot tmp-tn)))
+    (storew-pair ndescr 0 length vector-length-slot tmp-tn))
+
+  ;; Restore LR here, since pseudo-atomic with safepoints may
+  ;; overwrite it.
+  (move lr lra-save))
 
 (define-assembly-routine (allocate-vector-on-stack
                           (:policy :fast-safe)
