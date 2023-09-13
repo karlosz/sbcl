@@ -523,6 +523,8 @@ thread_may_thrupt(os_context_t *ctx)
 int
 check_pending_thruptions(os_context_t *ctx)
 {
+    printf("check_pending_thruption with ctx %p\n", ctx);
+    fflush(stdout);
     struct thread *p = get_sb_vm_thread();
 
 #ifdef LISP_FEATURE_WIN32
@@ -658,6 +660,8 @@ int check_pending_gc()
 
 void thread_in_lisp_raised(os_context_t *ctxptr)
 {
+    printf("thread_in_lisp_raised with ctx %p\n", ctxptr);
+    fflush(stdout);
     struct thread *self = get_sb_vm_thread();
     bool check_gc_and_thruptions = 0;
     odxprint(safepoints,"%s","thread_in_lisp_raised");

@@ -302,6 +302,7 @@
                       (- (+ nil-value-offset gc-safepoint-trap-offset)))))
   #+no-os-protect
   (let ((continue (gen-label)))
+    (inst dmb :ishst) ; does this help?
     (inst ldr (32-bit-reg tmp-tn)
           (@ null-tn
              (load-store-offset (- (+ nil-value-offset gc-safepoint-trap-offset)))))
