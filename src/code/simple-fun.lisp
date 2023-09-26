@@ -471,11 +471,27 @@
       (values (%primitive sb-c:compute-fun code-obj
                           (%code-fun-offset code-obj fun-index))))))
 
+;;; Get the real simple fun from the proxy fun.
+(defun real-simple-fun-from-proxy (fun)
+  (let ((entry-address
+          (sap-ref-sap (int-sap (- (get-lisp-obj-address fun) sb-vm:fun-pointer-lowtag))
+                       (ash sb-vm:simple-fun-self-slot sb-vm:word-shift))))
+    (sb-vm::%simple-fun-from-entrypoint (fun-code-header fun)
+                                        (sap-int entry-address))))
+
+;;; Return true if this is a proxy fun.
+(defun proxy-fun-p (fun)
+  (> (%fun-code-offset fun)
+     (code-object-size (fun-code-header fun))))
+
 ;;; Return the 0-based index of SIMPLE-FUN within its code component.
 ;;; Computed via binary search.
 (defun %simple-fun-index (simple-fun)
   (let* ((code (fun-code-header simple-fun))
-         (n-entries (code-n-entries code)))
+         (n-entries (code-n-entries code))
+         (simple-fun (if (proxy-fun-p simple-fun)
+                         (real-simple-fun-from-proxy simple-fun)
+                         simple-fun)))
     (if (eql n-entries 1)
         0
         (let* ((offset (the (unsigned-byte 24)
