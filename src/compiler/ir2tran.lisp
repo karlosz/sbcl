@@ -241,6 +241,7 @@
            (let* ((this-env (node-environment ref))
                   (tn (find-in-environment functional this-env)))
              (emit-move ref ir2-block tn res)))
+          #+(or) ; disable now because of PIE shrinkwrapping
           ((when-vop-existsp (:named sb-vm::reference-closure)
              (when (and (lambda-p functional)
                         (eq (node-component ref)
