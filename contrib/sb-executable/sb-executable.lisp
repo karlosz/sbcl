@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (cl:defpackage :sb-executable
   (:use :cl :sb-ext :sb-alien)
   (:export :make-executable :copy-stream)

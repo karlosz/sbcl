@@ -19,6 +19,8 @@
  |  SOFTWARE.                                                                 |
  |----------------------------------------------------------------------------|#
 
+(in-package "CL-USER")
+
 (defpackage :sb-rt
   (:use #:cl)
   (:export #:*do-tests-when-defined* #:*test* #:continue-testing

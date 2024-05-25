@@ -599,6 +599,8 @@ possibly temporarily, because it might be used internally.")
 
    "BROKEN-PIPE"
 
+   "PACKAGE-COMPILE-LOAD-CONSISTENCY-ERROR"
+
    ;; error-signalling facilities
 
    "STANDARD-READTABLE-MODIFIED-ERROR"

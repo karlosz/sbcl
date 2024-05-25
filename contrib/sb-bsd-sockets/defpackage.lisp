@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (defpackage "SB-BSD-SOCKETS-INTERNAL"
   (:nicknames "SOCKINT")
   (:shadow #:close #:listen)

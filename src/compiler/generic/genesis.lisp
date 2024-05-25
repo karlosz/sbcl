@@ -2555,6 +2555,12 @@ Legal values for OFFSET are -4, -8, -12, ..."
   (let ((name (make-string namelen)))
     (read-string-as-bytes (fasl-input-stream) name)
     (push-fop-table (find-package name) (fasl-input))))
+
+;;; A no-op in cold load since we don't bother with changing packages.
+(define-cold-fop (fop-check-package-consistency (pkg-index))
+  pkg-index
+  (values))
+
 
 ;;;; cold fops for loading vectors
 

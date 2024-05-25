@@ -56,6 +56,8 @@
 ;;;; authors assume no responsibility for the consequences of any use
 ;;;; of this software.
 
+(in-package "CL-USER")
+
 (defpackage :SB-MD5 (:use :CL)
   (:export
    ;; Low-Level types and functions

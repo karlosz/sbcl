@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (defpackage "SB-GMP"
   (:use "COMMON-LISP" "SB-ALIEN" "SB-BIGNUM")
   ;; we need a few very internal symbols

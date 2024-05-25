@@ -3,6 +3,8 @@
 ;;;; Copyright (C) 2003 Gerd Moellmann <gerd.moellmann@t-online.de>
 ;;;; All rights reserved.
 
+(in-package "CL-USER")
+
 (defpackage #:sb-sprof
   (:use #:cl #:sb-ext #:sb-unix #:sb-alien #:sb-sys #:sb-int)
   (:export

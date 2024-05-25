@@ -9,6 +9,8 @@
 ;;;; provided with absolutely no warranty. See the COPYING and CREDITS
 ;;;; files for more information.
 
+(in-package "CL-USER")
+
 (defpackage :sb-concurrency
   (:use :cl :sb-thread :sb-int :sb-ext :sb-sys)
   (:export

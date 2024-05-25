@@ -1229,6 +1229,26 @@ with that condition (or with no condition) will be returned."
   (:default-initargs :references '((:ansi-cl :macro defconstant)
                                    (:sbcl :node "Idiosyncrasies"))))
 
+(define-condition package-compile-load-consistency-error (reference-condition stream-error)
+  ((compile-package :initarg :compile-package
+                    :reader package-compile-load-consistency-compile-package)
+   (load-package :initform *package*
+                 :reader package-compile-load-consistency-load-package))
+  (:report
+   (lambda (condition stream)
+     (format stream
+             "~@<While loading the compiled file ~A, the current package ~
+                 ~A is not the same as ~A, the current package when the ~
+                 top level form corresponding to the currently executing ~
+                 code was processed.~:@>"
+             (stream-error-stream condition)
+             (package-name
+              (package-compile-load-consistency-load-package condition))
+             (package-name
+              (package-compile-load-consistency-compile-package condition)))))
+  (:default-initargs :references '((:ansi-cl :section (3 2 4 4))
+                                   (:ansi-cl :issue "COMPILE-FILE-SYMBOL-HANDLING"))))
+
 (define-condition array-initial-element-mismatch
     (reference-condition simple-warning)
   ()

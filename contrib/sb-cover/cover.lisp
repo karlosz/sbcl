@@ -5,6 +5,8 @@
 ;;; routines from Swank. That code was written by Helmut Eller, and
 ;;; was placed under Public Domain
 
+(in-package "CL-USER")
+
 (defpackage #:sb-cover
   (:use #:cl #:sb-c)
   (:export #:report

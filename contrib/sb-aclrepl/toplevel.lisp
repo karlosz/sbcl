@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (cl:defpackage :sb-aclrepl
   (:use "COMMON-LISP" "SB-EXT")
   (:shadowing-import-from "SB-IMPL" "SCRUB-CONTROL-STACK")

@@ -5,6 +5,8 @@
 ;;;; absolutely no warranty. See the COPYING and CREDITS files for
 ;;;; more information.
 
+(in-package "CL-USER")
+
 ;; These tests pass under sb-interpreter but not sb-eval
 #+interpreter (unless (find-package "SB-INTERPRETER") (invoke-restart 'run-tests::skip-file))
 

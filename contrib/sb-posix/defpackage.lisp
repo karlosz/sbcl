@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (defpackage :sb-posix (:use #:sb-alien #:cl)
   (:shadow abort close open ftruncate truncate time read write)
   (:import-from #:sb-impl #:string-dispatch)

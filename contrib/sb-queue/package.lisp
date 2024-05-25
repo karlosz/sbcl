@@ -11,6 +11,8 @@
 ;;; Here we just provide a reexporting stub for backwards
 ;;; compatibility.
 
+(in-package "CL-USER")
+
 (defpackage :sb-queue
   (:use :cl :sb-concurrency)
   (:export

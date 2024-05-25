@@ -76,7 +76,8 @@
   "tests/package-test-4.lisp"
   "tests/package-test-5.lisp"
   "tests/package-test-6.lisp"
-  "tests/package-test-7.lisp")
+  "tests/package-test-7.lisp"
+  "tests/package-test-8.lisp")
  ("perfecthash.impure.lisp"
   "tools-for-build/unicode-phash.lisp-expr"
   "../xperfecthash30.lisp-expr"

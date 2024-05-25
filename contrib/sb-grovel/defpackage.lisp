@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (defpackage "SB-GROVEL"
   (:export "GROVEL-CONSTANTS-FILE")
   (:shadow "TYPE" "UNION")

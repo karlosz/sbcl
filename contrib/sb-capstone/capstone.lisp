@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 ;; This file makes a Common Lisp interface for Capstone.
 ;; We extract the API from https://github.com/aquynh/capstone/blob/master/include/capstone.h
 ;; We follow the file order and names as much as possible

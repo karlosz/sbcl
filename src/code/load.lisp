@@ -874,6 +874,14 @@
     (read-char-string-as-varints (fasl-input-stream) package-name)
     (push-fop-table (find-or-maybe-make-deferred-package package-name)
                     (fasl-input))))
+
+(define-fop 85 :not-host (fop-check-package-consistency ((:operands pkg-index)) nil)
+  (let ((compile-package (ref-fop-table (fasl-input) pkg-index)))
+    (unless (eq compile-package *package*)
+      (error 'package-compile-load-consistency-error
+             :stream (fasl-input-stream)
+             :compile-package compile-package))))
+
 
 ;;;; fops for loading numbers
 

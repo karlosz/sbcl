@@ -1,6 +1,8 @@
 ;;; SBCL integration with Linux perf jitdump interface
 ;;; https://gist.github.com/lukego/e0192eab0091ccb6c149bd98f59ee7bf
 
+(in-package "CL-USER")
+
 (defpackage :sb-perf
   (:use :common-lisp)
   (:export #:write-perfmap

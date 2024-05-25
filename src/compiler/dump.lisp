@@ -1354,6 +1354,9 @@
     (aver handle)
     (dump-push handle fasl-output)
     (dump-fop 'fop-funcall-for-effect fasl-output 0))
+  (dump-fop 'fop-check-package-consistency
+            fasl-output
+            (dump-package *package* fasl-output))
   (values))
 
 ;;; Dump some information to allow partial reconstruction of the

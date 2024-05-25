@@ -1,3 +1,5 @@
+(in-package "CL-USER")
+
 (setf (sb-ext:readtable-base-char-preference *readtable*) :both)
 (defvar *system* (second sb-ext:*posix-argv*))
 ;; Convert dep filenames into module names. Depending on whether each Make step
@@ -85,7 +87,7 @@
     (sb-int:collect ((alien-constants) (flattened-sources) (fasls))
       (with-open-file (f (merge-pathnames "module-setup.lisp" objdir)
                          :direction :output :if-exists :supersede)
-        (format f "~{(require \"~A\")~%~}" *deps*))
+        (format f "~{(in-package \"CL-USER\") (require \"~A\")~%~}" *deps*))
       (flattened-sources `(t "module-setup"))
       ;; Compile all files serially. :depends-on is just documentation for the user
       (sb-int:named-let flatten ((prefix "") (sources specified-sources))
@@ -117,7 +119,7 @@
                  (alien-constants (cons specfile package))))))))
       (with-open-file (f (merge-pathnames "module-provide.lisp" objdir)
                          :direction :output :if-exists :supersede)
-        (format f "(provide \"~A\")~%" (string-upcase *system*)))
+        (format f "(in-package \"CL-USER\") (provide \"~A\")~%" (string-upcase *system*)))
       (flattened-sources `(t "module-provide"))
 
       (when (alien-constants)

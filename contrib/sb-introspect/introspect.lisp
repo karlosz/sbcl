@@ -26,6 +26,8 @@
 ;;;   error, or return NIL?
 ;;; 4) FIXMEs
 
+(in-package "CL-USER")
+
 (defpackage :sb-introspect
   (:use "CL" "SB-KERNEL" "SB-INT")
   (:import-from "SB-VM" "PRIMITIVE-OBJECT-SIZE")

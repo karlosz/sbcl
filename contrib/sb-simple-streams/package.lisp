@@ -6,6 +6,7 @@
 ;;; who placed the code in the public domain.  Sbcl port by Rudi
 ;;; Schlatte.
 
+(in-package "CL-USER")
 
 (defpackage sb-simple-streams
   (:use #:common-lisp)
