@@ -168,6 +168,7 @@
   (def fast-if-eq-signed fast-if-eql/signed 5)
   (def fast-if-eq-unsigned fast-if-eql/unsigned 5))
 
+#-pie-for-elf
 (define-vop (jump-table)
   (:args (index :scs (signed-reg unsigned-reg any-reg)
                 :target offset))
