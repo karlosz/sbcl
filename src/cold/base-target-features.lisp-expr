@@ -279,6 +279,10 @@
  ;; address of zero. Requires all spaces to be relocatable on start-up.
  ; :aslr
 
+ ;; This feature allows Lisp to be PIE elfinated such that code (r/o)
+ ;; and data is strictly segregated.
+ ; :pie
+
  ;; SBCL has optional support for zstd-based compressed core files.  Enable
  ;; this feature to compile it in.  Obviously, doing so adds a dependency
  ;; on zstd.

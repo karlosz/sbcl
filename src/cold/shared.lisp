@@ -389,6 +389,10 @@
           ":IMMOBILE-SPACE and :PERMGEN are mutually exclusive options")
          ("(and compact-instance-header (not (or permgen immobile-space)))"
           ":COMPACT-INSTANCE-HEADER requires :IMMOBILE-SPACE feature")
+         ("(and relocatable-static-space (not arm64))"
+          ":RELOCATABLE-STATIC-SPACE not supported on selected platform.")
+         ("(and pie-for-elf (or (not immobile-space) (not relocatable-static-space)))"
+          ":PIE-FOR-ELF requires :IMMOBILE_SPACE and RELOCATABLE-STATIC-SPACE features.")
          ("(and immobile-code (not immobile-space))"
           ":IMMOBILE-CODE requires :IMMOBILE-SPACE feature")
          ("(and immobile-symbols (not immobile-space))"
