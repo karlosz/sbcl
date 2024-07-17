@@ -109,6 +109,7 @@
   (def value-cell-ref)
   (def %caller-frame ())
   (def %caller-pc ())
+  #-pie-for-elf
   (def %code-debug-info)
   (def sb-vm::%code-fixups)
   (def sb-bignum:%bignum-length)

@@ -155,6 +155,9 @@
   ;; this to be initialized, so we initialize it right away.
   (show-and-call !random-cold-init)
 
+  #+pie-for-elf
+  (setf sb-impl::*component-debug-info* (make-hash-table :test 'eq :synchronized t :weakness :key))
+
   (setq sb-c::*compilation-unit* nil) ; its DEFVAR is not processed yet
 
   ;; All sorts of things need INFO and/or (SETF INFO).
