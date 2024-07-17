@@ -155,6 +155,9 @@
   ;; this to be initialized, so we initialize it right away.
   (show-and-call !random-cold-init)
 
+  #+pie-for-elf
+  (setf sb-impl::*component-debug-info* (make-hash-table :test 'eq :synchronized t :weakness :key))
+
   ;; We can't do such much as a simple PROCLAIM without this global
   ;; hash-table (because of WARN-IF-INLINE-FAILED/PROCLAIM)
   (setf sb-c::*emitted-full-calls* (make-hash-table :test 'equal :synchronized t))
