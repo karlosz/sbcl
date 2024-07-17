@@ -206,7 +206,7 @@ during backtrace.
   ;; the slot index; and there's a special variant if #+darwin-jit.
   (debug-info :type t
               :ref-known (flushable)
-              :ref-trans %code-debug-info)
+              :ref-trans #-pie-for-elf %code-debug-info #+pie-for-elf %%code-debug-info)
   (constants :rest-p t))
 
 (define-primitive-object (fdefn :type fdefn

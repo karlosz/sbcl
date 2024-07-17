@@ -366,12 +366,26 @@
 
 ;;;; CODE-COMPONENT
 
+;;; When #+PIE-FOR-ELF, indirect accesses to %CODE-DEBUG-INFO through
+;;; a hash table so that we can find the debug info without having to
+;;; patch r/o code sections in the PIE elfinated core.
+#+pie-for-elf
+(define-load-time-global *component-debug-info* nil)
+
+#+pie-for-elf
+(defun %code-debug-info (code)
+  (or (gethash code *component-debug-info*)
+      (setf (gethash code *component-debug-info*)
+            (sb-vm::%%code-debug-info code))))
+
 ;;; software mark bits on pages of code require that all assignments to
 ;;; header slots go through the CODE-HEADER-SET vop,
 ;;; which is slightly different from the general soft card mark implementation
 ;;; for historical reasons.
 (defun (setf %code-debug-info) (newval code)
   (setf (code-header-ref code sb-vm:code-debug-info-slot) newval)
+  #+pie-for-elf
+  (setf (gethash code *component-debug-info*) newval)
   newval)
 
 (defun (setf sb-vm::%code-fixups) (newval code)
