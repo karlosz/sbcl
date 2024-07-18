@@ -1604,9 +1604,9 @@ char* get_asm_routine_by_name(const char* name, int *index)
 {
     struct code* code = (struct code*)asm_routines_start;
 #ifdef LISP_FEATURE_DARWIN_JIT
-    lispobj ht = CONS(code->debug_info)->car;
+    lispobj ht = CONS(code_debug_info(code))->car;
 #else
-    lispobj ht = code->debug_info;
+    lispobj ht = code_debug_info(code);
 #endif
     if (ht) {
         struct vector* table =

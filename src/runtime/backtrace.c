@@ -71,14 +71,14 @@ debug_function_name_from_pc (struct code* code, void *pc)
 {
     struct compiled_debug_info *di;
 
-    if (instancep(code->debug_info))
-        di = (void*)native_pointer(code->debug_info);
+    if (instancep(code_debug_info(code)))
+        di = (void*)native_pointer(code_debug_info(code));
     else
         return (lispobj)NULL;
 
     if (pc >= (void*)asm_routines_start && pc < (void*)asm_routines_end) {
 #ifdef LISP_FEATURE_DARWIN_JIT
-        return asm_routine_name(pc, (struct hash_table *)(CONS(code->debug_info)->car));
+        return asm_routine_name(pc, (struct hash_table *)(CONS(code_debug_info(code))->car));
 #else
         return asm_routine_name(pc, (struct hash_table *)di);
 #endif
@@ -326,7 +326,7 @@ static void __attribute__((unused))
 print_entry_points (struct code *code, FILE *f)
 {
     int n_funs = code_n_funs(code);
-    struct compiled_debug_info* cdi = (void*)native_pointer(barrier_load(&code->debug_info));
+    struct compiled_debug_info* cdi = (void*)native_pointer(barrier_load(code_debug_info_addr(code)));
     for_each_simple_fun(index, fun, code, 0, {
         if (widetag_of(&fun->header) != SIMPLE_FUN_WIDETAG) {
             fprintf(f, "%p: bogus function entry", fun);
