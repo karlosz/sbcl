@@ -752,9 +752,23 @@
                 ;; refer to "." (the current PC) which is the base of the object.
                 (let* ((base (emit-symbols (code-symbols code core) core pp-state output))
                        (altered-fixups
-                        (emit-funs code code-addr core #'dumpwords temp-output base emit-cfi))
-                       (header-exceptions (vector nil nil nil nil)))
+                         (emit-funs code code-addr core #'dumpwords temp-output base emit-cfi))
+                       (header-exceptions
+                         (make-array code-constants-offset :initial-element nil)))
                   (aver (null altered-fixups))
+                  (when enable-pie
+                    ;; Dislocate the debug info slot into the r/w
+                    ;; component boxed space and leave the index in
+                    ;; the code-debug-info slot so that the C debugger
+                    ;; can find it. Make sure to leave a tagged fixnum
+                    ;; so that GC doesn't croak.
+                    (setf (aref header-exceptions code-debug-info-slot)
+                          (format nil "~d"
+                                  (fixnumize
+                                   (dislocate-code-constant
+                                    core
+                                    (sap-ref-word (int-sap code-physaddr)
+                                                  (* code-debug-info-slot n-word-bytes)))))))
                   (dumpwords (int-sap code-physaddr)
                              (code-header-words code) output header-exceptions code-addr)
                   (write-string (get-output-stream-string temp-output) output))))
