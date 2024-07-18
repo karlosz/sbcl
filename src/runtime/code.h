@@ -36,6 +36,28 @@ static inline sword_t code_header_words(struct code* c)
     return code_boxed_len(c) >> WORD_SHIFT; // word count
 }
 
+#include <stdio.h>
+
+static inline lispobj code_debug_info(struct code* c)
+{
+#ifdef PIECORE
+    extern lispobj component_boxed_space;
+    return (&component_boxed_space)[c->debug_info >> N_FIXNUM_TAG_BITS];
+#else
+    return c->debug_info;
+#endif
+}
+
+static inline lispobj *code_debug_info_addr(struct code* c)
+{
+#ifdef PIECORE
+    extern lispobj component_boxed_space;
+    return &(&component_boxed_space)[c->debug_info >> N_FIXNUM_TAG_BITS];
+#else
+    return &c->debug_info;
+#endif
+}
+
 /* Code component trailer words:
  *
  *            fun table pointer v

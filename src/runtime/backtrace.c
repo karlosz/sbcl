@@ -47,10 +47,10 @@ debug_function_name_from_pc (struct code* code, void *pc)
 {
     struct compiled_debug_info *di;
 
-    if (instancep(code->debug_info))
-        di = (void*)native_pointer(code->debug_info);
-    else if (listp(code->debug_info) && instancep(CONS(code->debug_info)->car))
-        di = (void*)native_pointer(CONS(code->debug_info)->car);
+    if (instancep(code_debug_info(code)))
+        di = (void*)native_pointer(code_debug_info(code));
+    else if (listp(code_debug_info(code)) && instancep(CONS(code_debug_info(code))->car))
+        di = (void*)native_pointer(CONS(code_debug_info(code))->car);
     else
         return (lispobj)NULL;
 
@@ -287,7 +287,7 @@ static void __attribute__((unused))
 print_entry_points (struct code *code, FILE *f)
 {
     int n_funs = code_n_funs(code);
-    struct compiled_debug_info* cdi = (void*)native_pointer(barrier_load(&code->debug_info));
+    struct compiled_debug_info* cdi = (void*)native_pointer(barrier_load(code_debug_info_addr(code)));
     for_each_simple_fun(index, fun, code, 0, {
         if (widetag_of(&fun->header) != SIMPLE_FUN_WIDETAG) {
             fprintf(f, "%p: bogus function entry", fun);
@@ -616,7 +616,7 @@ static char* asm_routine_name(char* pc)
 {
     struct code *c = (void*)asm_routines_start;
     int offset = pc - code_text_start(c);
-    struct hash_table* ht = (void*)native_pointer(c->debug_info);
+    struct hash_table* ht = (void*)native_pointer(code_debug_info(c));
     if (ht) { // cold-init will have no hash-table
         struct vector* v = (void*)native_pointer(ht->pairs);
         int len = vector_len(v);
