@@ -810,7 +810,7 @@
         (aver (>= nwords 2))
         (aver (zerop remainder))
         (decf nwords 2)
-        (format output " .quad 0x~x, ~d # (simple-array fixnum (~d))~%"
+        (format output " .quad 0x~x, ~d~%"
                 simple-array-fixnum-widetag
                 (ash nwords n-fixnum-tag-bits)
                 nwords)
