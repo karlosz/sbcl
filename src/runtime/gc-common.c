@@ -2022,7 +2022,7 @@ lispobj simple_fun_name_from_pc(char *pc, lispobj** pfun)
         struct simple_fun* fun = (void*)(insts + offsets[-i]);
         if ((char*)fun < pc) {
             if (pfun) *pfun = (lispobj*)fun;
-            struct compiled_debug_info* cdi = (void*)native_pointer(code->debug_info);
+            struct compiled_debug_info* cdi = (void*)native_pointer(code_debug_info(code));
             lispobj* fundata = &cdi->rest;
             return fundata[i*CODE_SLOTS_PER_SIMPLE_FUN];
         }
