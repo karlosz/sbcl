@@ -856,7 +856,7 @@ process_directory(int count, struct ndir_entry *entry,
             int sub_2gb_flag = (request & 1);
             request &= ~(size_t)1;
             // Try to map at address requested by the core file unless ASLR.
-#ifdef LISP_FEATURE_ASLR
+#if defined(LISP_FEATURE_ASLR) || defined PIECORE
             addr = 0;
 #endif
             addr = (uword_t)reserve_space(id, sub_2gb_flag ? MOVABLE_LOW : MOVABLE,
