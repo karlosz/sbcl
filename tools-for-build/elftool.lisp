@@ -607,7 +607,10 @@
                                    (start (car val))
                                    (end (car (translate (cdr val) spacemap))))
                       (list* (translate (symbol-name name) spacemap) start end))
-                    (target-hash-table-alist (%code-debug-info code-component) spacemap))
+                    (target-hash-table-alist
+                     (%make-lisp-obj
+                      (%code-debug-info-addr code-component))
+                     spacemap))
             #'< :key #'cadr)))
       ;; Possibly unboxed words and/or padding
       (let ((here (ash jump-table-count word-shift))
@@ -731,12 +734,15 @@
                 (objsize (code-object-size code)))
            (incf total-code-size objsize)
            (cond
-             ((%instancep (%code-debug-info code)) ; assume it's a COMPILED-DEBUG-INFO
+             ((%instancep (%make-lisp-obj
+                           (%code-debug-info-addr code))) ; assume it's a COMPILED-DEBUG-INFO
               (aver (plusp (code-n-entries code)))
               (let* ((source
                       (sb-c::compiled-debug-info-source
                        (truly-the sb-c::compiled-debug-info
-                                  (translate (%code-debug-info code) spacemap))))
+                                  (translate (%make-lisp-obj
+                                              (%code-debug-info-addr code))
+                                             spacemap))))
                      (namestring
                       (sb-c::debug-source-namestring
                        (truly-the sb-c::debug-source (translate source spacemap)))))
