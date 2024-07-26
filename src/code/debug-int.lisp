@@ -2768,6 +2768,9 @@ register."
        (if escaped
            (let ((code (code-header-from-pc (context-pc escaped))))
              (if code
+                 #+pie-for-elf
+                 '%pie-elf-dummy-code-constant%
+                 #-pie-for-elf
                  (code-header-ref code (sb-c:sc+offset-offset sc+offset))
                  :invalid-code-object-at-pc))
            :invalid-value-for-unescaped-register-storage))
