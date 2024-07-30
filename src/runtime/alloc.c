@@ -642,9 +642,13 @@ alloc_thread_struct(void* spaces) {
                                 + THREAD_HEADER_SLOTS*N_WORD_BYTES);
 
 #ifdef LISP_FEATURE_SB_SAFEPOINT
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+    atomic_init(&thread_csp_slot(th)->state, 0u);
+#else
     // Out of caution I'm supposing that the last thread to use this memory
     // might have left this page as read-only. Could it? I have no idea.
     os_protect(csp_page, THREAD_CSP_PAGE_SIZE, OS_VM_PROT_READ|OS_VM_PROT_WRITE);
+#endif
 #endif
 
 #ifdef LISP_FEATURE_SB_THREAD

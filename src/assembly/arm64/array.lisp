@@ -27,7 +27,9 @@
                    (:temp pa-flag non-descriptor-reg nl3-offset)
                    (:temp lra-save non-descriptor-reg nl5-offset)
                    (:temp lr non-descriptor-reg lr-offset))
-                (pseudo-atomic (pa-flag)
+                ;; Elide the pseudo-atomic on sb-safepoint since it
+                ;; might kill the return address on #+NO-OS-PROTECT.
+                (pseudo-atomic (pa-flag :elide-if #+sb-safepoint t #-sb-safepoint nil)
                   (inst lsl ndescr words (- word-shift n-fixnum-tag-bits))
                   (inst add ndescr ndescr (* (1+ vector-data-offset) n-word-bytes))
                   (inst and ndescr ndescr (bic-mask lowtag-mask)) ; double-word align

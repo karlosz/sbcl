@@ -17,6 +17,10 @@
 #include "validate.h"           /* for BINDING_STACK_SIZE etc */
 #include "gc-typedefs.h" // for page_index_t
 
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+#include <stdatomic.h>
+#endif
+
 enum threadstate {STATE_RUNNING=1, STATE_STOPPED, STATE_DEAD};
 
 #ifdef LISP_FEATURE_SB_THREAD
@@ -32,6 +36,39 @@ struct gcing_safety {
 int handle_safepoint_violation(os_context_t *context, os_vm_address_t addr);
 void* os_get_csp(struct thread* th);
 void assert_on_stack(struct thread *th, void *esp);
+
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+
+/* Each thread maintains a slot containing its state in regards to
+ * whether it is in C or Lisp. For the sake of Lisp code generation,
+ * NULL means that the thread is in Lisp code, while the control stack
+ * pointer is saved to mean that the thread in foreign code.  In order
+ * to facilitate fast synchronization in this scenario where only the
+ * owning thread writes the state, but another collecting thread could
+ * potentially ask the thread to stop and want a consistent view of
+ * the state, we use the free low bit as a trap flag. */
+struct csp_slot {
+    _Atomic(lispobj) state;
+};
+
+static inline struct csp_slot* thread_csp_slot(struct thread* thread) {
+    return (struct csp_slot*)(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS));
+}
+
+static inline lispobj csp_around_foreign_call(struct thread *thread) {
+    return thread_csp_slot(thread)->state & ~1;
+}
+
+void set_csp_around_foreign_call(struct thread *thread, lispobj value);
+#else
+static inline lispobj csp_around_foreign_call(struct thread *thread) {
+    return *(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS));
+}
+
+static inline void set_csp_around_foreign_call(struct thread *thread, lispobj value) {
+    *(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS)) = value;
+}
+#endif
 #endif /* defined(LISP_FEATURE_SB_SAFEPOINT) */
 
 /* The thread struct is generated from lisp during genesis and it
@@ -276,15 +313,13 @@ void thread_in_lisp_raised(os_context_t *ctx);
 void thread_interrupted(os_context_t *ctx);
 extern void thread_register_gc_trigger();
 
-#define csp_around_foreign_call(thread) *(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS))
-
 static inline
 void push_gcing_safety(struct gcing_safety *into)
 {
     struct thread* th = get_sb_vm_thread();
     asm volatile ("");
     into->csp_around_foreign_call = csp_around_foreign_call(th);
-    csp_around_foreign_call(th) = 0;
+    set_csp_around_foreign_call(th, 0);
     asm volatile ("");
 }
 
@@ -293,7 +328,7 @@ void pop_gcing_safety(struct gcing_safety *from)
 {
     struct thread* th = get_sb_vm_thread();
     asm volatile ("");
-    csp_around_foreign_call(th) = from->csp_around_foreign_call;
+    set_csp_around_foreign_call(th, from->csp_around_foreign_call);
     asm volatile ("");
 }
 

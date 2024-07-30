@@ -15,12 +15,18 @@
                  (push b result)
                  (push a result))
            result)))
-  (let ((nl-registers (loop for i to 9
-                            collect (reg i 'unsigned-reg)))
-        (lisp-registers (loop for i from r0-offset to r9-offset
+  (let* ((nl-registers (loop for i to 9
+                             collect (reg i 'unsigned-reg)))
+         (lisp-registers (loop for i from r0-offset to r9-offset
                               collect (reg i 'unsigned-reg)))
-        (float-registers (loop for i below 32
-                               collect (reg i 'complex-double-reg))))
+         (float-registers (loop for i below 32
+                                collect (reg i 'complex-double-reg)))
+         #+(and sb-safepoint no-os-protect)
+         (descriptor-registers (loop for i in descriptor-regs
+                                     collect (reg i 'unsigned-reg)))
+         #+(and sb-safepoint no-os-protect)
+         (descriptor-framesize (* (length descriptor-registers)
+                                  n-word-bytes)))
     (macrolet  ((map-pairs (op base start offsets
                             &key pre-index post-index
                                  (delta 16))
@@ -169,6 +175,82 @@
           (inst sub csp-tn csp-tn (+ 32 80))
           (inst str zr-tn (@ thread-tn (* thread-control-stack-pointer-slot n-word-bytes))))
         (map-pairs ldp nsp-tn 64 nl-registers :post-index 80 :delta -16)
+        (inst ret))
+
+      ;; This is kinda like the alloc tramp except we try to spill all
+      ;; descriptors, informing the GC that we want it to scan the spilled
+      ;; registers under the control stack pointer. We also need to have the
+      ;; GC see LR, so it pins the call stack correctly.
+      #+(and sb-safepoint no-os-protect)
+      (define-assembly-routine
+          (safepoint-tramp (:return-style :none))
+          ((:temp nl0 unsigned-reg nl0-offset)
+           (:temp nl2 unsigned-reg nl2-offset))
+        (map-pairs stp nsp-tn 0 nl-registers :pre-index -80)
+        (map-pairs stp nsp-tn 0 float-registers :pre-index -512 :delta 32)
+        ;; Save the stack pointer here so we can use it as a new frame
+        ;; pointer for the GC to see, so it can read the return
+        ;; address and pin the calling code object.
+        (inst mov tmp-tn csp-tn)
+        ;; Spill all descriptors into the current frame.
+        (inst add csp-tn csp-tn (+ descriptor-framesize 32))
+        (inst stp cfp-tn lr-tn (@ csp-tn (- (+ descriptor-framesize 32))))
+        (map-pairs stp csp-tn (- descriptor-framesize) descriptor-registers)
+        ;; TMP-TN and CSP-TN at this point precisely demarcate the
+        ;; frame we just spilled into.
+        (inst stp tmp-tn csp-tn (@ thread-tn (* thread-control-frame-pointer-slot n-word-bytes)))
+        ;; The first argument is the os_context, which we don't use in
+        ;; this configuration, so we just leave a null pointer there.
+        (move nl0 zr-tn)
+        (invoke-foreign-routine "thread_in_lisp_raised" nl2)
+
+        (map-pairs ldp nsp-tn 480 float-registers :post-index 512 :delta -32)
+        (map-pairs ldp csp-tn -16 descriptor-registers :delta -16)
+        (inst ldr lr-tn (@ csp-tn (- (+ descriptor-framesize 24))))
+
+        ;; Deallocate the frame.
+        (inst sub csp-tn csp-tn (+ 32 descriptor-framesize))
+        (inst str zr-tn (@ thread-tn (* thread-control-stack-pointer-slot n-word-bytes)))
+
+        (map-pairs ldp nsp-tn 64 nl-registers :post-index 80 :delta -16)
+        (inst ret))
+
+      #+(and sb-safepoint no-os-protect)
+      (define-assembly-routine (set-csp-before-foreign-call (:return-style :none))
+          ((:temp nl0 unsigned-reg nl0-offset)
+           (:temp nl1 unsigned-reg nl1-offset)
+           (:temp nl3 unsigned-reg nl3-offset))
+        (inst str lr-tn (@ nsp-tn -16 :pre-index))
+        (map-pairs stp nsp-tn 0 nl-registers :pre-index -96)
+
+        (inst mov nl0 thread-tn)
+        (inst mov nl1 csp-tn)
+        (map-pairs stp nsp-tn 0 float-registers :pre-index -512 :delta 32)
+
+        (invoke-foreign-routine "set_csp_around_foreign_call" nl3)
+
+        (map-pairs ldp nsp-tn 480 float-registers :post-index 512 :delta -32)
+        (map-pairs ldp nsp-tn 64 nl-registers :post-index 96 :delta -16)
+        (inst ldr lr-tn (@ nsp-tn 16 :post-index))
+        (inst ret))
+
+      #+(and sb-safepoint no-os-protect)
+      (define-assembly-routine (set-csp-after-foreign-call (:return-style :none))
+          ((:temp nl0 unsigned-reg nl0-offset)
+           (:temp nl1 unsigned-reg nl1-offset)
+           (:temp nl3 unsigned-reg nl3-offset))
+        (inst str lr-tn (@ nsp-tn -16 :pre-index))
+        (map-pairs stp nsp-tn 0 nl-registers :pre-index -80)
+
+        (inst mov nl0 thread-tn)
+        (inst mov nl1 zr-tn)
+        (map-pairs stp nsp-tn 0 float-registers :pre-index -512 :delta 32)
+
+        (invoke-foreign-routine "set_csp_around_foreign_call" nl3)
+
+        (map-pairs ldp nsp-tn 480 float-registers :post-index 512 :delta -32)
+        (map-pairs ldp nsp-tn 64 nl-registers :post-index 80 :delta -16)
+        (inst ldr lr-tn (@ nsp-tn 16 :post-index))
         (inst ret)))))
 
 (define-assembly-routine

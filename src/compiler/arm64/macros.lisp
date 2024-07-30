@@ -317,9 +317,18 @@
 
 #+sb-safepoint
 (defun emit-safepoint ()
+  #-no-os-protect
   (inst ldr zr-tn (@ null-tn
                      (load-store-offset
-                      (- (+ nil-value-offset gc-safepoint-trap-offset))))))
+                      (- (+ nil-value-offset gc-safepoint-trap-offset)))))
+  #+no-os-protect
+  (let ((continue (gen-label)))
+    (inst ldr (32-bit-reg tmp-tn)
+          (@ null-tn
+             (load-store-offset (- (+ nil-value-offset gc-safepoint-trap-offset)))))
+    (inst cbz tmp-tn continue)
+    (invoke-asm-routine 'safepoint-tramp tmp-tn)
+    (emit-label continue)))
 
 ;;; handy macro for making sequences look atomic
 (defmacro pseudo-atomic ((flag-tn &key elide-if (sync t)) &body forms)
