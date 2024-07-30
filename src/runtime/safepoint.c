@@ -116,16 +116,24 @@ void
 map_gc_page()
 {
     odxprint(misc, "map_gc_page");
+#ifndef LISP_FEATURE_NO_OS_PROTECT
     os_protect((void *) GC_SAFEPOINT_PAGE_ADDR,
                BACKEND_PAGE_BYTES,
                OS_VM_PROT_READ);
+#else
+    *(uword_t *)GC_SAFEPOINT_TRAP_ADDR = 0;
+#endif
 }
 
 void
 unmap_gc_page()
 {
     odxprint(misc, "unmap_gc_page");
+#ifndef LISP_FEATURE_NO_OS_PROTECT
     os_protect((void *) GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES, OS_VM_PROT_NONE);
+#else
+    *(uword_t *)GC_SAFEPOINT_TRAP_ADDR = 1;
+#endif
 }
 #endif /* !LISP_FEATURE_WIN32 */
 
@@ -1031,6 +1039,7 @@ handle_safepoint_violation(os_context_t *ctx, os_vm_address_t fault_address)
     struct thread *self = get_sb_vm_thread();
 
     if (fault_address == (os_vm_address_t) GC_SAFEPOINT_TRAP_ADDR) {
+#ifndef LISP_FEATURE_NO_OS_PROTECT
 #ifdef LISP_FEATURE_C_STACK_IS_CONTROL_STACK
         /* We're on the altstack and don't want to run Lisp code. */
         arrange_return_to_c_function(ctx, handle_global_safepoint_violation, 0);
@@ -1041,6 +1050,9 @@ handle_safepoint_violation(os_context_t *ctx, os_vm_address_t fault_address)
         undo_fake_foreign_function_call(ctx);
 #endif
         return 1;
+#else
+        lose("Shouldn't get here!");
+#endif
     }
 
     if ((1+THREAD_HEADER_SLOTS)+(lispobj*)fault_address == (lispobj*)self) {
