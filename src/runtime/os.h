@@ -30,7 +30,11 @@
  * You can change this to 0 if you want SBCL not to install the handlers
  * for SIGSEGV and SIGBUS. That will slow down GC, but might be desirable
  * for debugging or for exploring GC strategies such as remembered sets */
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+#define ENABLE_PAGE_PROTECTION 0
+#else
 #define ENABLE_PAGE_PROTECTION 1
+#endif
 #endif
 
 #if defined LISP_FEATURE_CHENEYGC || defined LISP_FEATURE_SB_SAFEPOINT

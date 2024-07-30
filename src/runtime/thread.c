@@ -487,7 +487,7 @@ init_new_thread(struct thread *th,
      * danger of deadlocking even with SIG_STOP_FOR_GC blocked (which
      * it is not). */
 #ifdef LISP_FEATURE_SB_SAFEPOINT
-    csp_around_foreign_call(th) = (lispobj)scribble;
+    set_csp_around_foreign_call(th, (lispobj)scribble);
 #endif
     __attribute__((unused)) int lock_ret = mutex_acquire(&all_threads_lock);
     gc_assert(lock_ret);
