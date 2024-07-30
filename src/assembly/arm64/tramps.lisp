@@ -174,6 +174,85 @@
         (map-pairs ldp nsp-tn 64 nl-registers :post-index 80 :delta -16)
         (inst ret)))))
 
+;; This is kinda like the alloc tramp except we try to spill all
+;; descriptors, informing the GC that we want it to scan the spilled
+;; registers under the control stack pointer. We also need to have the
+;; GC see LR, so it pins the call stack correctly.
+#+(and sb-safepoint no-os-protect)
+(define-assembly-routine
+    (safepoint-tramp (:return-style :none))
+    ((:temp nl0 unsigned-reg nl0-offset)
+     (:temp nl2 unsigned-reg nl2-offset))
+  (flet ((reg (offset sc)
+           (make-random-tn
+            :kind :normal
+            :sc (sc-or-lose sc)
+            :offset offset))
+         (reverse-pairs (list)
+           (let (result)
+             (loop for (a b) on list by #'cddr
+                   do
+                   (push b result)
+                   (push a result))
+             result)))
+    (let* ((nl-registers (loop for i to 9
+                              collect (reg i 'unsigned-reg)))
+           (descriptor-registers (loop for i in descriptor-regs
+                                       collect (reg i 'unsigned-reg)))
+           (descriptor-framesize (* (length descriptor-registers)
+                                    n-word-bytes))
+           (float-registers (loop for i below 32
+                                  collect (reg i 'complex-double-reg))))
+      (macrolet  ((map-pairs (op base start offsets
+                              &key pre-index post-index
+                                   (delta 16))
+                    `(let ((offsets ,(if (eq op 'ldp)
+                                         `(reverse-pairs ,offsets)
+                                         offsets)))
+                       (loop with offset = ,start
+                             for first = t then nil
+                             for (a b . next) on offsets by #'cddr
+                             for last = (not next)
+                             do (inst ,op a b
+                                      (@ ,base (or (and first ,pre-index)
+                                                   (and last ,post-index)
+                                                   offset)
+                                               (cond ((and last ,post-index)
+                                                      :post-index)
+                                                     ((and first ,pre-index)
+                                                      :pre-index)
+                                                     (t
+                                                      :offset))))
+                                (incf offset ,delta)))))
+        (map-pairs stp nsp-tn 0 nl-registers :pre-index -80)
+        (map-pairs stp nsp-tn 0 float-registers :pre-index -512 :delta 32)
+        ;; Save the stack pointer here so we can use it as a new frame
+        ;; pointer for the GC to see, so it can read the return
+        ;; address and pin the calling code object.
+        (inst mov tmp-tn csp-tn)
+        ;; Spill all descriptors into the current frame.
+        (inst add csp-tn csp-tn (+ descriptor-framesize 32))
+        (inst stp cfp-tn lr-tn (@ csp-tn (- (+ descriptor-framesize 32))))
+        (map-pairs stp csp-tn (- descriptor-framesize) descriptor-registers)
+        ;; TMP-TN and CSP-TN at this point precisely demarcate the
+        ;; frame we just spilled into.
+        (inst stp tmp-tn csp-tn (@ thread-tn (* thread-control-frame-pointer-slot n-word-bytes)))
+        ;; The first argument is the os_context, which we don't use in
+        ;; this configuration, so we just leave a null pointer there.
+        (move nl0 zr-tn)
+        (invoke-foreign-routine "thread_in_lisp_raised" nl2)
+
+        (map-pairs ldp nsp-tn 480 float-registers :post-index 512 :delta -32)
+        (map-pairs ldp csp-tn -16 descriptor-registers :delta -16)
+        (inst ldr lr-tn (@ csp-tn (- (+ descriptor-framesize 24))))
+
+        ;; Deallocate the frame.
+        (inst sub csp-tn csp-tn (+ 32 descriptor-framesize))
+        (inst str zr-tn (@ thread-tn (* thread-control-stack-pointer-slot n-word-bytes)))
+
+        (map-pairs ldp nsp-tn 64 nl-registers :post-index 80 :delta -16)
+        (inst ret)))))
+
 (define-assembly-routine
     (undefined-tramp (:return-style :none))
     ()
