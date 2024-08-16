@@ -356,8 +356,11 @@
   (:temporary (:scs (non-descriptor-reg)) type)
   (:generator 38
     (emit-gengc-barrier fdefn nil lip)
+    #-pie-for-elf
     (inst add-sub lip function (- (* simple-fun-insts-offset n-word-bytes)
                                   fun-pointer-lowtag))
+    #+pie-for-elf
+    (loadw lip function simple-fun-self-slot fun-pointer-lowtag)
     (load-type type function (- fun-pointer-lowtag))
     (inst cmp type simple-fun-widetag)
     (inst b :eq SIMPLE-FUN)
