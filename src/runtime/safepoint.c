@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+#include <stdatomic.h>
+#endif
 #ifndef LISP_FEATURE_WIN32
 #include <sched.h>
 #endif
@@ -266,7 +269,7 @@ set_csp_from_context(struct thread *self, os_context_t *ctx)
      * disconcerting. */
     void **sp = (void **) access_control_stack_pointer(self);
 #endif
-    csp_around_foreign_call(self) = (lispobj) sp;
+    set_csp_around_foreign_call(self, (lispobj) sp);
 }
 
 
@@ -299,12 +302,45 @@ thread_blocks_gc(struct thread *thread)
 static inline bool
 set_thread_csp_access(struct thread* th, bool writable)
 {
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+    struct csp_slot* s = thread_csp_slot(th);
+    lispobj state;
+
+    do {
+        state = atomic_load_explicit(&s->state, memory_order_acquire);
+    } while (!atomic_compare_exchange_weak_explicit(
+                 &s->state, &state,
+                 writable ? (state & ~1) : (state | 1),
+                 memory_order_release, memory_order_acquire));
+    return (state & ~1) != 0;
+#else
     os_protect((char*)th - (THREAD_HEADER_SLOTS*N_WORD_BYTES) - THREAD_CSP_PAGE_SIZE,
                THREAD_CSP_PAGE_SIZE,
                writable? (OS_VM_PROT_READ|OS_VM_PROT_WRITE)
-               : (OS_VM_PROT_READ));
+                       : (OS_VM_PROT_READ));
     return csp_around_foreign_call(th) != 0;
+#endif
 }
+
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+void set_csp_around_foreign_call(struct thread *thread, lispobj value) {
+    struct csp_slot* s = thread_csp_slot(thread);
+    lispobj state;
+
+    do {
+        state = atomic_load_explicit(&s->state, memory_order_acquire);
+        if (state & 1) {
+            // Slow path: emulate page fault -> safety transition then retry
+            if (!foreign_function_call_active_p(thread))
+                lose("CSP trap in Lisp?");
+            thread_in_safety_transition(NULL);
+            continue; // retry after safe transition
+        }
+    } while (!atomic_compare_exchange_weak_explicit(
+                 &s->state, &state, value,
+                 memory_order_release, memory_order_acquire));
+}
+#endif
 
 static inline void gc_notify_early()
 {
@@ -688,7 +724,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
                 /* ??? Isn't this already T? */
                 write_TLS(GC_PENDING,LISP_T,self);
             }
-            csp_around_foreign_call(self) = 0;
+            set_csp_around_foreign_call(self, 0);
             check_gc_and_thruptions = 1;
         } else {
             /* This thread isn't a candidate for running the GC
@@ -709,7 +745,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
                     gc_advance(GC_NONE,gc_state.phase);
                 else
                     gc_state_wait(GC_NONE);
-                csp_around_foreign_call(self) = 0;
+                set_csp_around_foreign_call(self, 0);
                 check_gc_and_thruptions = 1;
             } else {
                 /* This thread has GC_INHIBIT set, meaning that it's
@@ -771,7 +807,7 @@ void thread_in_safety_transition(os_context_t *ctxptr)
                     gc_advance(GC_NONE,gc_state.phase);
                 else
                     gc_state_wait(GC_NONE);
-                csp_around_foreign_call(self) = 0;
+                set_csp_around_foreign_call(self, 0);
             } else {
                 /* This thread has GC_INHIBIT set, meaning that it's
                  * within a WITHOUT-GCING, so advance from wherever we
@@ -1018,9 +1054,9 @@ void thruption_handler(__attribute__((unused)) int signal,
 #endif
 
     /* In C code.  As a rule, we assume that running thruptions is OK. */
-    csp_around_foreign_call(self) = 0;
+    set_csp_around_foreign_call(self, 0);
     thread_in_lisp_raised(ctx);
-    csp_around_foreign_call(self) = (intptr_t) transition_sp;
+    set_csp_around_foreign_call(self, (intptr_t) transition_sp);
 }
 # endif
 
@@ -1039,7 +1075,10 @@ handle_safepoint_violation(os_context_t *ctx, os_vm_address_t fault_address)
     struct thread *self = get_sb_vm_thread();
 
     if (fault_address == (os_vm_address_t) GC_SAFEPOINT_TRAP_ADDR) {
-#ifndef LISP_FEATURE_NO_OS_PROTECT
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+        lose("Shouldn't get here!");
+#endif
+
 #ifdef LISP_FEATURE_C_STACK_IS_CONTROL_STACK
         /* We're on the altstack and don't want to run Lisp code. */
         arrange_return_to_c_function(ctx, handle_global_safepoint_violation, 0);
@@ -1050,12 +1089,13 @@ handle_safepoint_violation(os_context_t *ctx, os_vm_address_t fault_address)
         undo_fake_foreign_function_call(ctx);
 #endif
         return 1;
-#else
-        lose("Shouldn't get here!");
-#endif
     }
 
     if ((1+THREAD_HEADER_SLOTS)+(lispobj*)fault_address == (lispobj*)self) {
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+        lose("Shouldn't get here!");
+#endif
+
 #ifdef LISP_FEATURE_C_STACK_IS_CONTROL_STACK
         arrange_return_to_c_function(ctx, handle_csp_safepoint_violation, 0);
 #else

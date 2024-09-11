@@ -227,6 +227,27 @@
   (loop for i from 0 to 18 collect i)
   #'equal)
 
+#+(and sb-safepoint no-os-protect)
+(defun set-csp-around-foreign-call (type cfunc temp temp2)
+  ;; Both temp and temp2 are callee-saved.
+  (multiple-value-bind (name value)
+      (ecase type
+        (:before (values 'set-csp-before-foreign-call csp-tn))
+        (:after (values 'set-csp-after-foreign-call zr-tn)))
+    (assemble ()
+      (inst add-sub cfunc thread-tn (* thread-saved-csp-slot n-word-bytes))
+      TRY
+      (inst clrex)
+      (inst ldar temp cfunc)
+      (inst tbz temp 0 CAS-LOOP)
+      (invoke-asm-routine name temp2)
+      CAS-LOOP
+      (inst ldaxr temp2 cfunc)
+      (inst cmp temp temp2)
+      (inst b :ne TRY)
+      (inst stlxr (32-bit-reg tmp-tn) value cfunc)
+      (inst cbnz (32-bit-reg tmp-tn) CAS-LOOP))))
+
 (defun emit-c-call (vop nfp-save temp temp2 cfunc function)
   (let ((cur-nfp (current-nfp-tn vop)))
     (when cur-nfp
@@ -243,7 +264,11 @@
         ;; OK to run GC without stopping this thread from this point
         ;; on.
         #+sb-safepoint
-        (storew csp-tn thread-tn thread-saved-csp-slot)
+        (progn
+          #+no-os-protect
+          (set-csp-around-foreign-call :before cfunc temp temp2)
+          #-no-os-protect
+          (storew csp-tn thread-tn thread-saved-csp-slot))
         (cond ((stringp function)
                (invoke-foreign-routine function cfunc))
               (t
@@ -252,22 +277,27 @@
                  (sap-stack
                   (load-stack-offset cfunc cur-nfp function)))
                (inst blr cfunc)))
+        ;; No longer OK to run GC except at safepoints.
+        #+sb-safepoint
+        (progn
+          #+no-os-protect
+          (set-csp-around-foreign-call :after cfunc temp temp2)
+          #-no-os-protect
+          (storew zr-tn thread-tn thread-saved-csp-slot))
         ;; Blank all boxed registers that potentially contain Lisp
         ;; pointers, not just volatile ones, since GC could
         ;; potentially observe stale pointers otherwise.
         (loop for reg in (set-difference descriptor-regs
                                          ;; any-reg temporaries contain no pointers
                                          (list #-immobile-space r9-offset ;; invoke-foreign-routine doesn't touch it
-                                               r10-offset lexenv-offset))
+                                               #-no-os-protect r10-offset
+                                               #-no-os-protect lexenv-offset))
               do (inst mov
                        (make-random-tn
                         :kind :normal
                         :sc (sc-or-lose 'descriptor-reg)
                         :offset reg)
                        0))
-        ;; No longer OK to run GC except at safepoints.
-        #+sb-safepoint
-        (storew zr-tn thread-tn thread-saved-csp-slot)
         (storew zr-tn thread-tn thread-control-stack-pointer-slot))
       return
       #-sb-thread

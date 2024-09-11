@@ -321,8 +321,66 @@ GNAME(call_into_c):
 #endif
 
 #ifdef LISP_FEATURE_SB_SAFEPOINT
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+        // X0-x18 are caller-saved registers.
+
+        stp     x0,x1, [sp,#-360]!
+        stp     x2,x3, [sp,#16]
+        stp     x4,x5, [sp,#32]
+        stp     x6,x7, [sp,#48]
+        stp     x8,x9, [sp,#64]
+        stp     x10,x11, [sp,#80]
+        stp     x12,x13, [sp,#96]
+        stp     x14,x15, [sp,#112]
+        stp     x16,x17, [sp,#128]
+        stp     x18,x30, [sp,#144]
+
+        stp     d0,d1, [sp,#160]
+        stp     d2,d3, [sp,#176]
+        stp     d4,d5, [sp,#192]
+        stp     d6,d7, [sp,#208]
+        stp     d16,d17, [sp,#224]
+        stp     d18,d19, [sp,#240]
+        stp     d20,d21, [sp,#256]
+        stp     d22,d23, [sp,#272]
+        stp     d24,d25, [sp,#288]
+        stp     d26,d27, [sp,#304]
+        stp     d29,d30, [sp,#336]
+        str     d31, [sp,#352]
+
+        mov     x0, reg_THREAD
+        mov     x1, reg_CSP
+        bl      set_csp_around_foreign_call
+
+        // Restore registers.
+
+        ldr     d31, [sp,#352]
+        ldp     d29,d30, [sp,#336]
+        ldp     d26,d27, [sp,#304]
+        ldp     d24,d25, [sp,#288]
+        ldp     d22,d23, [sp,#272]
+        ldp     d20,d21, [sp,#256]
+        ldp     d18,d19, [sp,#240]
+        ldp     d16,d17, [sp,#224]
+        ldp     d6,d7, [sp,#208]
+        ldp     d4,d5, [sp,#192]
+        ldp     d2,d3, [sp,#176]
+        ldp     d0,d1, [sp,#160]
+
+        ldp     x18,x30, [sp,#144]
+        ldp     x16,x17, [sp,#128]
+        ldp     x14,x15, [sp,#112]
+        ldp     x12,x13, [sp,#96]
+        ldp     x10,x11, [sp,#80]
+        ldp     x8,x9, [sp,#64]
+        ldp     x6,x7, [sp,#48]
+        ldp     x4,x5, [sp,#32]
+        ldp     x2,x3, [sp,#16]
+        ldp     x0,x1, [sp],#360
+#else
 	/* OK to run GC without stopping this thread from this point on. */
 	str     reg_CSP, [reg_THREAD, THREAD_SAVED_CSP_OFFSET]
+#endif
 #endif
 
         // And call the C function.
@@ -354,9 +412,84 @@ GNAME(call_into_c):
 #endif
 
 # ifdef LISP_FEATURE_SB_SAFEPOINT
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+
+        // X0-x18 are caller-saved registers.
+
+        stp     x0,x1, [sp,#-360]!
+        stp     x2,x3, [sp,#16]
+        stp     x4,x5, [sp,#32]
+        stp     x6,x7, [sp,#48]
+        stp     x8,x9, [sp,#64]
+        stp     x10,x11, [sp,#80]
+        stp     x12,x13, [sp,#96]
+        stp     x14,x15, [sp,#112]
+        stp     x16,x17, [sp,#128]
+        stp     x18,x30, [sp,#144]
+
+        stp     d0,d1, [sp,#160]
+        stp     d2,d3, [sp,#176]
+        stp     d4,d5, [sp,#192]
+        stp     d6,d7, [sp,#208]
+        stp     d16,d17, [sp,#224]
+        stp     d18,d19, [sp,#240]
+        stp     d20,d21, [sp,#256]
+        stp     d22,d23, [sp,#272]
+        stp     d24,d25, [sp,#288]
+        stp     d26,d27, [sp,#304]
+        stp     d29,d30, [sp,#336]
+        str     d31, [sp,#352]
+
+        mov     x0, reg_THREAD
+        mov     x1, xzr
+        bl      set_csp_around_foreign_call
+
+        // Restore registers.
+
+        ldr     d31, [sp,#352]
+        ldp     d29,d30, [sp,#336]
+        ldp     d26,d27, [sp,#304]
+        ldp     d24,d25, [sp,#288]
+        ldp     d22,d23, [sp,#272]
+        ldp     d20,d21, [sp,#256]
+        ldp     d18,d19, [sp,#240]
+        ldp     d16,d17, [sp,#224]
+        ldp     d6,d7, [sp,#208]
+        ldp     d4,d5, [sp,#192]
+        ldp     d2,d3, [sp,#176]
+        ldp     d0,d1, [sp,#160]
+
+        ldp     x18,x30, [sp,#144]
+        ldp     x16,x17, [sp,#128]
+        ldp     x14,x15, [sp,#112]
+        ldp     x12,x13, [sp,#96]
+        ldp     x10,x11, [sp,#80]
+        ldp     x8,x9, [sp,#64]
+        ldp     x6,x7, [sp,#48]
+        ldp     x4,x5, [sp,#32]
+        ldp     x2,x3, [sp,#16]
+        ldp     x0,x1, [sp],#360
+
+        // Blank the boxed registers again, so GC doesn't lose.
+        mov     reg_R0, #0
+        mov     reg_R1, #0
+        mov     reg_R2, #0
+        mov     reg_R3, #0
+        mov     reg_R4, #0
+        mov     reg_R5, #0
+        mov     reg_R6, #0
+        mov     reg_R7, #0
+#ifndef LISP_FEATURE_DARWIN
+        mov     reg_R8,#0
+#endif
+#ifndef LISP_FEATURE_SB_THREAD
+        mov     reg_R11,#0
+#endif
+#else
 	/* No longer OK to run GC except at safepoints. */
 	str     xzr, [reg_THREAD, THREAD_SAVED_CSP_OFFSET]
 # endif
+#endif
 
 
         // Restore the Lisp stack and frame pointers
