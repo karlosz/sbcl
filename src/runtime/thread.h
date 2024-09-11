@@ -300,7 +300,17 @@ void wake_thread(struct thread_instance*),
      wake_thread_impl(struct thread_instance*);
 # endif
 
-#define csp_around_foreign_call(thread) *(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS))
+static inline lispobj csp_around_foreign_call(struct thread *thread) {
+    return *(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS));
+}
+
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+void set_csp_around_foreign_call(struct thread *thread, lispobj value);
+#else
+static inline void set_csp_around_foreign_call(struct thread *thread, lispobj value) {
+    *(((lispobj*)thread)-(1+THREAD_HEADER_SLOTS)) = value;
+}
+#endif
 
 static inline
 void push_gcing_safety(struct gcing_safety *into)
@@ -308,7 +318,7 @@ void push_gcing_safety(struct gcing_safety *into)
     struct thread* th = get_sb_vm_thread();
     asm volatile ("");
     into->csp_around_foreign_call = csp_around_foreign_call(th);
-    csp_around_foreign_call(th) = 0;
+    set_csp_around_foreign_call(th, 0);
     asm volatile ("");
 }
 
@@ -317,7 +327,7 @@ void pop_gcing_safety(struct gcing_safety *from)
 {
     struct thread* th = get_sb_vm_thread();
     asm volatile ("");
-    csp_around_foreign_call(th) = from->csp_around_foreign_call;
+    set_csp_around_foreign_call(th, from->csp_around_foreign_call);
     asm volatile ("");
 }
 

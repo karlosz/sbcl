@@ -446,7 +446,7 @@ init_new_thread(struct thread *th,
      * danger of deadlocking even with SIG_STOP_FOR_GC blocked (which
      * it is not). */
 #ifdef LISP_FEATURE_SB_SAFEPOINT
-    csp_around_foreign_call(th) = (lispobj)scribble;
+    set_csp_around_foreign_call(th, (lispobj)scribble);
 #endif
     __attribute__((unused)) int lock_ret = mutex_acquire(&all_threads_lock);
     gc_assert(lock_ret);
@@ -943,9 +943,17 @@ alloc_thread_struct(void* spaces) {
                                 + THREAD_HEADER_SLOTS*N_WORD_BYTES);
 
 #ifdef LISP_FEATURE_SB_SAFEPOINT
+#ifdef LISP_FEATURE_NO_OS_PROTECT
+    // XXX: The mutex fits, hopefully. The stuff like csp and guard
+    // words are at the end of the page.
+    pthread_mutex_t* mutex = (void*)csp_page;
+    pthread_mutex_init(mutex, 0);
+    *(((lispobj*)th)-(2+THREAD_HEADER_SLOTS)) = 1; // make "writable"
+#else
     // Out of caution I'm supposing that the last thread to use this memory
     // might have left this page as read-only. Could it? I have no idea.
     os_protect(csp_page, THREAD_CSP_PAGE_SIZE, OS_VM_PROT_READ|OS_VM_PROT_WRITE);
+#endif
 #endif
 
 #ifdef LISP_FEATURE_SB_THREAD

@@ -227,6 +227,11 @@
   (loop for i from 0 to 18 collect i)
   #'equal)
 
+#+no-os-protect
+(defun set-csp-around-foreign-call (value cfunc)
+  (inst mov tmp-tn value)
+  (invoke-asm-routine 'set-csp-around-foreign-call cfunc))
+
 (defun emit-c-call (vop nfp-save temp temp2 cfunc function)
   (let ((cur-nfp (current-nfp-tn vop)))
     (when cur-nfp
@@ -243,7 +248,11 @@
         ;; OK to run GC without stopping this thread from this point
         ;; on.
         #+sb-safepoint
-        (storew csp-tn thread-tn thread-saved-csp-slot)
+        (progn
+          #+no-os-protect
+          (set-csp-around-foreign-call csp-tn cfunc)
+          #-no-os-protect
+          (storew csp-tn thread-tn thread-saved-csp-slot))
         (cond ((stringp function)
                (invoke-foreign-routine function cfunc))
               (t
@@ -267,7 +276,11 @@
                        0))
         ;; No longer OK to run GC except at safepoints.
         #+sb-safepoint
-        (storew zr-tn thread-tn thread-saved-csp-slot)
+        (progn
+          #+no-os-protect
+          (set-csp-around-foreign-call zr-tn cfunc)
+          #-no-os-protect
+          (storew zr-tn thread-tn thread-saved-csp-slot))
         (storew zr-tn thread-tn thread-control-stack-pointer-slot))
       return
       #-sb-thread
