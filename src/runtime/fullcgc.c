@@ -285,6 +285,11 @@ void execute_full_mark_phase()
     trace_object((lispobj*)NIL_SYMBOL_SLOTS_START);
     scav_static_range((lispobj*)STATIC_SPACE_OBJECTS_START, static_space_free_pointer);
     scav_static_range((lispobj*)PERMGEN_SPACE_START, permgen_space_free_pointer);
+#ifdef PIECORE
+    extern lispobj component_boxed_space;
+    extern lispobj component_boxed_space_end;
+    scav_static_range(&component_boxed_space, &component_boxed_space_end);
+#endif
 #ifndef LISP_FEATURE_IMMOBILE_SPACE
     // if NO immobile-space, then text space is equivalent to static space
     scav_static_range((lispobj*)TEXT_SPACE_START, text_space_highwatermark);
