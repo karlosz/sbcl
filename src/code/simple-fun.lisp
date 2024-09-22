@@ -459,6 +459,19 @@
       (values (%primitive sb-c:compute-fun code-obj
                           (%code-fun-offset code-obj fun-index))))))
 
+(declaim (inline real-simple-fun))
+(defun real-simple-fun (x)
+  #+pie-for-elf
+  (if (functionp x) ; because of load-time-value
+      (if (> (ash (ldb (byte 24 sb-vm:n-widetag-bits)
+                       (function-header-word x))
+                  sb-vm:word-shift)
+             (code-object-size (fun-code-header x)))
+          (real-simple-fun-from-proxy x)
+          x)
+      x)
+  #-pie-for-elf x)
+
 ;;; Get the real simple fun from the proxy fun.
 #+pie-for-elf
 (defun real-simple-fun-from-proxy (fun)
