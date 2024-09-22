@@ -21,10 +21,11 @@
   ;; will be a closure with a specific shape that we can recognize.
   #-sb-xc-host
   (let ((f (%symbol-function (the symbol symbol))))
-    (and (closurep f) ; it's ok to call CLOSUREP on NIL
+    (declare (notinline real-simple-fun))
+    (and (closurep f)                ; it's ok to call CLOSUREP on NIL
          ;; Underlying function must be the same as any chosen special operator.
          ;; This will also be true of macros though.
-         (eq (load-time-value (%closure-fun (symbol-function 'if)) t)
+         (eq (real-simple-fun (load-time-value (%closure-fun (symbol-function 'if)) t))
              (%closure-fun f))
          ;; Closure's captured value is (:SPECIAL sym)
          (typep (%closure-index-ref f 0) '(cons (eql :special))))))
