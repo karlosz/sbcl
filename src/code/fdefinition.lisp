@@ -80,7 +80,7 @@
        ;; So pick DX-LET, as it's in primordial-extensions.
        ;; Prior to cold-init fixing up the load-time-value, this compares
        ;; %closure-fun to 0, which is ok - it returns NIL.
-       (eq (load-time-value (%closure-fun (symbol-function 'dx-let)) t)
+       (eq (%closure-fun (symbol-function 'dx-let))
            (%closure-fun function))))
 
 ;;; This is the implementation of (COERCE s 'function) when S is of type symbol
