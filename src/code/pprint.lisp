@@ -927,12 +927,13 @@ line break."
       (setf (pp-dispatch-number-matchable-p table) t))
     (if consp
         (let ((hashtable (pp-dispatch-cons-entries table)))
+          #-pie-for-elf
           (when (functionp hashtable)
             (let ((symbols)
                   (ppd-v)
                   (code (fun-code-header hashtable)))
               (loop for i from sb-vm:code-constants-offset
-                    below (code-header-words code)
+                      below (code-header-words code)
                     do (let ((const (code-header-ref code i)))
                          (when (simple-vector-p const)
                            (typecase (aref const 0)
@@ -1627,6 +1628,7 @@ line break."
                            (second magic-form)
                            most-negative-single-float))
     ;; Convert CONS-ENTRIES to a perfect hash.
+    #-pie-for-elf
     (let* ((alist (%hash-table-alist (pp-dispatch-cons-entries ppd)))
            (f (compile nil `(lambda (x) (cdr (assoc x ',alist))))))
       (setf (pp-dispatch-cons-entries ppd) f))
