@@ -294,8 +294,9 @@ be interned (returned, respectively) as required. The default is :SYMBOLS."
 (defun %dispatch-macro-char-table (fun)
   (and (closurep fun)
        (eq (%closure-fun fun)
-           (load-time-value (%closure-fun (%make-dispatch-macro-char nil))
-                            t))
+           (real-simple-fun
+            (load-time-value (%closure-fun (%make-dispatch-macro-char nil))
+                             t)))
        (find-if-in-closure #'consp fun)))
 
 ;;; Copy a char-macro-table entry.
