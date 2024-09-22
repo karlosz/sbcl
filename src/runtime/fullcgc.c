@@ -484,6 +484,9 @@ void execute_full_sweep_phase()
     memset(words_zeroed, 0, sizeof words_zeroed);
 #ifdef LISP_FEATURE_IMMOBILE_SPACE
     sweep_fixedobj_pages();
+    // We can't sweep the text ELF section, since its read-only on a
+    // PIECORE.
+#ifndef PIECORE
     sweep((lispobj*)TEXT_SPACE_START, text_space_highwatermark,
           (uword_t)words_zeroed);
     // Recompute generation masks for text space
@@ -495,6 +498,7 @@ void execute_full_sweep_phase()
         if (widetag_of(where) == CODE_HEADER_WIDETAG)
             text_page_genmask[find_text_page_index(where)]
                 |= (1 << immobile_obj_gen_bits(where));
+#endif
 #endif
     walk_generation(sweep_possibly_large, -1, (uword_t)words_zeroed);
     if (gencgc_verbose) {
