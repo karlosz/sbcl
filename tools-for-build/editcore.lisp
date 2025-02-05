@@ -150,7 +150,9 @@
   ;; The boxed space for all code components.
   (component-boxed-space (make-array 1000 :fill-pointer 0 :adjustable t))
   ;; The amount of space needed to hold all simple fun objects.
-  (simple-fun-space-size 0))
+  (simple-fun-space-size 0)
+  ;; A table of callbacks referenced in this core.
+  (callbacks))
 
 (defglobal *editcore-ppd*
   ;; copy no entries for macros/special-operators (flet, etc)

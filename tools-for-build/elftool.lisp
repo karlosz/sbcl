@@ -656,6 +656,48 @@ lisp_fun_linkage_space: .zero ~:*~D
         (format output "~%# end of lisp asm routines~2%")
         (+ skip obj-size)))))
 
+;;; Given the entry sap of the callback, return the size of the
+;;; callback.
+(defun callback-size (entry-sap)
+  (let ((size-raw
+          (sb-vm::sap-ref-word entry-sap
+                               (* n-word-bytes
+                                  (- sb-vm:vector-length-slot sb-vm:vector-data-offset)))))
+    (assert (evenp size-raw)) ; assert the raw word is a fixnum
+    ;; convert the raw word to a fixnum
+    (%make-lisp-obj size-raw)))
+
+(defun output-lisp-callbacks (core spacemap stream)
+  #-(and arm64 sb-thread)
+  (error "This code is arm64 specific.")
+  (let ((callbacks (core-callbacks core)))
+    (maphash
+     (lambda (entry-word index)
+       (declare (ignore index))
+       (format stream "~%#x~x:" entry-word)
+       (let* ((entry-sap (int-sap (translate-ptr entry-word spacemap)))
+              (callback-size (callback-size entry-sap))
+              (nop-p nil))
+         ;; The callback size is in bytes; we want to deal in chunks
+         ;; of 32-bit instructions.
+         (dotimes (i (floor callback-size 4))
+           (let ((instruction (sap-ref-32 entry-sap (* i 4)))
+                 (nop-inst #xD503201F))
+             ;; Use the nop pattern we injected into codegen to help
+             ;; us rewrite linkage into C correctly. What a hack!
+             (cond ((and (not nop-p)
+                         (= instruction nop-inst))
+                    (format stream "~% bl callback_wrapper_trampoline")
+                    (setq nop-p t))
+                   (nop-p
+                    (format stream "~% nop")
+                    (when (= instruction nop-inst)
+                      (setq nop-p nil)))
+                   (t
+                    (format stream "~% .word 0x~x"
+                            instruction)))))))
+     callbacks)))
+
 ;;; Return a list of ((NAME START . END) ...)
 ;;; for each C symbol that should be emitted for this code object.
 ;;; Start and and are relative to the object's base address,
@@ -1088,12 +1130,14 @@ lisp_fun_linkage_space: .zero ~:*~D
 ;;; The above techniques will reduce by a huge factor the number of fixups
 ;;; that need to be applied on startup of a position-independent executable.
 ;;;
-(defun collect-relocations (spacemap fixups pie &key (verbose nil) (print nil))
+(defun collect-relocations (spacemap fixups pie callbacks &key (verbose nil) (print nil))
   (let* ((code-bounds (space-bounds immobile-text-core-space-id spacemap))
+         (static-bounds (space-bounds static-core-space-id spacemap))
          (code-start (bounds-low code-bounds))
          (n-abs 0)
          (n-rel 0)
-         (affected-pages (make-hash-table)))
+         (affected-pages (make-hash-table))
+         (callback-space-size 0))
     (labels
         ((abs-fixup (vaddr core-offs referent)
            (incf n-abs)
@@ -1213,6 +1257,21 @@ lisp_fun_linkage_space: .zero ~:*~D
               (scanptrs vaddr obj 1 (1- (code-header-words obj))))
              (#.symbol-widetag ; HASH is a raw slot, skip it
               (scanptrs vaddr obj 2 (1- nwords)))
+             (#.sap-widetag
+              (let ((entry-word (sap-ref-word (int-sap (get-lisp-obj-address obj))
+                                              (- n-word-bytes other-pointer-lowtag))))
+                ;; Record SAP pointers to callback vectors and replace
+                ;; the pointer with the relative index into the
+                ;; callback space.
+                (when (in-bounds-p entry-word static-bounds)
+                  (setf (sap-ref-word (int-sap (get-lisp-obj-address obj))
+                                      (- n-word-bytes other-pointer-lowtag))
+                        (or (gethash entry-word callbacks)
+                            (prog1 (setf (gethash entry-word callbacks)
+                                         callback-space-size)
+                              (incf callback-space-size
+                                    (callback-size
+                                     (int-sap (translate-ptr entry-word spacemap))))))))))
              ;; other boxed objects that can reference code/simple-funs
              ((#.value-cell-widetag #.weak-pointer-widetag)
               (scanptrs vaddr obj 1 (1- nwords))))))
@@ -1272,8 +1331,9 @@ lisp_fun_linkage_space: .zero ~:*~D
           (static-consts-fixup-ofs 0)
           (space-list)
           (copy-actions)
-          (fixedobj-range) ; = (START . SIZE-IN-BYTES)
-          (relocs (make-array 100000 :adjustable t :fill-pointer 1)))
+          (fixedobj-range)              ; = (START . SIZE-IN-BYTES)
+          (relocs (make-array 100000 :adjustable t :fill-pointer 1))
+          (callbacks (make-hash-table)))
 
   (declare (ignorable fixedobj-range))
   ;; Remove old files
@@ -1408,12 +1468,12 @@ lisp_fun_linkage_space: .zero ~:*~D
       ;; Map the original core file to memory
       (with-mapped-core (sap core-offset original-total-npages input)
         (let* ((data-spaces
-                (delete immobile-text-core-space-id (reverse space-list)
-                        :key #'space-id))
+                 (delete immobile-text-core-space-id (reverse space-list)
+                         :key #'space-id))
                (spacemap (cons sap (sort (copy-list space-list) #'> :key #'space-addr)))
                (new-header (change-dynamic-space-size core-header dynamic-space-size))
                (pte-nbytes (cdar copy-actions)))
-          (collect-relocations spacemap relocs enable-pie)
+          (collect-relocations spacemap relocs enable-pie callbacks)
           (with-open-file (output elf-core-pathname
                                   :direction :output :if-exists :supersede
                                   :element-type '(unsigned-byte 8))
@@ -1486,6 +1546,7 @@ lisp_fun_linkage_space: .zero ~:*~D
                       pte-nbytes pte-nbytes (floor pte-nbytes 10)))
             (copy-bytes input output pte-nbytes)) ; Copy PTEs from input
           (let ((core (write-asm-file spacemap linkage-space-info asm-file enable-pie)))
+            (setf (core-callbacks core) callbacks)
             (format asm-file " .section .rodata~% .p2align 4~%lisp_fixups:~%")
             ;; Sort the hash-table in emit order.
             (dolist (x (sort (%hash-table-alist (core-new-fixups core)) #'< :key #'cdr))
@@ -1495,8 +1556,8 @@ lisp_fun_linkage_space: .zero ~:*~D
                (format asm-file "~% .section .data~%")
                (format asm-file " .globl ~A~%~:*~A:
  .quad ~d~%"
-                    (labelize "alien_linkage_values")
-                    (length (core-alien-linkage-symbols core)))
+                       (labelize "alien_linkage_values")
+                       (length (core-alien-linkage-symbols core)))
                ;; -1 (not a plausible function address) signifies that word
                ;; following it is a data, not text, reference.
                (loop for s across (core-alien-linkage-symbols core)
@@ -1532,7 +1593,16 @@ lisp_fun_linkage_space: .zero ~:*~D
                (format asm-file " .globl ~A~%.comm ~:*~A, ~D, ~D~%"
                        (labelize "simple_fun_space")
                        (core-simple-fun-space-size core)
-                       (* 2 n-word-bytes)))
+                       (* 2 n-word-bytes))
+               ;; write out the callback space
+               (format asm-file "~%.section .text~%")
+               (format asm-file ".align ~D~%" ;; double-word alignment
+                       (* 2 n-word-bytes))
+               (format asm-file " .globl callback_space~%callback_space:~%")
+               #+nil ; why does this cause shit to crash?
+               (format asm-file " .globl ~A~%~:*~A:~%"
+                       (labelize "callback_space"))
+               (output-lisp-callbacks core spacemap asm-file))
               (t
                (format asm-file "~% .section .rodata~%")
                (format asm-file " .globl anchor_junk~%")
