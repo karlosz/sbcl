@@ -125,3 +125,16 @@ funcall3(lispobj function, lispobj arg0, lispobj arg1, lispobj arg2)
     return call_into_lisp(function, args, 3);
 }
 #endif
+
+#if (defined(LISP_FEATURE_ARM64) && !defined(LISP_FEATURE_SB_THREAD))
+lispobj
+funcall_alien_callback(lispobj arg0, lispobj arg1, lispobj arg2)
+{
+    lispobj function = StaticSymbolFunction(ENTER_ALIEN_CALLBACK);
+    lispobj args[3];
+    args[0] = arg0;
+    args[1] = arg1;
+    args[2] = arg2;
+    return call_into_lisp(function, args, 3);
+}
+#endif
