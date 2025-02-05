@@ -539,6 +539,15 @@ static void fix_space(uword_t start, lispobj* end, struct heap_adjust* adj)
 
         // Other
         case SAP_WIDETAG:
+#ifdef PIECORE
+            {
+                // FIXME KLUDGE: Not all saved saps necessarily point
+                // into Lisp space! But then aren't they totally bogus
+                // anyway??
+                extern char callback_space;
+                FIXUP(where[1] = (lispobj)&((&callback_space)[where[1]]), where+1);
+            }
+#else
             if ((delta = calc_adjustment(adj, where[1])) != 0) {
                 fprintf(stderr,
                         "WARNING: SAP at %p -> %p in relocatable core\n",
@@ -546,6 +555,7 @@ static void fix_space(uword_t start, lispobj* end, struct heap_adjust* adj)
                 FIXUP(where[1] += delta, where+1);
             }
             continue;
+#endif
         default:
           if (other_immediate_lowtag_p(widetag) && leaf_obj_widetag_p(widetag))
               continue;

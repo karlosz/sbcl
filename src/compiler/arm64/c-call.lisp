@@ -486,11 +486,19 @@
         ;; arg2 to ENTER-ALIEN-CALLBACK (pointer to return value)
         (inst mov-sp r2-tn nsp-tn)
 
+        ;; FIXME: Worst hack invented ever: insert nops here so the
+        ;; elfinator knows where to start scanning and rewriting
+        ;; instructions so that we can call
+        ;; callback_wrapper_trampoline...
+        #+pie-for-elf
+        (inst nop)
         ;; Call
         (load-immediate-word r3-tn (foreign-symbol-address
                                     #-sb-thread "funcall_alien_callback"
                                     #+sb-thread "callback_wrapper_trampoline"))
         (inst blr r3-tn)
+        #+pie-for-elf
+        (inst nop)
 
         ;; Result now on top of stack, put it in the right register
         (cond
