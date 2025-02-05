@@ -552,6 +552,16 @@ static void fix_space(uword_t start, lispobj* end, struct heap_adjust* adj)
 
         // Other
         case SAP_WIDETAG:
+            // guess whether the SAP looks like it should be adjusted
+#ifdef PIECORE
+            {
+                // FIXME KLUDGE: Not all saved saps necessarily point
+                // into Lisp space! But then aren't they totally bogus
+                // anyway??
+                extern char callback_space;
+                FIXUP(where[1] = (lispobj)&((&callback_space)[where[1]]), where+1);
+            }
+#else
 #if defined LISP_FEATURE_X86_64
             if (((uint32_t*)where)[1]) { // high half of header != 0 ==> static-space-relative
                 FIXUP(where[1] = STATIC_SPACE_START + ((uint32_t*)where)[1],
@@ -567,6 +577,7 @@ static void fix_space(uword_t start, lispobj* end, struct heap_adjust* adj)
                 // FIXUP(where[1] += delta, where+1);
             }
             continue;
+#endif
         default:
           if (other_immediate_lowtag_p(widetag) && leaf_obj_widetag_p(widetag))
               continue;
