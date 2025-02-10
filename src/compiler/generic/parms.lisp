@@ -247,6 +247,8 @@
     ;; the C function is in a dynamic shared object or not)
     +required-foreign-symbols+
 
+    #+arm64 sb-alien::*alien-callback-functions*
+
     ;;; The following symbols aren't strictly required to be static
     ;;; - they are not accessed from C - but we make them static in order
     ;;; to (perhaps) micro-optimize access in Lisp.

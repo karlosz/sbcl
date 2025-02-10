@@ -3477,7 +3477,6 @@ static inline struct code* fun_code_header(struct simple_fun* fun) {
                                     *standard-output*))
 
              (when (eq name 'vector)
-               (output-c-primitive-obj (get-primitive-obj 'array))
                ;; This is 'sword_t' because we formerly would call fixnum_value() which
                ;; is a signed int, but it isn't really; except that I made all C vars
                ;; signed to avoid comparison mismatch, and don't want to change back.
@@ -4413,7 +4412,6 @@ static inline uword_t word_has_stickymark(uword_t word) {
                        ,(get-primitive-obj 'code)
                        ,(get-primitive-obj 'simple-fun)
                        ,(get-primitive-obj 'fdefn)
-                       ,(get-primitive-obj 'array)
                        ,@numeric-primitive-objects))
                (structs (sort (set-difference sb-vm:*primitive-objects* skip) #'string<
                               :key #'sb-vm:primitive-object-name)))

@@ -435,13 +435,15 @@
                    (incf arg-count))
                   (t
                    (bug "Unknown alien type: ~S" type)))))
-        ;; arg0 to ENTER-ALIEN-CALLBACK (trampoline index)
-        (inst mov r0-tn (fixnumize index))
-        ;; arg1 to ENTER-ALIEN-CALLBACK (pointer to argument vector)
+        ;; arg0: offset into the array data of
+        ;; *ALIEN-CALLBACK-FUNCTIONS*
+        (inst mov r0-tn (- (* n-word-bytes (+ vector-data-offset index))
+                           other-pointer-lowtag))
+        ;; arg1: pointer to argument vector
         (inst mov-sp r1-tn nsp-tn)
         ;; add room on stack for return value
         (inst sub nsp-tn nsp-tn (* n-word-bytes 2))
-        ;; arg2 to ENTER-ALIEN-CALLBACK (pointer to return value)
+        ;; arg2: pointer to return value
         (inst mov-sp r2-tn nsp-tn)
 
         ;; Call

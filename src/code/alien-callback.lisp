@@ -84,6 +84,7 @@
         (ceiling (alien-type-word-aligned-bits type) sb-vm:n-byte-bits)
         (error "Unsupported callback argument type: ~A" type))))
 
+#-arm64
 (defun enter-alien-callback (index arguments return)
   (declare (optimize speed (safety 0)))
   (funcall (truly-the function

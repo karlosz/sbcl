@@ -877,6 +877,11 @@ extern void funcall_alien_callback(lispobj arg1, lispobj arg2, lispobj arg0,
   __attribute__((sysv_abi));
 #endif
 
+#if defined(LISP_FEATURE_ARM64)
+extern void funcall_alien_callback(lispobj arg0, lispobj arg1, lispobj arg2,
+                                   struct thread* thread, lispobj *callback_functions);
+#endif
+
 /* This function's address is assigned into a static symbol's value slot,
  * so it has to look like a fixnum. lp#1991485 */
 void __attribute__((aligned(8)))
@@ -904,6 +909,8 @@ callback_wrapper_trampoline(lispobj arg0, lispobj arg1, lispobj arg2)
     {
 #if defined(LISP_FEATURE_X86_64) && !defined(LISP_FEATURE_WIN32)
         funcall_alien_callback(arg1, arg2, arg0, th);
+#elif defined(LISP_FEATURE_ARM64)
+        funcall_alien_callback(arg0, arg1, arg2, th, &SYMBOL(ALIEN_CALLBACK_FUNCTIONS)->value);
 #else
         funcall3(StaticSymbolFunction(ENTER_ALIEN_CALLBACK), arg0,arg1,arg2);
 #endif
