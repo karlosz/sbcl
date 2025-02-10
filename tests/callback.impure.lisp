@@ -117,15 +117,27 @@
 (define-alien-callable foo int ()
   26)
 
+;; Compatible redefinition just updates the underlying pointer.
+(assert (eq *old-foo* (alien-callable-function 'foo)))
+
 (multiple-value-bind (p valid) (sb-alien::alien-callback-p *old-foo*)
   (assert p)
-  (assert (not valid)))
+  (assert valid))
+
+(assert (= 26 (alien-funcall *old-foo*)))
+(assert (= 26 (alien-funcall (alien-callable-function 'foo))))
+
+(handler-bind ((error (lambda (c)
+                        (declare (ignore c))
+                        (continue))))
+  (define-alien-callable foo c-string ()
+    "blah"))
 
 (multiple-value-bind (res err)
     (ignore-errors (alien-funcall *old-foo*))
   (assert (and (not res) (typep err 'error))))
 
-(assert (= 26 (alien-funcall (alien-callable-function 'foo))))
+(assert (string= "blah" (alien-funcall (alien-callable-function 'foo))))
 
 ;;; callbacks with void return values
 
@@ -228,11 +240,14 @@
          (args (sb-int:make-gensym-list (length arg-types)))
          (typed-lambda-list (mapcar (lambda (type arg)
                                       (list arg type))
-                                    arg-types args)))
+                                    arg-types args))
+         (name (gensym "CALLBACK-ADDER-")))
     `(progn
+       (define-alien-callable ,name
+           ,(car types) ,typed-lambda-list
+         (+ ,@args))
        (defvar ,(intern (string-upcase fname))
-         (sb-alien::alien-lambda ,(car types) ,typed-lambda-list
-           (+ ,@args))))))
+         (alien-callable-function ',name)))))
 
 (with-test (:name :define-2-int-callback)
   (define-callback-adder int int int))

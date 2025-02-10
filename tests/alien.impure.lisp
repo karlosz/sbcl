@@ -209,9 +209,11 @@
                              (function unsigned-int
                                        (* (function int)) unsigned-int
                                        unsigned-int unsigned-int unsigned-int))
-               (alien-sap
-                (sb-alien::alien-lambda unsigned-int ()
-                  (go up)))
+               (progn
+                 (sb-alien:define-alien-callable test unsigned-int ()
+                   (go up))
+                 (alien-sap
+                   (alien-callable-function 'test)))
                0 0 0 0)
             up
               (funcall 0))

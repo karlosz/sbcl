@@ -13,10 +13,6 @@
 
 (use-package :sb-alien)
 
-;;; Callbacks are not part of the exported interface yet -- when they are this can
-;;; go away.
-(import 'sb-alien::alien-lambda)
-
 (defun run (program &rest arguments)
   (let* ((stringstream (make-string-output-stream))
          (proc (run-program program arguments
@@ -63,7 +59,10 @@
 
   (define-alien-routine stack-alignment-offset int (alignment int))
   #+alien-callbacks
-  (define-alien-routine trampoline int (callback (function int))))
+  (define-alien-routine trampoline int (callback (function int)))
+
+  (define-alien-callable callback int ()
+    (stack-alignment-offset *required-alignment*)))
 
 ;;;; Now get the offset by calling from lisp, first with a regular foreign function
 ;;;; call, then with an intervening callback.
@@ -74,8 +73,7 @@
 #+alien-callbacks
 (with-test (:name :callback)
   (assert (= *good-offset*
-             (trampoline (alien-lambda int ()
-                           (stack-alignment-offset *required-alignment*))))))
+             (trampoline (alien-callable-function 'callback)))))
 
 (ignore-errors (delete-file *exename*))
 (ignore-errors (delete-file *soname*))

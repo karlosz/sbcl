@@ -16,10 +16,6 @@
 
 (use-package :sb-alien)
 
-;;; Callbacks are not part of the exported interface yet -- when they are this can
-;;; go away.
-(import 'sb-alien::alien-lambda)
-
 ;;; XXX XXX this should change to use run-compiler.sh, now that we have it
 (defun run-compiler ()
   (let ((proc (run-program "gcc" '("win32-stack-unwind.c" "-shared"
