@@ -160,7 +160,8 @@ sb-kernel::
                       (let ((sb-c::*source-namestring* fullname)
                             (sb-c::*force-system-tlab*
                              (or (search "src/pcl" stem)
-                                 (search "src/code/aprof" stem)))
+                                 (search "src/code/aprof" stem)
+                                 (search "src/code/ntrace" stem)))
                             (sb-ext:*derive-function-types*
                               (unless (search "/pcl/" stem)
                                 t)))
