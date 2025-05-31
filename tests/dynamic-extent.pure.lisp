@@ -2357,10 +2357,7 @@
 (with-test (:name :auto-dx-xep-and-local-call.correct)
   (assert (equal (auto-dx-xep-and-local-call '(1)) 1)))
 
-;;; Morally similar to several xep references, just hidden under a
-;;; transitive local call.
-(with-test (:name :auto-dx-xep-and-local-call
-            :fails-on :sbcl)
+(with-test (:name :auto-dx-xep-and-local-call.stack-allocates)
   (assert-no-consing (auto-dx-xep-and-local-call '(1))))
 
 (defun auto-dx-xep-and-local-call-escape (set)
@@ -2380,3 +2377,21 @@
       (auto-dx-xep-and-local-call-escape '(1))
     (assert (equal value '(1 1)))
     (assert (not (sb-ext:stack-allocated-p fun)))))
+
+(defun auto-dx-xep-and-local-call.shared-flet-cleanup (set)
+  (let ((elt nil))
+    (flet ((add (e)
+             (setf elt e))
+           (visit (n)
+             n
+             elt))
+      (map nil #'add set)
+      (map nil #'visit set))
+    elt))
+
+(with-test (:name :auto-dx-xep-and-local-call.shared-flet-cleanup.correct)
+  (assert (equal (auto-dx-xep-and-local-call.shared-flet-cleanup '(1)) 1)))
+
+(with-test (:name :auto-dx-xep-and-local-call.shared-flet-cleanup.stack-allocates)
+  (assert-no-consing (auto-dx-xep-and-local-call.shared-flet-cleanup '(1))))
+
