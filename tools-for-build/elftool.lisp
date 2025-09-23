@@ -244,7 +244,13 @@
 ;;; known frame size, we can't do that based only on a disassembly.
 (defun emit-lisp-function (paddr vaddr count stream emit-cfi core &optional labels)
   (when emit-cfi
-    (format stream " .cfi_startproc~%"))
+    (format stream " .cfi_startproc~%")
+    #+arm64
+    (progn
+      (format stream " .cfi_def_cfa_register ~a~%" sb-vm::cfp-offset)
+      (format stream " .cfi_offset ~a, 0~%" sb-vm::cfp-offset)
+      ;; Off by one instruction technically.
+      (format stream " .cfi_offset ~a, 8~%" sb-vm::lr-offset)))
   ;; Any byte offset that appears as a key in the INSTRUCTIONS causes the indicated
   ;; bytes to be written as an assembly language instruction rather than opaquely,
   ;; thereby affecting the ELF data (cfi or relocs) produced.
