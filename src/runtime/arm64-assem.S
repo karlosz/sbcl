@@ -134,19 +134,7 @@ GNAME(call_into_lisp):
 
 	// Start by finding NIL.
 #ifdef LISP_FEATURE_RELOCATABLE_STATIC_SPACE
-#ifdef LISP_FEATURE_DARWIN
-        adrp    reg_NULL, _STATIC_SPACE_START@PAGE
-        ldr     reg_NULL, [reg_NULL, _STATIC_SPACE_START@PAGEOFF]
-#else
-#ifdef PIECORE
-        adrp    reg_NULL, :got:STATIC_SPACE_START
-        ldr     reg_NULL, [reg_NULL, #:got_lo12:STATIC_SPACE_START]
-        ldr     reg_NULL, [reg_NULL]
-#else
-        adrp    reg_NULL, STATIC_SPACE_START
-        ldr     reg_NULL, [reg_NULL, #:lo12:STATIC_SPACE_START]
-#endif
-#endif
+        LOAD_GNAME reg_NULL, STATIC_SPACE_START
         add     reg_NULL, reg_NULL, #NIL_VALUE_OFFSET
 #else
 	ldr	reg_NULL, =NIL
