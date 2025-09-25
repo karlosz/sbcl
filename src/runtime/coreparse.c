@@ -774,6 +774,13 @@ process_directory(int count, struct ndir_entry *entry,
 #endif
         // unprotect the pages
         os_protect((void*)TEXT_SPACE_START, text_space_size, OS_VM_PROT_ALL);
+
+#ifdef LISP_FEATURE_IMMOBILE_SPACE
+        // ELF core without immobile space has alien linkage space below static space.
+        ALIEN_LINKAGE_SPACE_START =
+            (uword_t)os_alloc_gc_space(ALIEN_LINKAGE_TABLE_CORE_SPACE_ID, 0, 0,
+                                       ALIEN_LINKAGE_SPACE_SIZE);
+#endif
     }
 #endif
 
