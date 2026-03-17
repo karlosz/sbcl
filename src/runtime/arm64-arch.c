@@ -181,22 +181,25 @@ void arch_do_displaced_inst(os_context_t *context, unsigned int orig_inst)
         bool b5 = (orig_inst >> 31) & 0b1;
         bool op = (orig_inst >> 24) & 0b1;
         bool b40 = (orig_inst >> 19) & 0b11111;
-        int bit_pos = (b5 << 6) | b40;
+        int bit_pos = (b5 << 5) | b40;
         int offset = sign_extend((orig_inst >> 5) & ~(1 << 14), 14);
         int rt = orig_inst & 0b11111;
-        if (!b5) lose("b5 must be 64 bits.");
         if (((*os_context_register_addr(context, rt) >> bit_pos) & 0b1) ^ op)
             next_pc += offset;
         else
             next_pc += 1;
     }
-    else if (((orig_inst >> 31) & 0b1) == 0b0) {
+    else if (((orig_inst >> 24) & 0b11111) == 0b11000) {
         // LDR (literal)
-        bool size_is_64 = (orig_inst >> 30) & 0b1;
+        int opc = (orig_inst >> 30) & 0b11;
         int rt = orig_inst & 0b11111;
         int offset = sign_extend((orig_inst >> 5) & ~(1 << 19), 19);
-        if (!size_is_64) lose("Size must be 64 bits.");
-        *os_context_register_addr(context, rt) = *((lispobj*)(pc + offset));
+        if (opc == 0b01)
+          *os_context_register_addr(context, rt) = *((uint64_t *)(pc + offset));
+        else if (opc == 0b00)
+          *os_context_register_addr(context, rt) = *((uint32_t *)(pc + offset));
+        else
+          lose("Unsupported LDR (literal) variant.");
         next_pc += 1;
     }
     else if (((orig_inst >> 24) & 0b11111) == 0b10000) {
