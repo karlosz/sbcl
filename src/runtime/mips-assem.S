@@ -330,11 +330,6 @@ symbol:
 	move	reg_OCFP, reg_CSP
 	addu	reg_CSP, 4
 	li	reg_NARGS, 4
-	move	reg_A1, reg_NIL
-	move	reg_A2, reg_NIL
-	move	reg_A3, reg_NIL
-	move	reg_A4, reg_NIL
-	move	reg_A5, reg_NIL
 
 multiple_value_return:
 

@@ -35,9 +35,6 @@ fun_end_breakpoint_guts:
         addi.d $r14, $r23, 0                       # move $ocfp $csp
         addi.d $r23, $r23, N_WORD_BYTES            # addi $cfp $cfp N_WORD_BYTES
         addi.d $r18, $r0, (1 << N_FIXNUM_TAG_BITS) # li   $nargs (1 << N_FIXNUM_TAG_BITS)
-        addi.d $r5, $r16, 0                        # move $a1 $NULL
-        addi.d $r6, $r16, 0                        # move $a2 $NULL
-        addi.d $r7, $r16, 0                        # move $a3 $NULL
 
 multiple_value_return:
 

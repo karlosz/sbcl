@@ -359,11 +359,6 @@ Low Address
 	/* Record the number of values we have as a FIXNUM. */
 	li reg_NARGS, 1<<N_FIXNUM_TAG_BITS
 
-	/* Blank the remaining arg-passing registers. */
-	mr reg_A1, reg_NULL
-	mr reg_A2, reg_NULL
-	mr reg_A3, reg_NULL
-
 fun_end_breakpoint_multiple_values:
 
 	/* The actual magic trap. */

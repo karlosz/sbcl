@@ -191,11 +191,6 @@ fun_end_breakpoint_guts:
 	mov	reg_CSP, reg_OCFP
 	add	4, reg_CSP, reg_CSP
 	mov	4, reg_NARGS
-	mov	reg_NULL, reg_A1
-	mov	reg_NULL, reg_A2
-	mov	reg_NULL, reg_A3
-	mov	reg_NULL, reg_A4
-	mov	reg_NULL, reg_A5
 1:
 
 	.global	fun_end_breakpoint_trap

@@ -31,11 +31,6 @@ fun_end_breakpoint_guts:
         mv  reg_OCFP, reg_CSP
         addi reg_CSP, reg_CSP, N_WORD_BYTES
         li reg_NARGS, (1 << N_FIXNUM_TAG_BITS)
-        mv reg_A1, reg_NULL
-        mv reg_A2, reg_NULL
-        mv reg_A3, reg_NULL
-        mv reg_A4, reg_NULL
-        mv reg_A5, reg_NULL
 
 Lmultiple_value_return:
 

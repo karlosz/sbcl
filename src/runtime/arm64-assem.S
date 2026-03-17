@@ -422,11 +422,6 @@ GNAME(fun_end_breakpoint_guts):
         /* Record the number of values we have as a FIXNUM. */
         mov reg_NARGS, (1 << N_FIXNUM_TAG_BITS)
 
-        /* Blank the remaining arg-passing registers. */
-        mov reg_R1, reg_NULL
-        mov reg_R2, reg_NULL
-        mov reg_R3, reg_NULL
-
 Lmultiple_value_return:
 
         .global	GNAME(fun_end_breakpoint_trap)
