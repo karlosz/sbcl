@@ -864,7 +864,8 @@
       (maybe-load-stack-tn cfp-tn fp)
       (note-this-location vop :call-site)
       (inst bl target)
-      (note-this-location vop :known-return)
+      (note-this-location vop :block-start ;:known-return
+                          )
       (when cur-nfp
         (load-stack-tn cur-nfp nfp-save)))))
 
@@ -1113,16 +1114,17 @@
                 (do-next-filler)
                 (return)))
 
-
-           (note-this-location vop :call-site)
+           ,(when (and named (not (eq return :tail)))
+              ;; Load CFP just before calling for better profiling.
+              `(move cfp-tn new-fp-tn))
+           (note-this-location vop ,(if (eq return :tail)
+                                        :tail-call-site
+                                        :call-site))
 
            ,(if named
                 (if (eq return :tail)
                     `(inst br lr)
-                    `(progn
-                       ;; Load CFP just before calling for better profiling.
-                       (move cfp-tn new-fp-tn)
-                       (inst blr lr)))
+                    `(inst blr lr))
                 (if (eq return :tail)
                     `(tail-call-unnamed lexenv lr fun-type)
                     `(call-unnamed lexenv lr fun-type new-fp-tn))))

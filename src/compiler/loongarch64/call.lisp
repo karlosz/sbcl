@@ -671,7 +671,9 @@
                (if filler
                    (do-next-filler)
                    (return)))
-             (note-this-location vop :call-site)
+             (note-this-location vop ,(if (eq return :tail)
+                                          :tail-call-site
+                                          :call-site))
              (inst addi.d lip function (- (ash simple-fun-insts-offset word-shift) fun-pointer-lowtag))
              (inst jirl ,(if (eq return :tail) 'zero-tn 'ra-tn) lip 0))
            ,@(ecase return

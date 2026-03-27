@@ -867,7 +867,9 @@
                (inst break single-step-around-trap))))
        DONE
 
-       (note-this-location vop :call-site)
+       (note-this-location vop ,(if (eq return :tail)
+                                    :tail-call-site
+                                    :call-site))
 
        (inst ,(if (eq return :tail) 'jmp 'call)
          ,(case named

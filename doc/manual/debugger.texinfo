@@ -941,10 +941,11 @@ Displays all the frames from the current to the bottom. Only shows
 
 SBCL supports setting of breakpoints inside compiled functions and
 stepping of compiled code.  Breakpoints can only be set at known
-locations (@pxref{Unknown Locations and Interrupts}), so these
-commands are largely useless unless the @code{debug} optimize quality
-is at least @code{2} (@pxref{Debugger Policy Control}).  These
-commands manipulate breakpoints:
+locations (@pxref{Unknown Locations and Interrupts}), so these commands
+are largely useless unless the @code{debug} optimize quality is high
+enough (@pxref{Debugger Policy Control}).  In addition, support is
+included for a stepper based on this breakpoint support.  These commands
+manipulate breakpoints:
 
 @deffn {Debugger Command} breakpoint @var{location} [@var{option} @var{value}]*
 Set a breakpoint in some function.  @var{location} may be an integer
@@ -987,11 +988,19 @@ is specified, delete all breakpoints.
 
 @deffn {Debugger Command} step*
 Step to the next possible breakpoint location in the current function.
-This always steps over function calls, instead of stepping into them
+This always steps over function calls, instead of stepping into
+them. When a call is stepped over, its return values are printed to
+standard output.
+@end deffn
+
+
+@deffn {Debugger Command} step-into*
+Step into a function which is about to be called in the current frame.
 @end deffn
 
 @menu
 * Breakpoint Example::
+* Stepping Example::
 @end menu
 
 @node  Breakpoint Example,  , Breakpoint Commands, Breakpoint Commands
@@ -1021,14 +1030,14 @@ restarts (invokable by number or by possibly-abbreviated name):
 ("varargs entry for top level local call BREAK" "break")
 0] ll #'!
 
-0-1: (SB-INT:NAMED-LAMBDA ! (N) (BLOCK ! (IF (ZEROP N) 1 (* N (! #)))))
-2: (BLOCK ! (IF (ZEROP N) 1 (* N (! (1- N)))))
-3: (ZEROP N)
+0: (SB-INT:NAMED-LAMBDA ! (N) (BLOCK ! (IF (ZEROP N) 1 (* N (! #)))))
+1: (BLOCK ! (IF (ZEROP N) 1 (* N (! (1- N)))))
+2-3: (ZEROP N)
 4: (* N (! (1- N)))
-5: (1- N)
-6: (! (1- N))
-7-8: (* N (! (1- N)))
-9-10: (IF (ZEROP N) 1 (* N (! (1- N))))
+5-6: (1- N)
+7-8: (! (1- N))
+9: (* N (! (1- N)))
+10: (IF (ZEROP N) 1 (* N (! (1- N))))
 0] br 4
 
 (* N (! (1- N)))
@@ -1052,8 +1061,24 @@ Source: (* N (! (1- N)))
 
 *Step*
 
-(! 10) ; We have finished evaluation of (1- n)
-Source: (1- N)
+About to call: (1- N)
+(! 10)
+   source: (1- N)
+3] step*
+
+The call (1- N) returned 9
+
+*Step*
+
+(! 10)
+   source: (1- N) ; We have finished evaluation of (1- n)
+3] step*
+
+*Step*
+
+About to call: (! (1- N))
+(! 10)
+   source: (! (1- N))
 3] step*
 
 *Breakpoint hit*
@@ -1065,16 +1090,115 @@ Restarts:
 Debug  (type H for help)
 
 (! 9) ; We hit the breakpoint in the recursive call
-Source: (* N (! (1- N)))
+   source: (* N (! (1- N)))
 3]
 @end example
 
-Note: The @command{step*} command differs from the single stepping
-commands in that it also functions in compiled code which has not been
-compiled with stepping instrumentation. It simply steps to the next
-compiled code location. In the future, this form of stepping may be
-improved enough to subsume the instrumentation based stepping commands,
-which have much higher overhead.
+In this example, note that the debugger lists two code location
+associated with a source-level function call: a call site location kind
+and a return location kind. Therefore, when stepping, the debugger stops
+when a function call is made and also stops immediately after the call
+is stepped over, allowing the user to inspect the state of the frame
+around a call with other debugger commands. Stepping over a function
+call will also cause the debugger to print the return values of the
+call.
+
+@node  Stepping Example,  , Breakpoint Commands, Breakpoint Commands
+@comment  node-name,  next,  previous,  up
+@subsection Stepping Example
+
+The breakpoint-based stepper can also be used in a stand-alone manner
+via the standard @code{step} macro. With the @command{step-into*}
+command, the debugger can step into any kind of callable function. This
+highlights one of the main differences between the breakpoint-based
+stepper and the single stepping commands. The breakpoint-based stepper
+also works for compiled code which has not been compiled with stepping
+instrumentation, and can step into functions which do not have global
+names. In the future, this form of stepping may completely supplant the
+instrumentation based stepping commands, which have much higher overhead
+and is more limited in some aspects.
+
+Consider this definition of the Fibonacci function:
+
+@lisp
+(defun fib (x)
+  (if (< x 2)
+      1
+      (+ (fib (1- x))
+         (fib (- x 2)))))
+@end lisp
+
+We can use @code{step} macro, which simply wraps its form in an
+anonymous lambda, in conjuction with the @command{step-into*} command to
+step into the function:
+
+@example
+* (step (fib 10)) ; invoke debugger in stepping mode.
+
+Stepping the form
+  (FIB 10)
+using the debugger.  Type HELP for help.
+
+*Step*
+
+("stepping lambda")
+   source: (SB-INT:NAMED-LAMBDA "stepping lambda"
+               NIL
+             (FIB 10))
+
+0] step*
+
+*Step*
+
+About to tail call: (FIB 10)
+("stepping lambda")
+   source: (FIB 10)
+
+0] step-into*
+
+*Step*
+
+(FIB 10)
+   source: (SB-INT:NAMED-LAMBDA FIB
+               (X)
+             (DECLARE (OPTIMIZE DEBUG))
+             (BLOCK FIB
+               (IF (< X 2)
+                   1
+                   (+ (FIB (1- X)) (FIB (- X 2))))))
+
+0] step*
+
+*Step*
+
+About to call: (< X 2)
+(FIB 10)
+   source: (< X 2)
+
+0] step*
+
+The call (< X 2) returned NIL.
+
+*Step*
+
+(FIB 10)
+   source: (< X 2)
+
+0] step*
+
+*Step*
+
+(FIB 10)
+   source: (+ (FIB (1- X)) (FIB (- X 2)))
+
+0] step*
+
+*Step*
+
+About to call: (1- X)
+(FIB 10)
+   source: (1- X)
+@end example
 
 @node  Function Tracing
 @comment  node-name,  next,  previous,  up

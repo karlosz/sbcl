@@ -135,6 +135,7 @@ Breakpoints and steps:
                                      Set a breakpoint.
     Abbreviations: BR, BP
   STEP* [n]                          Step to the next location or step n times.
+  STEP-INTO*                         Step into the function which is about to be called.
 
 Function and macro commands:
  (SB-DEBUG:ARG n)
@@ -169,7 +170,7 @@ Other commands:
 
 ;;; a list of the types of code-locations that should not be stepped
 ;;; to and should not be listed when listing breakpoints
-(define-load-time-global *bad-code-location-types* '(:call-site :internal-error))
+(define-load-time-global *bad-code-location-types* '(:internal-error))
 (declaim (type list *bad-code-location-types*))
 
 ;;; code locations of the possible breakpoints
@@ -183,7 +184,7 @@ Other commands:
 
 ;;; a list of BREAKPOINT-INFO structures of the made and active step
 ;;; breakpoints
-(define-load-time-global *step-breakpoints* nil)
+(defvar *step-breakpoints* nil)
 (declaim (type list *step-breakpoints*))
 
 ;;; the number of times left to step
@@ -360,6 +361,9 @@ Other commands:
   (setf *default-breakpoint-debug-fun*
         (sb-di:frame-debug-fun current-frame))
   (dolist (step-info *step-breakpoints*)
+    (print (list "deleting" step-info (describe (breakpoint-info-place step-info))
+                 (describe (breakpoint-info-breakpoint step-info))
+                 (describe (sb-di::breakpoint-internal-data (breakpoint-info-breakpoint step-info)))))
     (sb-di:delete-breakpoint (breakpoint-info-breakpoint step-info))
     (let ((bp-info (location-in-list step-info *breakpoints*)))
       (when bp-info
@@ -376,14 +380,26 @@ Other commands:
         (break)
         (condition)
         (string ""))
-    (setf *step-breakpoints* nil)
     (labels ((build-string (str)
                (setf string (concatenate 'string string str)))
              (print-common-info ()
                (build-string
                 (with-output-to-string (*standard-output*)
+                  (let* ((code-location (sb-di:frame-code-location current-frame))
+                         (kind (sb-di:code-location-kind code-location)))
+                    (when (memq kind '(:call-site :tail-call-site))
+                      (let ((d-fun (sb-di:frame-call-site-target current-frame)))
+                        (build-string (format nil "~%About to ~A ~A.~%"
+                                              (ecase kind
+                                                (:call-site "call")
+                                                (:tail-call-site "tail call"))
+                                              (sb-di:debug-fun-name d-fun)
+                                              #+nil
+                                              (frame-args-as-list current-frame
+                                                                  call-arguments-limit
+                                                                  d-fun))))))
                   (when fun-end-cookie
-                    (format *debug-io* "~%Return values: ~S" return-vals))
+                    (build-string (format nil "~%Return values: ~S" return-vals)))
                   (when condition
                     (when (breakpoint-info-print bp-hit-info)
                       (format *debug-io* "~%")
@@ -397,28 +413,27 @@ Other commands:
         (setf condition (funcall (breakpoint-info-condition bp-hit-info)
                                  current-frame)))
       (cond ((and bp-hit-info step-hit-info (= 1 *number-of-steps*))
-             (build-string (format nil "~&*Step (to a breakpoint)*"))
+             (build-string (format nil "~%*Step (to a breakpoint)*~%"))
              (print-common-info)
              (break string))
             ((and bp-hit-info step-hit-info break)
-             (build-string (format nil "~&*Step (to a breakpoint)*"))
+             (build-string (format nil "~%*Step (to a breakpoint)*~%"))
              (print-common-info)
              (break string))
             ((and bp-hit-info step-hit-info)
              (print-common-info)
              (format *debug-io* "~A" string)
-             (decf *number-of-steps*)
-             (set-step-breakpoint current-frame))
+             (set-step-breakpoint current-frame (1- *number-of-steps*)))
             ((and step-hit-info (= 1 *number-of-steps*))
-             (build-string (format nil "~&*Step*"))
+             (build-string (format nil "~%*Step*~%"))
+             (print-common-info)
              (format *debug-io* "~A" string)
              (%break 'break (make-condition 'step*-condition)))
             (step-hit-info
-             (decf *number-of-steps*)
-             (set-step-breakpoint current-frame))
+             (set-step-breakpoint current-frame (1- *number-of-steps*)))
             (bp-hit-info
              (when break
-               (build-string (format nil "~&*Breakpoint hit*")))
+               (build-string (format nil "~%*Breakpoint hit*")))
              (print-common-info)
              (if break
                  (break string)
@@ -429,33 +444,90 @@ Other commands:
 ;;; Set breakpoints at the next possible code-locations. After calling
 ;;; this, either (CONTINUE) if in the debugger or just let program flow
 ;;; return if in a hook function.
-(defun set-step-breakpoint (frame)
+;;;
+;;; We close over the current frame in the hook fun and check if the
+;;; invocation of the hook happens there in order to make stepping
+;;; re-entrant.
+;;;
+;;; When stepping over from a :CALL-SITE, a :FUN-END breakpoint is
+;;; also set so that the callee's return values are printed before the
+;;; next code-location breakpoint fires.
+(defun set-step-breakpoint (frame &optional (number-of-steps 1))
   (cond
    ((sb-di:debug-block-elsewhere-p (sb-di:code-location-debug-block
                                     (sb-di:frame-code-location frame)))
     (format *debug-io* "cannot step, in elsewhere code~%"))
    (t
     (let* ((code-location (sb-di:frame-code-location frame))
-           (next-code-locations (next-code-locations code-location)))
-      (cond
-       (next-code-locations
-        (dolist (code-location next-code-locations)
-          (let ((bp-info (location-in-list code-location *breakpoints*)))
-            (when bp-info
-              (sb-di:deactivate-breakpoint (breakpoint-info-breakpoint
-                                            bp-info))))
-          (let ((bp (sb-di:make-breakpoint #'main-hook-fun code-location
-                                           :kind :code-location)))
+           (next-code-locations (next-code-locations code-location))
+           (kind (sb-di:code-location-kind code-location))
+           (step-breakpoints '()))
+      (when (memq kind '(:call-site :tail-call-site))
+        (let* ((our-cookie nil)
+               (the-bp nil)
+               (cookie-fun
+                 (lambda (callee-frame cookie)
+                   (when (if (eq kind :tail-call-site)
+                             (sb-di::same-frame-p frame callee-frame)
+                             (sb-di::frame-calls-p frame callee-frame))
+                     (setf our-cookie cookie))
+                   ;; Always deactivate the starter to remove the trap
+                   ;; instruction.  This prevents re-entrant traps if
+                   ;; the breakpoint machinery itself calls the target
+                   ;; function.
+                   (sb-di:deactivate-breakpoint
+                    (sb-di::breakpoint-start-helper the-bp))))
+               (hook
+                 (lambda (frame bp &optional return-vals fun-end-cookie)
+                   (declare (ignore frame bp))
+                   (cond
+                     ((eq fun-end-cookie our-cookie)
+                      (format *debug-io* "~&The ~A returned ~{~S~^, ~}.~%"
+                              (ecase kind
+                                (:call-site "call")
+                                (:tail-call-site "tail call"))
+                              return-vals))
+                     (t
+                      ;; Wrong caller. Clear cookie and re-enable the
+                      ;; starter so the next entry gets a chance.
+                      (setf our-cookie nil)
+                      (sb-di:activate-breakpoint
+                       (sb-di::breakpoint-start-helper the-bp))))))
+               (d-fun (sb-di:frame-call-site-target frame)))
+          (when d-fun
+            (let ((bp (sb-di:make-breakpoint hook d-fun
+                                             :kind :fun-end
+                                             :fun-end-cookie cookie-fun)))
+              (setf the-bp bp)
+              (sb-di:activate-breakpoint bp)
+              (push (create-breakpoint-info d-fun bp 0)
+                    step-breakpoints)))))
+      (flet ((step-hook-fun (current-frame breakpoint &optional return-vals
+                                                                fun-end-cookie)
+               (when (sb-di::same-frame-p frame current-frame)
+                 (let ((*step-breakpoints* step-breakpoints)
+                       (*number-of-steps* number-of-steps))
+                   (main-hook-fun current-frame breakpoint
+                                  return-vals fun-end-cookie)))))
+        (cond
+         (next-code-locations
+          (dolist (code-location next-code-locations)
+            (let ((bp-info (location-in-list code-location *breakpoints*)))
+              (when bp-info
+                (sb-di:deactivate-breakpoint (breakpoint-info-breakpoint
+                                              bp-info))))
+            (let ((bp (sb-di:make-breakpoint #'step-hook-fun code-location
+                                             :kind :code-location)))
+              (sb-di:activate-breakpoint bp)
+              (push (create-breakpoint-info code-location bp 0)
+                    step-breakpoints))))
+         (t
+          (let* ((debug-fun (sb-di:frame-debug-fun frame))
+                 (bp (sb-di:make-breakpoint #'step-hook-fun debug-fun
+                                            :kind :fun-end)))
             (sb-di:activate-breakpoint bp)
-            (push (create-breakpoint-info code-location bp 0)
-                  *step-breakpoints*))))
-       (t
-        (let* ((debug-fun (sb-di:frame-debug-fun *current-frame*))
-               (bp (sb-di:make-breakpoint #'main-hook-fun debug-fun
-                                          :kind :fun-end)))
-          (sb-di:activate-breakpoint bp)
-          (push (create-breakpoint-info debug-fun bp 0)
-                *step-breakpoints*))))))))
+            (push (create-breakpoint-info debug-fun bp 0)
+                  step-breakpoints)))))))))
 
 (defun step-internal (function form)
   (when (typep function 'interpreted-function)
@@ -471,11 +543,15 @@ Other commands:
     (format *debug-io* "~2&Stepping the form~%  ~S~%" form)
     (format *debug-io* "~&using the debugger.  Type HELP for help.~2%"))
   (let* ((debug-function (sb-di:fun-debug-fun function))
-         (bp (sb-di:make-breakpoint #'main-hook-fun debug-function
+         (step-breakpoints '())
+         (bp (sb-di:make-breakpoint (lambda (frame breakpoint)
+                                      (let ((*step-breakpoints* step-breakpoints))
+                                        (main-hook-fun frame breakpoint)))
+                                    debug-function
                                     :kind :fun-start)))
     (sb-di:activate-breakpoint bp)
     (push (create-breakpoint-info debug-function bp 0)
-          *step-breakpoints*))
+          step-breakpoints))
   (funcall function))
 
 ;;; This is the entry point into the breakpoint stepping mechanism,
@@ -489,7 +565,7 @@ Other commands:
    so step will try to compile the resultant anonymous function.  If this
    fails, e.g. because it closes over a non-null lexical environment, an
    error is signalled."
-  `(step-internal #'(lambda () ,form) ',form))
+  `(step-internal (named-lambda "stepping lambda" () ,form) ',form))
 
 
 ;;;; BACKTRACE
@@ -858,10 +934,8 @@ information."
               (1+ x))))))))
 
 ;;; Extract the function argument values for a debug frame.
-(defun map-frame-args (thunk frame limit)
-  (let* ((debug-fun (sb-di:frame-debug-fun frame))
-         (limit (or (frame-arg-count frame)
-                    limit)))
+(defun map-frame-args (thunk frame limit &optional (debug-fun (sb-di:frame-debug-fun frame)))
+  (let ((limit (or (frame-arg-count frame) limit)))
     (unless (zerop limit)
       (dolist (element (sb-di:debug-fun-lambda-list debug-fun))
         (funcall thunk element)
@@ -901,7 +975,7 @@ information."
                      (sb-c:standard-arg-location-sc i)
                      escaped)))))
 
-(defun frame-args-as-list (frame limit)
+(defun frame-args-as-list (frame limit &optional (debug-fun (sb-di:frame-debug-fun frame)))
   (declare (type sb-di:frame frame)
            (type (and unsigned-byte fixnum) limit))
   ;;; All args are available if the function has not proceeded beyond its external
@@ -945,7 +1019,7 @@ information."
                         (return-from enumerating))
                       (push (make-unprintable-object "unavailable &MORE argument")
                             reversed-result)))))
-           frame limit))
+           frame limit debug-fun))
         (nreverse reversed-result))
     (sb-di:lambda-list-unavailable ()
       (make-unprintable-object "unavailable lambda list"))))
@@ -2104,10 +2178,42 @@ forms that explicitly control this kind of evaluation.")
 
 ;;; Step to the next code-location.
 (!def-debug-command "STEP*" ()
-  (setf *number-of-steps* (read-if-available 1))
-  (set-step-breakpoint *current-frame*)
+  (set-step-breakpoint *current-frame* (read-if-available 1))
   (continue *debug-condition*)
   (error "couldn't continue"))
+
+;;; Step into the function called at the current :call-site location.
+(!def-debug-command "STEP-INTO*" ()
+  (block nil
+    (let* ((code-location (sb-di:frame-code-location *current-frame*))
+           (kind (sb-di:code-location-kind code-location)))
+      (unless (memq kind '(:call-site :tail-call-site))
+        (format *debug-io* "~&No call to step into (use STEP* to advance ~
+to a call site first).~%")
+        (return))
+      (let ((d-fun (sb-di:frame-call-site-target *current-frame*)))
+        (cond (d-fun
+               (let ((step-breakpoints '())
+                     (call-frame *current-frame*))
+                 (flet ((step-into-hook-fun (frame breakpoint)
+                          (when (if (eq kind :tail-call-site)
+                                    (sb-di::same-frame-p call-frame frame)
+                                    (sb-di::frame-calls-p call-frame frame))
+                            (let ((*step-breakpoints* step-breakpoints))
+                              (main-hook-fun frame breakpoint)))))
+                   (let ((bp (sb-di:make-breakpoint #'step-into-hook-fun d-fun
+                                                    :kind :fun-start)))
+                     (sb-di:activate-breakpoint bp)
+                     (push (create-breakpoint-info d-fun bp 0) step-breakpoints)))))
+              (t
+               (unless d-fun
+                 (format *debug-io* "~&Couldn't resolve call target. ~
+Stepping over call instead.~%")
+                 (set-step-breakpoint *current-frame*))))
+        (continue *debug-condition*)
+        (error "couldn't continue")))))
+
+(!def-debug-command-alias "SI" "STEP-INTO*")
 
 ;;; List possible breakpoint locations, which ones are active, and
 ;;; where the CONTINUE restart will transfer control. Set

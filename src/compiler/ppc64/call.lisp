@@ -703,7 +703,7 @@
            ,@(if (eq return :tail)
                  '((inst mtlr return-pc-pass)
                    (inst mtctr entry-point)
-                   (note-this-location vop :call-site)
+                   (note-this-location vop :tail-call-site)
                    (inst bctr))
                  '((emit-alignment 3 :long-nop)
                    (inst mtctr entry-point)

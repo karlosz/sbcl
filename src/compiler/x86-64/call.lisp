@@ -865,7 +865,9 @@
          (inst jmp :e DONE)
          (inst break single-step-around-trap))
        DONE
-       (note-this-location vop :call-site)
+       (note-this-location vop ,(if (eq return :tail)
+                                    :tail-call-site
+                                    :call-site))
        ,(cond (named
                `(emit-direct-call fun ',(if (eq return :tail) 'jmp 'call)
                                   node step-instrumenting))

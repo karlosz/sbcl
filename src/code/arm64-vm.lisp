@@ -121,6 +121,26 @@
                               args))
                     trap-number))))))
 
+;;; Return the target of the call instruction in the current signal
+;;; context.
+(defun context-call-site-target (context)
+  (declare (type (alien (* os-context-t)) context))
+  (with-pinned-context-code-object (context)
+    (let* ((pc (context-pc context))
+           (instruction (sap-ref-32 pc 0)))
+      (cond ((= (ldb (byte 6 26) instruction) #b100101)
+             ;; B, BL: target = PC + sign_extend(imm26) * 4
+             (sap+ pc (* 4 (sb-disassem:sign-extend
+                            (ldb (byte 26 0) instruction)
+                            26))))
+            ((= (ldb (byte 7 25) instruction) #b1101011)
+             ;; BR, BLR: target = register Rn
+             (int-sap (context-register context
+                                        (ldb (byte 5 5) instruction))))
+            (t
+             (error "Unrecognized call instruction: ~x, pc: ~x"
+                    instruction pc))))))
+
 ;;; Undo the effects of XEP-ALLOCATE-FRAME
 ;;; and point PC to FUNCTION
 (defun context-call-function (context function &optional arg-count)

@@ -851,7 +851,7 @@
               (with-simple-restart (debugger-test-done! "Debugger Test Done!")
                 (let* ((*debug-io* (make-two-way-stream
                                     (make-string-input-stream control)
-                                    (make-broadcast-stream out #+nil *standard-output*)))
+                                    (make-broadcast-stream out *standard-output*)))
                        ;; Initial announcement goes to *ERROR-OUTPUT*
                        (*error-output* *debug-io*)
                        (*invoke-debugger-hook* nil))
@@ -967,28 +967,28 @@
    "0: (DEFUN ! (N)"
    "     (DECLARE (OPTIMIZE DEBUG))"
    "     (IF (ZEROP N)"
-   "         1"
-   "         (* N (! (1- N)))))"
-   "1: (ZEROP N)"
-   "2: (* N (! (1- N)))"
-   "3: (1- N)"
-   "4: (! (1- N))"
-   "5: (* N (! (1- N)))"
-   "6: (DEFUN ! (N)"
-   "     (DECLARE (OPTIMIZE DEBUG))"
-   "     (IF (ZEROP N)"
-   "         1"
-   "         (* N (! (1- N)))))"
-   "7: (IF (ZEROP N)"
-   "       1"
-   "       (* N (! (1- N))))"
+   "        1"
+   "        (* N (! (1- N)))))"
+   "1-2: (ZEROP N)"
+   "3: (* N (! (1- N)))"
+   "4-5: (1- N)"
+   "6-7: (! (1- N))"
+   "8-9: (* N (! (1- N)))"
+   "10: (DEFUN ! (N)"
+   "      (DECLARE (OPTIMIZE DEBUG))"
+   "      (IF (ZEROP N)"
+   "          1"
+   "          (* N (! (1- N)))))"
+   "11: (IF (ZEROP N)"
+   "        1"
+   "        (* N (! (1- N))))"
    "0]"))
 
 (with-test (:name (:debugger :breakpoint-and-step)
             :fails-on (:or :freebsd :arm :riscv))
   (test-debugger
    "ll #'!
-    br #.(progn (setq *ok-p* t) 2)"
+    br #.(progn (setq *ok-p* t) 3)"
    '(break)
    '*
    "debugger invoked"
@@ -1001,11 +1001,13 @@
    '*
    "(* N (! (1- N)))"
    '*
-   "1: 2 in !"
+   "1: 3 in !"
    "added"
    "0]")
   (test-debugger
    "step* 1
+    step* 1
+    step* 1
     step* 1
     debugger-test-done!"
    `(! 10)
@@ -1015,15 +1017,625 @@
    "(! 10)"
    "   source: (* N (! (1- N)))"
    "0]"
+   "*Step*"
+   ""
+   "About to call: (1- N)"
    "(! 10)"
    "   source: (1- N)"
    "0]"
+   "The call (1- N) returned 9."
+   ""
+   "*Step*"
+   ""
+   "(! 10)"
+   "   source: (1- N)"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (! (1- N))"
+   "(! 10)"
+   "   source: (! (1- N))"
    '*
    "*Breakpoint hit*"
    '*
    "(! 9)"
    "   source: (* N (! (1- N)))"
    "0]"))
+
+(defun step-test-callee (x)
+  (declare (optimize debug))
+  (+ x 1))
+
+(defun step-test-caller (x)
+  (declare (optimize debug))
+  (step-test-callee x)
+  x)
+
+(with-test (:name (:debugger :step*-call-site-display)
+            :fails-on (not :arm64))
+  (test-debugger
+   "ll #'step-test-caller
+    br #.(progn (setq *ok-p* t) :start)"
+   '(break)
+   '*
+   "debugger invoked"
+   '*
+   "0]"
+   '*
+   "0]"
+   "2: FUN-START in STEP-TEST-CALLER"
+   "added"
+   "0]")
+  (test-debugger
+   "step* 1
+    step* 1
+    debugger-test-done!"
+   '(step-test-caller 5)
+   '*
+   "*Breakpoint hit*"
+   '*
+   "(STEP-TEST-CALLER 5)"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (STEP-TEST-CALLEE X)"
+   "(STEP-TEST-CALLER 5)"
+   "   source: (STEP-TEST-CALLEE X)"
+   "0]"
+   "The call (STEP-TEST-CALLEE X) returned 6."
+   ""
+   "*Step*"
+   ""
+   "(STEP-TEST-CALLER 5)"
+   "   source: (STEP-TEST-CALLEE X)"
+   "0]"))
+
+(with-test (:name (:debugger :step-into*-enters-callee)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "ll #'step-test-caller
+    br #.(progn (setq *ok-p* t) :start)"
+   '(break)
+   '*
+   "debugger invoked"
+   '*
+   "0]"
+   '*
+   "0]"
+   "3: FUN-START in STEP-TEST-CALLER"
+   "added"
+   "0]")
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(step-test-caller 5)
+   '*
+   "*Breakpoint hit*"
+   '*
+   "(STEP-TEST-CALLER 5)"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (STEP-TEST-CALLEE X)"
+   "(STEP-TEST-CALLER 5)"
+   "   source: (STEP-TEST-CALLEE X)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP-TEST-CALLEE 5)"
+   "   source: (DEFUN STEP-TEST-CALLEE (X) (DECLARE (OPTIMIZE DEBUG)) (+ X 1))"
+   "0]"
+   "*Step"
+   ""
+   "About to call: (+ X 1)"
+   "(STEP-TEST-CALLEE 5)"
+   "   source: (+ X 1)"
+   "0]"
+   "The call (+ X 1) returned 6."
+   ""
+   "*Step*"
+   ""
+   "(STEP-TEST-CALLEE 5)"
+   "  source: (+ X 1)"
+   "0]"))
+
+(with-test (:name (:debugger :step-into*-not-at-call-site))
+  (test-debugger
+   "si
+    debugger-test-done!"
+   '(break)
+   '* "No call to step into"
+   '* "0]"))
+
+(defun fib (x)
+  (declare (optimize debug))
+  (if (< x 2)
+      1
+      (+ (fib (1- x))
+         (fib (- x 2)))))
+
+;; Check that recursive step breakpoints and recursvie
+;; :fun-end-breakpoints for showing return values work correctly.
+(with-test (:name (:debugger :step*-fib-test))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (fib 3))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (FIB 3)"
+   "(\"stepping lambda\")"
+   "   source: (FIB 3)"
+   "0]"
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (< X 2)"
+   "(FIB 3)"
+   "  source: (< X 2)"
+   "0]"
+   "The call (< X 2) returned NIL."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "  source: (< X 2)"
+   "0]"
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (1- X)"
+   "(FIB 3)"
+   "   source: (1- X)"
+   "0]"
+   "The call (1- X) returned 2."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (1- X)"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (FIB (1- X))"
+   "(FIB 3)"
+   "  source: (FIB (1- X))"
+   "0]"
+   "The call (FIB (1- X)) returned 2."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (FIB (1- X))"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (- X 2)"
+   "(FIB 3)"
+   "  source: (- X 2)"
+   "0]"
+   "The call (- X 2) returned 1."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (- X 2)"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (FIB (- X 2))"
+   "(FIB 3)"
+   "   source: (FIB (- X 2))"
+   "0]"
+   "The call (FIB (- X 2)) returned 1."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (FIB (- X 2))"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "(FIB 3)"
+   "   source: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "0]"
+   "The call (+ (FIB (1- X)) (FIB (- X 2))) returned 3."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "0]"))
+
+;;; Test that stepping over calls correctly displays multiple return
+;;; values.
+(defun step*-mv-callee ()
+  (declare (optimize debug))
+  (values 1 2 3))
+
+(defun step*-mv-test ()
+  (declare (optimize debug))
+  (step*-mv-callee)
+  t)
+
+(with-test (:name (:debugger :step*-multiple-values)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-mv-test))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (STEP*-MV-TEST)"
+   "(\"stepping lambda\")"
+   "   source: (STEP*-MV-TEST)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (STEP*-MV-CALLEE)"
+   "(STEP*-MV-TEST)"
+   "   source: (STEP*-MV-CALLEE)"
+   "0]"
+   "The call (STEP*-MV-CALLEE) returned 1, 2, 3."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source: (STEP*-MV-CALLEE)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source:"
+   '*
+   "0]"))
+
+;;; Test stepping into a local (FLET) function.
+(defun step*-local-fn (x)
+  (declare (optimize debug))
+  (flet ((add-one (y)
+           (declare (optimize debug))
+           (+ y 1)))
+    (add-one x)))
+
+(with-test (:name (:debugger :step*-local-function)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-local-fn 5))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (STEP*-LOCAL-FN 5)"
+   "(\"stepping lambda\")"
+   "   source: (STEP*-LOCAL-FN 5)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-LOCAL-FN 5)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (ADD-ONE X)"
+   "(STEP*-LOCAL-FN 5)"
+   "   source: (ADD-ONE X)"
+   "0]"
+   "*Step*"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (ADD-ONE (Y) (DECLARE (OPTIMIZE DEBUG)) (+ Y 1))"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (+ Y 1)"
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (+ Y 1)"
+   "0]"
+   "The call (+ Y 1) returned 6."
+   ""
+   "*Step*"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (+ Y 1)"
+   "0]"
+   "*Step*"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (ADD-ONE (Y) (DECLARE (OPTIMIZE DEBUG)) (+ Y 1))"
+   "0]"))
+
+;;; Test stepping through mutually recursive local functions.
+(defun step*-mutual (n)
+  (declare (optimize debug))
+  (labels ((my-evenp (x)
+             (declare (optimize debug))
+             (if (zerop x) t (my-oddp (1- x))))
+           (my-oddp (x)
+             (declare (optimize debug))
+             (if (zerop x) nil (my-evenp (1- x)))))
+    (my-evenp n)))
+
+(with-test (:name (:debugger :step*-mutual-recursion)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-mutual 6))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (STEP*-MUTUAL 6)"
+   "(\"stepping lambda\")"
+   "   source: (STEP*-MUTUAL 6)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (MY-EVENP N)"
+   "(STEP*-MUTUAL 6)"
+   "   source: (MY-EVENP N)"
+   "0]"
+   "The call (MY-EVENP N) returned T."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source: (MY-EVENP N)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source: (MY-EVENP N)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source:"
+   '*
+   "0]"))
+
+;;; Combined test: a local function returning multiple values with
+;;; MV-CALL.
+(defun step*-combined (x)
+  (declare (optimize debug))
+  (flet ((compute (y)
+           (declare (optimize debug))
+           (values y (* y 2) (* y 3))))
+    (multiple-value-call #'+ (compute x))))
+
+(with-test (:name (:debugger :step*-combined)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-combined 5))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (STEP*-COMBINED 5)"
+   "(\"stepping lambda\")"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (COMPUTE X)"
+   "(STEP*-COMBINED 5)"
+   "   source: (COMPUTE X)"
+   "0]"
+   "The call (COMPUTE X) returned 5, 10, 15."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (COMPUTE X)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (COMPUTE X)"
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "(STEP*-COMBINED 5)"
+   "   source: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "0]"
+   "About to call: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "(STEP*-COMBINED 5)"
+   "   source: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "0]"))
+
+(defun step-test-tail-called (x)
+  (+ x 1))
+
+(defun step-test-tail-calls (x)
+  (step-test-tail-called x))
+
+(defun step*-target-fn (z)
+  (declare (optimize debug))
+  (+ z 100))
+
+(defun step*-caller-of-arg (fn val)
+  (declare (optimize debug))
+  (funcall fn val))
+
+(with-test (:name (:debugger :step*-funcall-arg)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    si
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-caller-of-arg #'step*-target-fn 20))
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (STEP*-CALLER-OF-ARG #'STEP*-TARGET-FN 20)"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-CALLER-OF-ARG #'STEP*-TARGET-FN 20)"
+   "   source:"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to call: (FUNCALL FN VAL)"
+   "(STEP*-CALLER-OF-ARG #'STEP*-TARGET-FN 20)"
+   "   source: (FUNCALL FN VAL)"
+   "0]"
+   "*Step*"
+   ""
+   "(STEP*-TARGET-FN 20)"
+   "   source: (DEFUN STEP*-TARGET-FN (Z)"
+   '*
+   "0]"))
+
+(with-test (:name (:debugger :step-tail-calls)
+            :skipped-on (not :arm64))
+  (test-debugger
+   "ll #'step-test-tail-calls
+    br #.(progn (setq *ok-p* t) :start)"
+   '(break)
+   '*
+   "debugger invoked"
+   '*
+   "0]"
+   '*
+   "0]"
+   "2: FUN-START in STEP-TEST-TAIL-CALLS"
+   "added"
+   "0]")
+  (test-debugger
+   "step* 1
+    step* 1
+    debugger-test-done!"
+   '(step-test-tail-calls 5)
+   '*
+   "*Breakpoint hit*"
+   '*
+   "(STEP-TEST-TAIL-CALLS 5)"
+   '*
+   "0]"
+   "*Step*"
+   ""
+   "About to tail call: (STEP-TEST-TAIL-CALLED X)"
+   "(STEP-TEST-TAIL-CALLS 5)"
+   "   source: (STEP-TEST-TAIL-CALLED X)"
+   "0]"
+   "The tail call (STEP-TEST-TAIL-CALLED X) returned 6."))
 
 (with-test (:name (disassemble :high-debug-eval))
   (eval `(defun this-will-be-disassembled (x)

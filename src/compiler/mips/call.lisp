@@ -807,7 +807,9 @@ default-value-8
                  (return)))
 
            (do-next-filler)
-           (note-this-location vop :call-site)
+           (note-this-location vop ,(if (eq return :tail)
+                                        :tail-call-site
+                                        :call-site))
            ,@(if (eq return :tail)
                  '((inst j entry-point))
                  '((inst jal return-pc-pass entry-point)))

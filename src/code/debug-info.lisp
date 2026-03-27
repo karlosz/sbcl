@@ -61,7 +61,7 @@
 
 (defconstant-eqx compiled-code-location-kind-byte (byte 3 0) #'equalp)
 (defconstant-eqx +compiled-code-location-kinds+
-    #(:unknown-return :known-return :internal-error :non-local-exit
+    #(:unknown-return :tail-call-site :internal-error :non-local-exit
       :block-start :call-site :single-value-return :non-local-entry)
   #'equalp)
 

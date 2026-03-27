@@ -45,6 +45,8 @@ unsigned int breakpoint_install(lispobj code_obj, int pc_offset)
 void breakpoint_remove(lispobj code_obj, int pc_offset,
                        unsigned int orig_inst)
 {
+  printf("removing breakpoint %p, %i", code_obj, pc_offset);
+  fflush(stdout);
     arch_remove_breakpoint(compute_pc(code_obj, pc_offset), orig_inst);
 }
 

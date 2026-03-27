@@ -763,7 +763,9 @@ default-value-8
                  (do-next-filler)
                  (return)))
 
-           (note-this-location vop :call-site)
+           (note-this-location vop ,(if (eq return :tail)
+                                        :tail-call-site
+                                        :call-site))
            ,@(if (eq return :tail)
                  '((inst j function
                     (- (ash simple-fun-insts-offset word-shift) fun-pointer-lowtag)))

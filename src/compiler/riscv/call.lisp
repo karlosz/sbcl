@@ -701,7 +701,9 @@
                    (do-next-filler)
                    (return)))
 
-             (note-this-location vop :call-site)
+             (note-this-location vop ,(if (eq return :tail)
+                                          :tail-call-site
+                                          :call-site))
              (inst jalr ,(if (eq return :tail)
                              'zero-tn
                              'ra-tn)
