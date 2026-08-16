@@ -372,6 +372,7 @@
  ("src/compiler/locall")
  ("src/compiler/ir1opt")
  ("src/compiler/loop")
+ ("src/compiler/ssa")
 
  ("src/compiler/constraint")
  ("src/compiler/equality-constraints")

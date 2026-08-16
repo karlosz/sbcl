@@ -2323,6 +2323,8 @@
          (refs (delq1 ref (leaf-refs leaf)))
          (home (node-home-lambda ref)))
     (setf (leaf-refs leaf) refs)
+    (when (and *ssa-convert* (lambda-var-p leaf))
+      (note-ssa-candidate leaf))
     (when (and (typep leaf '(or clambda lambda-var))
                (not (find home refs :key #'node-home-lambda)))
       ;; It was the last reference from this lambda, remove it
@@ -2335,7 +2337,8 @@
           (lambda-var (reoptimize-lambda-var leaf)))
         (typecase leaf
           (lambda-var
-           (delete-lambda-var leaf))
+           (unless (debug-kept-var-p leaf)
+             (delete-lambda-var leaf)))
           (clambda
            (functional-kind-ecase leaf
              ((nil let mv-let assignment escape cleanup)
@@ -3621,6 +3624,32 @@ is :ANY, the function name is not checked."
 (defun debug-var-origin (var)
   (or (lambda-var-origin var) var))
 
+;;; True if this variable should be live over its whole environment
+;;; for the debugger.
+(defun debug-environment-var-p (var)
+  (declare (type lambda-var var))
+  (let* ((home (lambda-var-home var))
+         (node (lambda-bind home)))
+    (not (policy node (or
+                       (and (neq home (lambda-home home)) (< debug 3))
+                       (or (zerop debug)
+                           (= speed 3)))))))
+
+;;; True if the debugger wants the value of VAR even when nothing
+;;; reads it: SSA conversion split a variable into several, and VAR is
+;;; one of them, or the one they hold the values of, whose home still
+;;; is that of a debug variable, or whose policy says debug 3, whatever
+;;; the speed. The function binding it may have become a LET since it
+;;; was split, as of a MULTIPLE-VALUE-BIND, in which case only the
+;;; policy keeps its values.
+(defun debug-kept-var-p (var)
+  (declare (type lambda-var var))
+  (let ((origin (lambda-var-origin var)))
+    (and origin
+         (or (debug-environment-var-p origin)
+             (policy (lambda-bind (lambda-var-home origin))
+                 (= debug 3))))))
+
 ;;; Don't substitute single-ref variables on high-debug / low speed,
 ;;; to improve the debugging experience, unless it is a special
 ;;; variable or a temporary variable used for hairy function entries.
@@ -3636,6 +3665,7 @@ is :ANY, the function name is not checked."
            (not (and (combination-p node)
                      (typep (leaf-debug-name (combination-lambda node))
                             '(cons (member hairy-function-entry) t)))))))
+
 
 ;;; Call (lambda (arg lambda-var type)), for a mv-combination ARG can
 ;;; be NIL when it produces multiple values.
@@ -4364,18 +4394,6 @@ is :ANY, the function name is not checked."
        (loop for d in x
              always (or (typep d 'index)
                         (eq d '*)))))
-(defun delete-set (set)
-  (let ((var (set-var set)))
-    (setf (lambda-var-sets var)
-          (delq1 set (lambda-var-sets var)))
-    (map-all-uses (lambda (node)
-                    (when (combination-p node)
-                      (setf (combination-info node) :important-result-discarded)))
-                  (set-value set)
-                  :sets t)
-    (remove-lvar-dx (set-value set))
-    (filter-lvar (set-value set) (lambda (x) `(let ((v ,x)) v)))
-    (delete-filter set (node-lvar set) (set-value set))))
 
 (defun transform-to-identity (nth-arg node n-args)
   (let ((vars (make-gensym-list n-args)))

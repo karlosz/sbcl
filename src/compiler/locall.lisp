@@ -68,7 +68,8 @@
                           (if (functional-kind-eq fun optional)
                               (make-local-call-context fun name)
                               name)))
-      (unless (leaf-refs var)
+      (unless (or (leaf-refs var)
+                  (lambda-var-origin var))
         (flush-dest (car args))
         (setf (car args) nil))))
 
@@ -416,6 +417,8 @@
 ;;; deletion of a function reference, but functions that start out
 ;;; eligible for conversion must be noticed sometime.
 ;;;
+;;; In addition, local call conversion triggers SSA conversion.
+;;;
 ;;; Note that there is a lot of action going on behind the scenes
 ;;; here, triggered by reference deletion. In particular, the
 ;;; COMPONENT-LAMBDAS are being hacked to remove newly deleted and LET
@@ -450,6 +453,8 @@
                (when (lambda-p fun)
                  (or (maybe-let-convert fun component)
                      (maybe-convert-to-assignment fun))))))))
+  (when *ssa-convert*
+    (ssa-convert-component component))
   (values))
 
 (defun locall-analyze-clambdas-until-done (clambdas)

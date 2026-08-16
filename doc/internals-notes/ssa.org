@@ -1,0 +1,342 @@
+This file documents the design/motivation/history/overview
+retrospective of the SSA conversion pass added to the Python compiler.
+
+
+This document, in particular the first section, is written in a
+stream-of-consciousness brain dump style, so beware.
+
+* History of this work/inspiration
+
+I (Charles Zhang) have been thinking about how to add SSA to SBCL for
+a while now, since early 2020, long before LLMs came to rule the
+world. Actually, the beginnings of such SSAable ideations go back much
+further and were documented in ram's old personal notes on cmucl. If
+you do some software archeology and read the internals notes as well
+as his compiler work log available publicly in his user directory on
+ftp at cmu, you can see that he was already investigating SSA when it
+came out in 1991 by Zadeck et al and thinking about how to incorporate
+in the Python compiler. In fact, this work inspired him to add the
+concept of an :assignment lambda based on the realization that phis in
+SSA are precisely local calls. :assignment lambdas simply remove the
+higher order control flow reasoning derived from return calls (which
+push unknown return addresses on the stack, thereby making the
+continuation of a function non-constant). Converting to :assignment
+lambdas corresponds to the idea of contification [fn:See
+e.g. Contification via dominators by Fluet and Weeks (2001)] done by
+the MLTon people, by the way. Before ram was able to implement SSA
+conversion in Python and incorporate it into IR1, he began to work on
+Dylan and converted his ideas for Dylan. In his notes are also the
+beginnings of thoughts of incremental promotion of SSAable variables -
+converting lambda vars and their sets directly to SSA form all at once
+at conversion is suboptimal in a higher order language with closures
+because closure variables cannot be promoted to SSA scalars, as they
+require memory. However, closure vars can get promoted to scalars when
+e.g. the variables lose sets or refs due to optimizations or a
+function is discovered to no longer need its own environment due to
+let or assignment conversion. In these cases the variables need to be
+requeued as being eligible for SSA conversion. In fact, it seems this
+was on the drawing board for the dylan compiler as part of the Gwydion
+project but funding was pulled and these ideas never really got
+materialized/implemented, leaving cmu cl with the SSA-less IR we know
+today, but with support for assignment lambdas and a primitive form of
+contification.
+
+This work is mostly a direct continuation of those early thoughts on
+SSA aided by my own ideas coming from e.g. the Hack paper from 2010 on
+incremental SSA construction which did not exist in the 90's, where
+the standard SSA construction algorithm was by doing dominance
+frontier computations. In fact, my first implementation attempts which
+started in late 2022/early 2023 were still based on dominance
+frontiers. However, it requires full dominance frontier recomputations
+every time the flow graph changes between variable conversions and is
+not resilient to out-of-date DFO computations. The incremental
+approach is much better for converting SSA variable by variable and
+between optimization phases.
+
+My early prototypes also did not embrace :assignment lambdas fully,
+opting to try and do a hybrid reaching definitions structures (for
+example storing the definitions on the refs and having optimizations
+query that) to avoid making distinct lambda vars that would confuse
+the debugger. My reasoning at the time was that we might be able to
+get the benefits without complicating the debuggers assumption (and
+actually IR2 machinery in general). However, that loses out on a lot
+of the benefits of SSA. By instead converting more faithfully to SSA
+and using assignment lambdas, we have a couple benefits:
+
+- def-use chains just become queries on existing lambda var slots
+  (refs and home/bind), working well with existing ir1opt utils.
+- Flushing dead initial values (OPTIMIZATIONS entry #3) falls out for
+  free as part of the existing dead code flushing machinery in ir1opt.
+- We can choose different representations and embrace things
+  live-range splitting without conflating them all together in one
+  variable.
+- SSA truly just becomes a canonicalization pass - code written in a
+  functional style (thinking iterative loops written with mutually
+  recursive LABELS) are represented in IR1 exactly as imperative code
+  is. This is basically the biggest benefit that also undelies the
+  other above listed benefits. hence, we only need to focus on
+  optimizers for this kind of assignment lambda style functional code
+  and it carries over immediately to SSA form (because it *is* just
+  functional style in the IR). [fn:Reading SSA is functional
+  programming by Appel is a good reference, although its equivalencies
+  of CPS and SSA are a bit outdated, see MLTon discussions for why
+  they switched from CPS to SSA. IR1 doesn't fit cleanly in that
+  category anyway since its always been CPS in a flowgraph a.k.a SS
+  a.k.a SSA with mutable assignment...].
+
+To enable this style of representation however we needed to teach the
+debugger how to handle source variables whose values are distributed
+across different SSA lambda vars. Care also needed to be taken in IR2
+phases such as pack and representation selection to handle the things
+mainstream people usually consider as issues belonging to
+"out-of-SSA". These were good things to fix and generalize even
+without SSA support, since things like live-range splitting are what
+good modern register allocators do.
+
+While the current work basically adds and exposes SSA to IR1, IR2 is
+still what it always was before, a sort of out-of-SSA more primitive
+C-like IR. It could maybe also be made to be SSA style or at least
+reuse the analyses from IR1 somehow. That could help with e.g. things
+like register allocation which can be done more optimally on SSA
+form. [fn:SSA-form programs are well known to have chordal
+interference graphs which can be colored in polynomial time].
+
+* The details, motivation
+This section describes more precisely what SSA in SBCL even means and
+how it currently fits into IR1.
+
+IR1 is essentially CPS-in-a-flowgraph. It would pretty much already be
+in SSA form if it weren't for that fact that lambda vars can be
+assigned via SETQ in the IR. Because lambda vars can also be closed
+over, SSA conversion is not as straightforward as just running a
+conversion algorithm on IR1 translation time. Therefore, we
+incrementally try to convert lambda vars when optimizing and
+converting local calls and remove their SET nodes as we discover that
+they are not closed over and hence eligible for SSA conversion in the
+course of IR1 optimization.
+
+IR1 does not in fact need any new constructs to represent phi nodes in
+IR1. It is well known that SSA can alternatively be written down as
+basic block with arguments. However, we don't need to do that
+either. Because of the clever way that lambdas are implicitly
+represented in IR1 as simply regions of the CFG which can have their
+higher order semantics demoted via let/assignment conversion, we can
+represent phis as simply local calls with arguments to assignment
+lambdas binding fresh variables. An assignment lambda is just a lambda
+where the compiler has proven that it always returns to the same place
+and hence needs no return instruction - its return is just statically
+represented in the CFG as normal first-order control flow. Tail calls
+to the assignment lambda are also linked directly into the CFG as
+normal control flow edges, and the argument passing handles the
+parallel assignment semantics of phi. IR2 translation basically
+converts such local calls to assignment lambdas as psetq moves, since
+again, call instructions are not needed since the continuation of the
+lambda (read, "return pc") is always fixed. SSA conversion essentially
+does the following source to source transformation:
+
+#+BEGIN_SRC lisp
+  (defun f (x y)
+    (if y
+        (setq x 4)
+        (setq x 6))
+    x)
+
+  =>
+
+  (defun f (x y)
+    (flet ((phi (x1)
+             x1))
+      (if y
+          (phi 4)
+          (phi 6))))
+#+END_SRC
+
+Of course, we don't actually make this source to source
+transformation: SSA conversion just massages the IR of the first
+version of the function directly into assignment lambdas in the CFG
+without higher order control flow (the return pc pushing and popping
+semantics).
+
+Assignment conversion (a.k.a. contification) is responsible for
+massaging the IR of the second version, which is initially represented
+in IR1 as a normal lambda complete with return pc pushing and popping
+nodes (call and return) into the assignment lambda version where the
+return node goes away and the call nodes become tail calls whose only
+responsibility is to do a MOVE and a JMP instead of frobbing return
+pcs.
+
+This is the sense in which SSA conversion is essentially a
+canonicalizing transform: SETQ nodes on non-closed over variables go
+away and instead we have assignment lambdas which are used to
+efficiently compile certain FLET and LABELS patterns anyway.
+
+Let's look at a more complicated example: Converting an imperative
+loop.
+
+#+BEGIN_SRC lisp
+  (defun fact (n)
+    (let ((res 1))
+      (loop
+        (unless (plusp n)
+          (return res))
+        (setq n (1- n))
+        (setq res (* res n)))))
+
+  =>
+
+  (defun fact (n)
+    (let ((res 1))
+      (labels ((phi (n0 res0)
+                 (if (plusp n0)
+                     (phi (1- n0) (* res0 n))
+                     res)))
+        (phi 1 n))))
+#+END_SRC
+
+Here you can see the correspondence of phis in traditional SSA and
+basic block arguments/local call lambdas. With SSA conversion, the
+first version is represented in IR1 exactly the same as the second
+version (after assignment conversion is done on the second version).
+
+Another thing: SETQ as a form also has value semantics. We represent
+the value semantics of a converted SETQ as a fresh let
+binding. Essentially, the following source to source transform is
+done:
+
+#+BEGIN_SRC lisp
+  (defun value-setq (x y)
+    (cons
+     (if y
+         (1+ (setq x 4))
+         (1- (setq x 5)))
+     x))
+
+  =>
+
+  (defun value-setq (x)
+    (flet ((phi (x0 z)
+             (cons z x0)
+      (if y
+          (let ((setq-val 4))
+            (phi setq-val (1+ setq-val)))
+          (let ((setq-val 5))
+            (phi setq-val (1- setq-val))))))
+
+#+END_SRC
+
+Note that in real IR1, =z= is not actually an SSA lambda var and is
+represented directly as a value continuation (or "lvar") (these can be
+thought of as immediately used expression temporaries). However, it is
+not possible to mix that directly in Lisp s-expressions. IR1 makes it
+easy though. (The original IR1 documentaiton in the cmucl internals
+notes call IR1 a.k.a. ICR a.k.a. "The Implicit Continuation
+Representation" CPS a la Rabbit without running into issues with
+parentheses.)
+
+These examples may also make the connection to CPS obvious. ("SSA is
+CPS is SSA" and all).
+
+** The actual construction algorithm
+The actual conversion algorithm is a straightforward adaptation of the
+algorithms in the incremental SSA construction paper. We of course
+make sure everything works well in terms of IR1 data structures. We
+also handle incremental conversion of newly introduced lambda
+variables in the flow graph due to e.g. inlining or transforms.
+
+The nice thing is not even dominance information is needed, so no need
+to maintain D-J graphs or anything like that.
+
+** The benefits
+So, besides making things in one canonical form for the IR1 optimizer
+(which historically has understood functional style binding based code
+much better than code with SETQ), the big advantage of SSA is to make
+reaching definitions transparent. Indeed, Andrew Appel's "Modern
+Compiler Implementation in {ML, C, Java}" calls SSA essentially a
+data-structure for reaching definitions. Part of the implications of
+that is that SSA really divorces the source variable being set with
+the actual real definitions the program carries around. Reusing a
+source variable by setq'ing is easy even if the variable is read and
+written in completely unrelated ways from section to section of a
+piece of code. This is actually quite bad from a code generation point
+of view, especially if the register allocator allocates locations
+based on source variables, since the live ranges and even whether the
+variable should be boxed or not gets completely confused. SSA is a
+good way to split up these variables into distinct lambda var versions
+so that i.e. unrelated uses of a source variable can get the
+appropriate representation choice and get allocated to different
+registers or stack locations if need be. This is a narrow form of live
+range splitting based on def-use chains and reaching definitions.
+
+Also, ideally, in SSA form, dataflow optimizations are a lot simpler
+because not having SETQ means no need to do reaching definitions, and
+no need to maintain kill sets. Some problems like liveness analysis
+become simple CFG walks instead of iterative data flow problems (we
+don't take advantage of this because our liveness phase happens in
+IR2). This is most releveant for constraint propagation which is our
+big IR1 flow sensitive pass. Adding SSA allows us to remove a bunch of
+hacks to keep track of useless setqs and unused initial bindings,
+since those just get immediately subsumed by the SSA representation
+plus plain IR1 optimizations and code flushers.
+
+Unfortunately, constraint propagation with logic for setq does benefit
+in some edge cases where we can't convert to SSA due to certain
+non-local exits. There is no easy way to represent some code in SSA
+form in the presence of non-local exits so we leave them in those
+special situation as sets. This happens in probably 0.01% of code, but
+is in fact a case where current constraint propagation can deliver
+some extra analysis that SSA cannot alone provide. These cases do turn
+into memory cell read and write in the end in the backend but they are
+used in such a way that constraint propagation can analyze
+them. However, constraint propagation does give up on closure
+variables since they are too hard to statically analyze, just as SSA
+gives up on converting closure variables for the same reason.
+
+** Debugger changes
+Traditionally, we have always just dumped source variables as just one
+thing for the debugger, where the source variable is essentially
+assigned a fix location for its lifetime, which makes tracking it and
+modifying it from the debug info quite simple. IR2 translation also
+just gives each lambda variable one TN (Temporary Name, in modern
+parlance a virtual register, of which there are infinite). In order to
+make SSA behave the same for the debugger, we need to essentially tell
+the debugger that a single source variable may live in multiple TNs
+and hence multiple storage locations throughout its life. Essentially,
+we conceputally endow SSA variables with some bookkeeping so it knows
+about the original source lambda var it comes from, even though they
+are their own lambda var in IR, in order to avoid changing too much of
+the rest of the backend. This does in fact work well, so that the
+debugger only needs to dump a little bit more extra info to track how
+a given source variable has now been split up. Again, this is an
+overall positive result, since always fixing a source variable to a
+single location is quite constraining in terms of register allocation
+("live range splitting) and representation selection.
+
+* AI tools and polishing things up for finalization
+As mentioned before, the core of the code to do SSA and the general
+ideas all come from before the before-LLM times. However, LLMs are
+very helpful for benchmarking, polishing, and prototyping different
+ideas for solving different sub-problems. Actually, most of the
+debugger support was added by an LLM since it is good at adding new
+testing infrastructure. The debugger changes around variable
+visibility was actually extremely under coveraged so it was very
+useful to have a tool do this. I also used it to evaluate different
+changes on top to make SSA parity with SSA off in terms of runtime
+performance (at the very least making sure it doesn't regress, ideally
+it is an improvement). This is very useful to make sure bases are
+covered. I also found it useful to try and iterate on making diffs
+smaller and simplifying things where necessary.
+
+However, in the end, having a human expert is really needed to make
+sure the machine doesn't make shortcuts and does things The Right Way,
+so that we don't paint ourselves in a corner with expedient hacks. I
+spent several months just doing the prep work making sure things like
+type inference and constraint propagation for assignment lambdas was
+just as good as for setq, as well as shoring up debugger support and
+also improving pack and representation selection so things would not
+regress by also improving the behavior without SSA in such a way that
+the patterns produced by SSA code would not be slower.
+
+It would've been really tedious to polish things up and make things
+ready for real without the help of such a tool making sure to check
+for regressions and building the scaffolding for such. The prep work
+was a quite a lot even with the tools.

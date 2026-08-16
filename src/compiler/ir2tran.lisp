@@ -898,7 +898,13 @@
           (when (and arg
                      (neq (leaf-ever-used var) 'initial-unused))
             (let ((src (lvar-tn node block arg))
-                  (dest (leaf-info var)))
+                  (dest (leaf-info var))
+                  (previous (lambda-var-debug-previous var)))
+              ;; As for a SETQ of a debug variable.
+              (when (and previous
+                         (tn-p (leaf-info previous))
+                         (eq (tn-kind (leaf-info previous)) :debug-environment))
+                (vop keep-live node block (leaf-info previous)))
               (if (and (lambda-var-indirect var)
                        (lambda-var-explicit-value-cell var))
                   (emit-make-value-cell node block src dest)
