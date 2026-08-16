@@ -2387,6 +2387,17 @@
     (assert (equal (run-stops '(t) '(((x 1) (c t)))) '(t)))
     (assert (equal (run-stops '(nil) '(((x 2) (c nil)))) '(nil)))))
 
+(with-test (:name (:debugger :variables :setq :used-once))
+  ;; The value X is set to is used once, so it replaces its reference
+  ;; under SSA conversion at (DEBUG 1).
+  (with-variables-test (:strict (1 2 3) :lax ())
+      (sb-int:named-lambda variables-test (x)
+        (declare (optimize (debug :debug)))
+        (setq x (1+ x))
+        (signal 'variables-stop)
+        (list x))
+    (assert (equal (run-stops '(5) '(((x 6)))) '((6))))))
+
 (with-test (:name (:debugger :variables :setq :until-overwritten))
   (with-variables-test (:strict (1 2 3) :lax ())
       (sb-int:named-lambda variables-test (x c)
@@ -2484,6 +2495,18 @@
     (assert (equal (run-stops '(1 2) '(((a 1) (b 2))))
                    '(nil)))))
 
+(with-test (:name (:debugger :variables :setq :rotatef :cancelling :speed))
+  ;; Nothing reads A and B once conversion finds out the swaps cancel.
+  (with-variables-test (:strict (3) :lax (1 2))
+      (sb-int:named-lambda variables-test (a b)
+        (declare (optimize (debug :debug) (speed 3)))
+        (signal 'variables-stop)
+        (rotatef b a)
+        (rotatef b a)
+        nil)
+    (assert (equal (run-stops '(1 2) '(((a 1) (b 2))))
+                   '(nil)))))
+
 (with-test (:name (:debugger :variables :setq :rotatef :cancelling :flet :speed))
   (with-variables-test (:strict (3) :lax (1 2))
       (sb-int:named-lambda variables-test (a b c)
@@ -2497,6 +2520,47 @@
         nil)
     (assert (equal (run-stops '(1 2 t) '(((a 1) (b 2))))
                    '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :overwritten-copy))
+  ;; Under SSA conversion, the initial value of X is never read, so nothing
+  ;; reads Y any more.
+  (with-variables-test (:strict (3) :lax (1 2))
+      (sb-int:named-lambda variables-test (y)
+        (declare (optimize (debug :debug)))
+        (let ((x y))
+          (setq x 23)
+          (opaque-identity x))
+        (signal 'variables-stop)
+        nil)
+    (assert (equal (run-stops '(2) '(((y 2))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :rotatef :copy-in-branch))
+  ;; Found by random programs: C is lost at (DEBUG 1) under SSA conversion.
+  (with-variables-test (:strict (1 2 3) :lax ())
+      (sb-int:named-lambda variables-test (a p)
+        (declare (optimize (debug :debug)))
+        (block nil
+          (when (funcall p))
+          (when (funcall p)
+            (return))
+          (let ((c a))
+            (when (funcall p)
+              (rotatef a c)
+              (signal 'variables-stop))
+            (if (funcall p)
+                (rotatef a c))))
+        (if (funcall p)
+            (if (funcall p)
+                nil
+                (progn
+                  (dotimes (i 1))
+                  (flet ((g ()
+                           (opaque-identity a))))))))
+    (let ((coins (list nil nil t t t)))
+      (assert (equal (run-stops (list 1 (lambda () (pop coins)))
+                                '(((a 1) (c 1))))
+                     '(nil))))))
 
 (with-test (:name (:debugger :variables :setq :copy-back :speed))
   (with-variables-test (:strict (1 2 3) :lax ())
@@ -2609,6 +2673,21 @@
     (assert (equal (run-stops (list 2 (constantly nil)) '(((b 2))))
                    '(nil)))))
 
+(with-test (:name (:debugger :variables :setq :read-through-copy))
+  ;; C is only read by way of B. Without SSA conversion, C isn't shown at
+  ;; (DEBUG 2).
+  (with-variables-test (:strict (1 3) :lax (2))
+      (sb-int:named-lambda variables-test (a)
+        (declare (optimize (debug :debug)))
+        (let ((c (* a 2)))
+          (let ((b c))
+            (signal 'variables-stop)
+            (opaque-identity b))
+          (setq c (opaque-identity a)))
+        nil)
+    (assert (equal (run-stops '(1) '(((a 1) (c 2))))
+                   '(nil)))))
+
 (with-test (:name (:debugger :variables :setq :read-through-copy :branch))
   (with-variables-test (:strict (1 2 3) :lax ())
       (sb-int:named-lambda variables-test (a b c)
@@ -2624,6 +2703,22 @@
               (opaque-identity d))))
         nil)
     (assert (equal (run-stops '(1 2 nil) '(((a 2) (b 2))))
+                   '(nil)))))
+
+;; Without SSA conversion, a type check of A after the stop keeps it live at
+;; (SPEED 3), where the debugger doesn't follow variables. With it, A and B
+;; are known to be the same value, already checked by the addition, so
+;; nothing reads A after the stop. The value is dead, so it can be hidden.
+(with-test (:name (:debugger :variables :setq :type-check-removed))
+  (with-variables-test (:strict () :lax (1))
+      (sb-int:named-lambda variables-test (a b)
+        (declare (optimize (debug :debug) (speed 3)))
+        (setq b a)
+        (setq b (+ b 6))
+        (signal 'variables-stop)
+        (let ((a (+ a b))))
+        nil)
+    (assert (equal (run-stops '(1 2) '(((a 1) (b 7))))
                    '(nil)))))
 
 (with-test (:name (:debugger :variables :setq :copy-of-version))
@@ -2671,6 +2766,102 @@
     (assert (equal (run-stops '(1 2 nil t) '(((b 2))))
                    '(nil)))))
 
+;;; A set which is never read still ends the previous value, even when a
+;;; copy of the variable is read after it.
+(with-test (:name (:debugger :variables :setq :dead-set :loop :speed))
+  (with-variables-test (:strict () :lax (1 2 3))
+      (sb-int:named-lambda variables-test (a b)
+        (declare (optimize (debug :debug) (speed 3)))
+        (let ((c b))
+          (dotimes (i 2)
+            (setq b (* c 2))
+            (signal 'variables-stop))
+          (opaque-identity a))
+        nil)
+    (assert (equal (run-stops '(1 2) '(((b 4)) ((b 4))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :dead-set :let))
+  (with-variables-test (:strict () :lax (1 2 3))
+      (sb-int:named-lambda variables-test (a c)
+        (declare (optimize (debug :debug)))
+        (let ((d (opaque-identity a)))
+          (block nil
+            (when c (return))
+            (rotatef d a)
+            (rotatef a d))
+          (opaque-identity d)
+          (let ((a 43))
+            (rotatef d a)
+            (signal 'variables-stop)
+            (opaque-identity a)))
+        nil)
+    (assert (equal (run-stops '(1 t) '(((d 43))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :dead-set :closure :speed))
+  (with-variables-test (:strict () :lax (1 2 3))
+      (sb-int:named-lambda variables-test (a b)
+        (declare (optimize (debug :debug) (speed 3)))
+        (rotatef a b)
+        (signal 'variables-stop)
+        (setq a b)
+        (flet ((g ()
+                 (setq a 15)))
+          (opaque-identity b))
+        nil)
+    (assert (equal (run-stops '(1 2) '(((a 2) (b 1))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :unused-initial-value))
+  ;; Without SSA conversion, B is read to initialize an inner variable by
+  ;; something whose value is never used, which conversion finds out, so
+  ;; that nothing reads B after the stop and its value can be hidden.
+  (with-variables-test (:strict () :lax (1))
+      (sb-int:named-lambda variables-test (a)
+        (declare (optimize (debug :debug)))
+        (let ((c (opaque-identity a)))
+          (let ((b (opaque-identity a)))
+            (signal 'variables-stop)
+            (let ((b (+ b 3)))
+              (setq b (* c 2))
+              (opaque-identity b))))
+        nil)
+    (assert (equal (run-stops '(2) '(((b 2) (c 2))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :constant-value))
+  ;; B is only ever 0, which is found out with SSA conversion, as for a
+  ;; variable which isn't set: it has no TN, and its value can be hidden.
+  (with-variables-test (:strict () :lax (1))
+      (sb-int:named-lambda variables-test ()
+        (declare (optimize (debug :debug)))
+        (let ((b 19))
+          (flet ((g ()
+                   (flet ((f ()
+                            (setq b 0)))
+                     (f))))
+            (g))
+          (dotimes (i 2)
+            (signal 'variables-stop)
+            (setq b (+ b b))))
+        nil)
+    (assert (equal (run-stops '() '(((b 0)) ((b 0))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :unused-initial-value :speed))
+  (with-variables-test (:strict () :lax (1))
+      (sb-int:named-lambda variables-test (b)
+        (declare (optimize (debug :debug) (speed 3)))
+        (let ((d (+ b b)))
+          (signal 'variables-stop)
+          (let ((b (+ b 7)))
+            (setq b 24)
+            (opaque-identity b)))
+        nil)
+    (assert (equal (run-stops '(2) '(((b 2))))
+                   '(nil)))))
+
 (with-test (:name (:debugger :variables :setq :out-of-scope-value))
   (with-variables-test (:strict () :lax (1 2 3))
       (sb-int:named-lambda variables-test (a b)
@@ -2695,6 +2886,22 @@
         (rotatef b a)
         nil)
     (assert (equal (run-stops '(1 2) '(((a 6) (b 2))))
+                   '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :rotatef :cancelling :loop))
+  ;; The join at the head of the loop is found to be A, so nothing else keeps
+  ;; the version of A at the stop live, though it is A as well.
+  (with-variables-test (:strict (1 2 3) :lax ())
+      (sb-int:named-lambda variables-test (a c)
+        (declare (optimize (debug :debug)))
+        (dotimes (i 1)
+          (when c
+            (let ((d (+ a 5)))
+              (rotatef a d)
+              (rotatef d a))
+            (signal 'variables-stop)))
+        nil)
+    (assert (equal (run-stops '(1 t) '(((a 1))))
                    '(nil)))))
 
 (with-test (:name (:debugger :variables :setq :rotatef :copy-of-copy))
@@ -2900,6 +3107,68 @@
           x))
     (assert (equal (run-stops '(1) '(((x 1)) ((x 1)))) '(1)))
     (assert (equal (run-stops '(0) '(((x 1)) ((x 2)))) '(2)))))
+
+;;; X is set right before the entry, which the debugger has to know at the
+;;; target of the throw.
+(with-test (:name (:debugger :variables :setq :catch :set-before-entry))
+  (with-variables-test (:strict (1 2 3) :lax ())
+      (sb-int:named-lambda variables-test (n)
+        (declare (optimize (debug :debug)))
+        (let ((x (opaque-identity n)))
+          (setq x (+ x 1))
+          (catch 'tag
+            (when (plusp (opaque-identity n))
+              (throw 'tag :early)))
+          (signal 'variables-stop)
+          x))
+    (assert (equal (run-stops '(1) '(((x 2)))) '(2)))
+    (assert (equal (run-stops '(0) '(((x 1)))) '(1)))))
+
+;;; Below debug 3 nothing reads X after the entry, so nothing keeps its
+;;; value. It may be missing, but it must not be wrong.
+(with-test (:name (:debugger :variables :setq :catch :unread-after))
+  (with-variables-test (:strict (3) :lax (1 2))
+      (sb-int:named-lambda variables-test (n)
+        (declare (optimize (debug :debug)))
+        (let ((x (opaque-identity n)))
+          (setq x (+ x 1))
+          (opaque-identity x)
+          (catch 'tag
+            (when (plusp (opaque-identity n))
+              (throw 'tag :early)))
+          (signal 'variables-stop)
+          nil))
+    (assert (equal (run-stops '(1) '(((n 1) (x 2)))) '(nil)))
+    (assert (equal (run-stops '(0) '(((n 0) (x 1)))) '(nil)))))
+
+;;; Nothing reads A on the way from the entry of the handler, so the walks
+;;; don't get there, but its value is known from the entry.
+(with-test (:name (:debugger :variables :setq :handler-case :unread-after))
+  (with-variables-test (:strict (1) :lax (2 3))
+      (sb-int:named-lambda variables-test (a)
+        (declare (optimize (debug :debug) (speed 3)))
+        (setq a (+ a a))
+        (catch 'tag (opaque-identity 1))
+        (handler-case (progn (funcall (opaque-identity #'error) "x")
+                             (opaque-identity a))
+          (error () (signal 'variables-stop)))
+        nil)
+    (assert (equal (run-stops '(101) '(((a 202)))) '(nil)))))
+
+;;; A non-local exit makes the TN of A live for the whole environment, but
+;;; it only holds the first version of A, whose value the set ended.
+(with-test (:name (:debugger :variables :setq :environment-live))
+  (with-variables-test (:strict () :lax (1 2 3))
+      (sb-int:named-lambda variables-test (a f)
+        (declare (optimize (debug :debug) (speed 3)))
+        (block nil
+          (flet ((e () (return)))
+            (when f (funcall (opaque-identity #'e)))))
+        (setq a (* a 2))
+        (signal 'variables-stop)
+        nil)
+    (assert (equal (run-stops '(101 nil) '(((a 202)))) '(nil)))
+    (assert (equal (run-stops '(101 t) '(((a 202)))) '(nil)))))
 
 (with-test (:name (:debugger :variables :setq :unwind-protect))
   ;; X is 1 only until it is set again.

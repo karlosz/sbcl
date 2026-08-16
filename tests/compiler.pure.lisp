@@ -6541,3 +6541,80 @@
                        a))
                    :allow-warnings 'sb-c::type-warning
                    :allow-notes t))
+
+(with-test (:name (:ssa :environment-of-new-lambdas))
+  ;; SSA conversion of the evaluated form adds lambdas to functions
+  ;; which already have an environment; they must share it.
+  (assert (equal (eval '(let ((l (list 1 2))
+                              (acc '()))
+                         (loop (when (null l)
+                                 (return))
+                               (with-simple-restart (abort "skip")
+                                 (push (car l) acc))
+                               (setq l (cdr l)))
+                         acc))
+                 '(2 1))))
+
+(with-test (:name (:ssa :dead-store :optimizations-3))
+  ;; OPTIMIZATIONS #3: once the set of V gives its value a variable of
+  ;; its own, the value of (MAKE-LIST N) is unused and the call goes.
+  (let ((f (checked-compile
+            '(lambda (n)
+              (declare (optimize (speed 3) (safety 0) (space 2))
+                       (type fixnum n))
+              (let ((v (make-list n)))
+                (setq v (1+ n))
+                v)))))
+    (assert (= (funcall f 10) 11))
+    (ctu:assert-no-consing (funcall f 10))))
+
+(with-test (:name (:ssa :unboxed-versions))
+  ;; X holds a DOUBLE-FLOAT, then an integer: each version gets a
+  ;; representation of its own, so the DOUBLE-FLOAT stays unboxed.
+  (let ((f (checked-compile
+            '(lambda (n)
+              (declare (type (integer 0 100) n))
+              (let ((x 0d0))
+                (dotimes (i n)
+                  (setq x (+ x 1.5d0)))
+                (setq x (truncate x))
+                x)))))
+    (assert (= (funcall f 10) 15))
+    (ctu:assert-no-consing (funcall f 10))))
+
+(with-test (:name (:ssa :assigned-argument-type))
+  ;; BITS is set, but each of its versions is of its declared type, so
+  ;; the type of the function keeps it (from lp#2106358).
+  (assert (equal (second (sb-kernel:%simple-fun-type
+                          (checked-compile
+                           '(lambda (bits)
+                             (declare (type (integer 0 56) bits))
+                             (loop repeat 3
+                                   do (setq bits (max 0 (1- bits))))
+                             bits))))
+                 '((mod 57)))))
+
+(with-test (:name (:ssa :version-types))
+  ;; Each version of Y has the type of the value it is set to, so the
+  ;; result is a multiple of 4 up to 1020.
+  (let ((type (sb-kernel:%simple-fun-type
+               (checked-compile
+                '(lambda (x)
+                  (declare (fixnum x))
+                  (let ((y x))
+                    (setq y (logand y 255))
+                    (setq y (ash y 2))
+                    y))))))
+    (assert (subtypep (second (third type)) '(integer 0 1020))))
+  ;; X is even, so as a float it is 0 or at least 2 in magnitude.
+  (let ((type (sb-kernel:%simple-fun-type
+               (checked-compile
+                '(lambda (n)
+                  (declare (fixnum n))
+                  (let ((x n))
+                    (setq x (* x 2))
+                    (setq x (float x))
+                    x))))))
+    (assert (subtypep (second (third type))
+                      '(or (single-float * -2.0) (single-float 0.0 0.0)
+                           (single-float 2.0 *))))))

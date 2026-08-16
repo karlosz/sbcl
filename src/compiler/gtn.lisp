@@ -112,7 +112,8 @@
                  ;; never read no stack space is allocated for it in the
                  ;; callee frame.
                  (unless (and (type-singleton-p (leaf-type var))
-                              (leaf-refs var))
+                              (leaf-refs var)
+                              (not (lambda-var-kept-for-debug var)))
                    (environment-debug-live-tn res (lambda-environment fun)))))
 
               (setf (tn-leaf res) var)

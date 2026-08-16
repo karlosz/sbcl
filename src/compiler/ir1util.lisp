@@ -2318,6 +2318,8 @@
          (refs (delq1 ref (leaf-refs leaf)))
          (home (node-home-lambda ref)))
     (setf (leaf-refs leaf) refs)
+    (when (and *ssa-convert* (lambda-var-p leaf))
+      (note-ssa-candidate leaf))
     (when (and (typep leaf '(or clambda lambda-var))
                (not (find home refs :key #'node-home-lambda)))
       ;; It was the last reference from this lambda, remove it
@@ -3639,13 +3641,16 @@ is :ANY, the function name is not checked."
                             '(cons (member hairy-function-entry) t)))))))
 
 ;;; Don't delete set but unreferenced variables on high-debug to
-;;; improve the debugging experience.
+;;; improve the debugging experience, nor the versions of a variable
+;;; split among several which hold its values for the debugger.
 (defun preserve-set-only-debug-var-p (var)
   (and (lambda-var-p var)
        (not (lambda-var-deleted var))
-       (lambda-var-sets var)
-       (let ((bind (lambda-bind (lambda-var-home var))))
-         (and bind (policy bind (= preserve-set-only-debug-variables 3))))))
+       (or (lambda-var-kept-for-debug var)
+           (and (lambda-var-sets var)
+                (let ((bind (lambda-bind (lambda-var-home var))))
+                  (and bind
+                       (policy bind (= preserve-set-only-debug-variables 3))))))))
 
 ;;; Call (lambda (arg lambda-var type)), for a mv-combination ARG can
 ;;; be NIL when it produces multiple values.
@@ -4374,18 +4379,6 @@ is :ANY, the function name is not checked."
        (loop for d in x
              always (or (typep d 'index)
                         (eq d '*)))))
-(defun delete-set (set)
-  (let ((var (set-var set)))
-    (setf (lambda-var-sets var)
-          (delq1 set (lambda-var-sets var)))
-    (map-all-uses (lambda (node)
-                    (when (combination-p node)
-                      (setf (combination-info node) :important-result-discarded)))
-                  (set-value set)
-                  :sets t)
-    (remove-lvar-dx (set-value set))
-    (filter-lvar (set-value set) (lambda (x) `(let ((v ,x)) v)))
-    (delete-filter set (node-lvar set) (set-value set))))
 
 (defun transform-to-identity (nth-arg node n-args)
   (let ((vars (make-gensym-list n-args)))

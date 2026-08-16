@@ -1270,6 +1270,8 @@
                     (:copier nil))
   ;; list of LAMBDA-VAR descriptors for arguments
   (vars nil :type list)
+  ;; the LAMBDA-VARs which are newly eligible for SSA conversion.
+  (ssa-pending nil :type list)
   ;; If this function was ever a :OPTIONAL function (an entry-point
   ;; for an OPTIONAL-DISPATCH), then this is that OPTIONAL-DISPATCH.
   ;; The optional dispatch will be :DELETED if this function is no
@@ -1487,13 +1489,17 @@
   (unused-initial-value)
   ;; Instruct constraint propagation to do some work.
   (compute-same-refs)
-  (no-debug))
+  (no-debug)
+  ;; A version of a variable split among several, which the debugger
+  ;; shows where it holds the value: keep it even if nothing reads it.
+  (kept-for-debug))
 
 (defstruct (lambda-var
             (:include basic-var)
             (:copier nil)
             (:constructor make-lambda-var
               (%source-name &key type (where-from :assumed) specvar source-form arg-info
+                                 origin
                &aux (flags (construct-flags lambda-var where-from)))))
   ;; the CLAMBDA that this var belongs to. This may be null when we are
   ;; building a lambda during IR1 conversion.
@@ -1544,6 +1550,9 @@
   ;; of versions, and the versions of this variable.
   (debug-version-number nil :type (or null index))
   (debug-versions nil :type list)
+  ;; The version which held the value before this one, which has to stay
+  ;; live until this one is bound for the debugger, as for a SETQ.
+  (debug-previous nil :type (or null lambda-var))
   source-form)
 
 (def-struct-flag-accessors lambda-var)
@@ -1588,7 +1597,10 @@
   (leaf nil :type leaf)
   ;; An cons added by constraint-propagate to all REFs that have the
   ;; same value when referencing a lambda-var with sets.
-  (same-refs nil :type (or null cons)))
+  (same-refs nil :type (or null cons))
+  ;; The reaching definition when referencing a lambda-var with
+  ;; sets. Only meaningful during SSA conversion.
+  (ssa-definition nil :type (or null lambda-var cset phi)))
 
 (def-struct-flag-accessors ref)
 
@@ -1597,6 +1609,35 @@
                         (not (symbolp (constant-value leaf))))
                    (constant-value leaf)
                    leaf)))
+
+(defvar *ssa-convert* t)
+
+;;; A PHI represents a value-join for definitions in the flow graph
+;;; during SSA conversion. They are implemented in IR1 by assignment
+;;; lambdas.
+(defstruct (phi (:constructor make-phi (var block)))
+  ;; The variable this PHI structure records definition information
+  ;; for.
+  (var (missing-arg) :type lambda-var)
+  ;; The block this PHI is a join point in.
+  (block (missing-arg) :type cblock)
+  ;; The definitions for VAR reaching the predecessors of BLOCK, in the
+  ;; same order as PREDS.
+  (operands '() :type list)
+  ;; The fresh variable representing PHI once it has been implemented
+  ;; with an assignment lambda.
+  (new-var nil :type (or null lambda-var))
+
+  ;; The following slots are used for the Tarjan SCC post-pass to
+  ;; eliminate redundant phis.
+  (index -1 :type fixnum)
+  (lowlink -1 :type fixnum)
+  (on-stack-p nil :type boolean)
+
+  ;; When there is logically only one reaching definition to BLOCK,
+  ;; this slot serves as a union-find forwarding pointer to that
+  ;; definition.
+  (replacement nil))
 
 (defstruct (multiple-successors-node
             (:constructor nil)
@@ -1638,13 +1679,8 @@
                        (:copier nil))
   (default nil))
 
-(def-struct-flags (cset node)
-  ;; During constraint propagation, there's a ref after this set
-  (reached t))
-
 (defstruct (cset (:include valued-node
-                  (derived-type (make-single-value-type *universal-type*))
-                  (flags (flags cset)))
+                  (derived-type (make-single-value-type *universal-type*)))
                  (:conc-name set-)
                  (:predicate set-p)
                  (:constructor make-set (var value))
@@ -1653,8 +1689,6 @@
   (var (missing-arg) :type basic-var)
   ;; LVAR for the value form
   (value (missing-arg) :type lvar))
-
-(def-struct-flag-accessors cset :prefix set)
 
 (defprinter (cset :conc-name set- :identity t)
   var

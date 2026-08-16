@@ -99,7 +99,10 @@
                               ;; Do we not care about preserving this this
                               ;; TN for debugging?
                               (or
-                               (not (cl:symbol-package (leaf-debug-name leaf)))
+                               (not (cl:symbol-package
+                                     (leaf-debug-name (if (lambda-var-p leaf)
+                                                          (debug-var-origin leaf)
+                                                          leaf))))
                                (and (not (and (lambda-var-p leaf)
                                               (or (lambda-var-origin leaf)
                                                   (some #'lambda-var-origin
