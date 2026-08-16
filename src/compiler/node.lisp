@@ -1211,6 +1211,18 @@
                     (:copier nil))
   ;; list of LAMBDA-VAR descriptors for arguments
   (vars nil :type list)
+  ;; Requests for SSA conversion made since the pass last ran here: T
+  ;; to reconsider every variable bound in this lambda, otherwise a
+  ;; list of the particular LAMBDA-VARs which may have just become
+  ;; convertible. A variable becomes convertible only by ceasing to be
+  ;; closed over, which happens when environments merge or when the
+  ;; last reference living in another lambda goes away.
+  ;;
+  ;; Recorded here rather than on the component because the request is
+  ;; made during IR1 conversion, while the code is still in
+  ;; INITIAL-COMPONENT, and FIND-INITIAL-DFO then moves the lambdas
+  ;; into components of their own. A lambda travels with its code.
+  (ssa-pending nil)
   ;; If this function was ever a :OPTIONAL function (an entry-point
   ;; for an OPTIONAL-DISPATCH), then this is that OPTIONAL-DISPATCH.
   ;; The optional dispatch will be :DELETED if this function is no
@@ -1505,13 +1517,45 @@
   (%source-name (missing-arg) :type symbol :read-only t)
   ;; An cons added by constraint-propagate to all REFs that have the
   ;; same value when referencing a lambda-var with sets.
-  (same-refs nil :type (or null cons)))
+  (same-refs nil :type (or null cons))
+  ;; The reaching definition when referencing a lambda-var with
+  ;; sets. Only meaningful during SSA conversion.
+  (ssa-definition nil :type (or null lambda-var cset phi)))
 (defprinter (ref :identity t)
   (%source-name :test (neq %source-name '.anonymous.))
   (leaf :prin1 (if (and (constant-p leaf)
                         (not (symbolp (constant-value leaf))))
                    (constant-value leaf)
                    leaf)))
+
+(defvar *ssa-convert* t)
+
+;;; A PHI represents a value-join for definitions in the flow graph
+;;; during SSA conversion. They are implemented in IR1 by assignment
+;;; lambdas.
+(defstruct (phi (:constructor make-phi (var block)))
+  ;; The variable this PHI structure records definition information
+  ;; for.
+  (var (missing-arg) :type lambda-var)
+  ;; The block this PHI is a join point in.
+  (block (missing-arg) :type cblock)
+  ;; The definitions for VAR reaching the predecessors of BLOCK, in the
+  ;; same order as PREDS.
+  (operands '() :type list)
+  ;; The fresh variable representing PHI once it has been implemented
+  ;; with an assignment lambda.
+  (new-var nil :type (or null lambda-var))
+
+  ;; The following slots are used for the Tarjan SCC post-pass to
+  ;; eliminate redundant phis.
+  (index -1 :type fixnum)
+  (lowlink -1 :type fixnum)
+  (on-stack-p nil :type boolean)
+
+  ;; When there is logically only one reaching definition to BLOCK,
+  ;; this slot serves as a union-find forwarding pointer to that
+  ;; definition.
+  (replacement nil))
 
 (defstruct (multiple-successors-node
             (:constructor nil)

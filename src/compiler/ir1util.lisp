@@ -2331,6 +2331,9 @@
          (refs (delq1 ref (leaf-refs leaf)))
          (home (node-home-lambda ref)))
     (setf (leaf-refs leaf) refs)
+    ;; This may have been the reference that kept LEAF closed over.
+    (when (and *ssa-convert* (lambda-var-p leaf))
+      (note-ssa-candidate leaf))
     (when (and (typep leaf '(or clambda lambda-var))
                (not (find home refs :key #'node-home-lambda)))
       ;; It was the last reference from this lambda, remove it
@@ -4272,4 +4275,6 @@ is :ANY, the function name is not checked."
   (let ((var (set-var set)))
     (setf (lambda-var-sets var)
           (delq1 set (lambda-var-sets var)))
+    (when (and *ssa-convert* (lambda-var-p var))
+      (note-ssa-candidate var))
     (delete-filter set (node-lvar set) (set-value set))))

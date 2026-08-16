@@ -479,6 +479,8 @@ necessary, since type inference may take arbitrarily long to converge.")
         (setf reoptimized (ir1-optimize-until-done component))
         (setf (component-reoptimize-counter component)
               (mod (1+ (component-reoptimize-counter component)) most-positive-fixnum))
+        (when *ssa-convert*
+          (ssa-convert-pending component))
         (cond ((or (component-new-functionals component)
                    (component-reanalyze-functionals component))
                (maybe-mumble "Locall ")

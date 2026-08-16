@@ -447,6 +447,11 @@
                (when (lambda-p fun)
                  (or (maybe-let-convert fun component)
                      (maybe-convert-to-assignment fun))))))))
+  ;; Here because local call analysis is what creates the opportunity:
+  ;; merging environments can leave a variable no longer closed over, and
+  ;; so newly convertible.
+  (when *ssa-convert*
+    (ssa-convert-component component))
   (values))
 
 (defun locall-analyze-clambdas-until-done (clambdas)
@@ -1090,6 +1095,13 @@
     (push clambda (lambda-lets home))
     (setf (lambda-home clambda) home)
     (setf (lambda-environment clambda) home-env)
+
+    ;; This is the one place a lambda's home changes to an enclosing
+    ;; one, and so the only way a variable stops being closed over
+    ;; while it still has sets. Anything bound around CLAMBDA may have
+    ;; just become convertible.
+    (when *ssa-convert*
+      (request-ssa-conversion home))
 
     (when env
       (unless home-env
