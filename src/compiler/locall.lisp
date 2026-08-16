@@ -416,6 +416,8 @@
 ;;; deletion of a function reference, but functions that start out
 ;;; eligible for conversion must be noticed sometime.
 ;;;
+;;; In addition, local call conversion triggers SSA conversion.
+;;;
 ;;; Note that there is a lot of action going on behind the scenes
 ;;; here, triggered by reference deletion. In particular, the
 ;;; COMPONENT-LAMBDAS are being hacked to remove newly deleted and LET
@@ -450,6 +452,8 @@
                (when (lambda-p fun)
                  (or (maybe-let-convert fun component)
                      (maybe-convert-to-assignment fun))))))))
+  (when *ssa-convert*
+    (ssa-convert-component component))
   (values))
 
 (defun locall-analyze-clambdas-until-done (clambdas)
@@ -1094,6 +1098,10 @@
     (push clambda (lambda-lets home))
     (setf (lambda-home clambda) home)
     (setf (lambda-environment clambda) home-env)
+    ;; Merging environments may cause a variable to stop being closed
+    ;; over and hence become eligible for SSA conversion.
+    (when *ssa-convert*
+      (request-ssa-conversion home))
 
     (when env
       (unless home-env

@@ -2447,6 +2447,10 @@
 
 (defknown sb-vm::touch-object-identity (t) t
   (always-translatable))
+
+;; Used by SSA conversion at (DEBUG 3)
+(defknown %keep-live (t) (values)
+  (always-translatable))
 (defknown foreign-symbol-dataref-sap (simple-string)
   system-area-pointer
   (movable flushable))

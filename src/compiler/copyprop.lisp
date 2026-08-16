@@ -99,7 +99,11 @@
                               ;; Do we not care about preserving this this
                               ;; TN for debugging?
                               (or
-                               (not (cl:symbol-package (leaf-debug-name leaf)))
+                               (not (cl:symbol-package
+                                     (leaf-debug-name
+                                      (if (lambda-var-p leaf)
+                                          (debug-var-origin leaf)
+                                          leaf))))
                                (policy (vop-node vop)
                                    (= preserve-single-use-debug-variables 0)))
                               ;; arguments of local functions have hidden write

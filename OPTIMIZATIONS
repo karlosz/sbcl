@@ -33,16 +33,6 @@
   and emits costy MOVE ... => FR1.
 
 --------------------------------------------------------------------------------
-#3
-(defun bar (n)
-  (declare (optimize (speed 3) (safety 0) (space 2))
-           (type fixnum n))
-  (let ((v (make-list n)))
-    (setq v (make-array n))
-    (length v)))
-
-* IR1 does not optimize away (MAKE-LIST N).
---------------------------------------------------------------------------------
 #4
 (defun bar (v1 v2)
   (declare (optimize (speed 3) (safety 0) (space 2))

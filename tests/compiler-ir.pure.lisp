@@ -1269,3 +1269,183 @@
       (assert (equal (funcall fun 1 42) '(42 42 42 42)))
       ;; Verify all 7 interconnected functions were processed
       (assert (= h-checked 7)))))
+
+;;; The SSA versions of a variable which still have references in
+;;; FORM's IR, as a list of the kinds of lambdas binding them.
+(defun ir-ssa-vars (form)
+  (let ((left '()))
+    (inspect-ir
+     form
+     (lambda (component)
+       (dolist (fun (sb-c::component-lambdas component))
+         (dolist (fun (cons fun (sb-c::lambda-lets fun)))
+           (dolist (var (sb-c::lambda-vars fun))
+             (when (and (sb-c::lambda-var-origin var)
+                        (not (eq (sb-c::lambda-var-origin var) var))
+                        (sb-c::leaf-refs var))
+               (push (if (sb-c::functional-kind-eq fun let) :let :assignment)
+                     left)))))))
+    left))
+
+(with-test (:name (:ssa :versions-eliminated-at-low-debug))
+  ;; Below (DEBUG 2), nothing preserves the versions SSA conversion
+  ;; makes for debugging. (Above, they are preserved like any variable,
+  ;; for the debugger to show them as the variable, see the
+  ;; (:DEBUG :SSA ...) tests in debug.impure.lisp.)
+  (dolist (debug '(0 1))
+    (assert (null (ir-ssa-vars
+                   `(lambda (a c)
+                      (declare (optimize (debug ,debug)))
+                      (let ((x a))
+                        (when c (setq x a))
+                        x)))))
+    ;; The join of A and B is a real phi, but the version for the SETQ
+    ;; is still substituted.
+    (assert (equal (ir-ssa-vars
+                    `(lambda (a b c)
+                       (declare (optimize (debug ,debug)))
+                       (let ((x a))
+                         (when c (setq x b))
+                         (list x x))))
+                   '(:assignment)))))
+
+(with-test (:name (:ssa :redundant-phi :inner-of-scc))
+  ;; The phi of X at the head of the inner loop only joins the value
+  ;; of X from the outer loop with itself, so it is redundant, but it
+  ;; is in an SCC with phis joining other values of X, which aren't.
+  ;; At (DEBUG 2), nothing later removes it either.
+  (assert (= (count :assignment
+                    (ir-ssa-vars '(lambda (x f g k c)
+                                   (declare (optimize (debug 2)))
+                                   (loop (loop (unless (funcall g) (return)))
+                                         (when (funcall c)
+                                           (setq x (funcall k x)))
+                                         (when (funcall f)
+                                           (return x))))))
+             2)))
+
+;;; The variables with sets which are left in FORM's IR, as a list of
+;;; :CLOSURE for closed over ones and :SET for the others.
+(defun ir-set-vars (form)
+  (let ((left '()))
+    (values (inspect-ir
+             form
+             (lambda (component)
+               (dolist (fun (sb-c::component-lambdas component))
+                 (dolist (fun (cons fun (sb-c::lambda-lets fun)))
+                   (dolist (var (sb-c::lambda-vars fun))
+                     (when (and (sb-c::lambda-var-sets var)
+                                (sb-c::leaf-refs var))
+                       (push (if (sb-c::closure-var-p var) :closure :set)
+                             left)))))))
+            left)))
+
+(with-test (:name (:ssa :nlx :unchanged-in-extent))
+  ;; A non-local exit delivers the value a variable has at whichever
+  ;; point in the extent of the exit it happens. If the variable is
+  ;; not assigned in the extent, that is one definition, so the
+  ;; variable is still converted.
+  (multiple-value-bind (fun left)
+      ;; EVERY makes a function which exits non-locally while TYPES
+      ;; is not known to be a list.
+      (ir-set-vars '(lambda (types)
+                     (let ((n 0))
+                       (dotimes (i 3)
+                         (unless (every #'plusp types)
+                           (incf n))
+                         (setq types (cons i types)))
+                       (list n types))))
+    (assert (null left))
+    (assert (equal (funcall fun '(1 2)) '(2 (2 1 0 1 2)))))
+  (multiple-value-bind (fun left)
+      (ir-set-vars '(lambda (x c f)
+                     (when c
+                       (setq x (1+ x)))
+                     (catch 'tag
+                       (funcall f))
+                     x))
+    (assert (null left))
+    (flet ((throws () (throw 'tag 0)))
+      (assert (eql (funcall fun 1 t #'throws) 2))
+      (assert (eql (funcall fun 1 nil #'throws) 1))
+      (assert (eql (funcall fun 1 t #'list) 2))))
+  (multiple-value-bind (fun left)
+      (ir-set-vars '(lambda (l k f)
+                     (let ((n k))
+                       (when (consp l)
+                         (setq n (1+ n)))
+                       (block b
+                         (funcall f (lambda () (return-from b))))
+                       n)))
+    (assert (null left))
+    (assert (eql (funcall fun '(1) 5 #'funcall) 6))
+    (assert (eql (funcall fun '() 5 #'identity) 5))))
+
+(with-test (:name (:ssa :nlx :changed-in-extent))
+  ;; Assigned in the extent of a CATCH, X can have either value when
+  ;; the throw arrives, so it keeps its sets.
+  (multiple-value-bind (fun left)
+      (ir-set-vars '(lambda (n)
+                     (let ((x 0))
+                       (catch 'tag
+                         (setq x 1)
+                         (when (plusp n)
+                           (throw 'tag :early))
+                         (setq x 2))
+                       x)))
+    (assert (equal left '(:set)))
+    (assert (eql (funcall fun 1) 1))
+    (assert (eql (funcall fun 0) 2))))
+
+(with-test (:name (:ssa :nlx :joins-other-definitions))
+  ;; X isn't set in the extent of B or of the CATCH, but the exit lands
+  ;; where the other branch of the IF, which sets X, joins: a phi which
+  ;; the exit can't call, so X keeps its sets.
+  (multiple-value-bind (fun left)
+      (ir-set-vars '(lambda (f c)
+                     (let ((x 0))
+                       (if c
+                           (setq x 1)
+                           (block b
+                             (funcall f (lambda () (return-from b)))))
+                       x)))
+    (assert (equal left '(:set)))
+    (assert (eql (funcall fun #'funcall t) 1))
+    (assert (eql (funcall fun #'funcall nil) 0))
+    (assert (eql (funcall fun #'identity nil) 0)))
+  (multiple-value-bind (fun left)
+      (ir-set-vars '(lambda (f c)
+                     (let ((x 0))
+                       (if c
+                           (setq x 1)
+                           (catch 'tag
+                             (funcall f)))
+                       x)))
+    (assert (equal left '(:set)))
+    (assert (eql (funcall fun (lambda () (throw 'tag 2)) nil) 0))
+    (assert (eql (funcall fun #'list t) 1))
+    (assert (eql (funcall fun #'list nil) 0))))
+
+(with-test (:name (:ssa :split-representations))
+  ;; X holds a DOUBLE-FLOAT, then a FIXNUM: its versions get TNs and
+  ;; representations of their own, so the DOUBLE-FLOAT isn't boxed.
+  (assert (not (member 'sb-vm::move-from-double
+                       (ctu:ir2-vops
+                        '(lambda (a n)
+                          (declare (double-float a) (fixnum n))
+                          (let ((x a))
+                            (setq x (* x x))
+                            (let ((r (truncate x)))
+                              (setq x n)
+                              (+ r x))))))))
+  ;; Likewise with a SINGLE-FLOAT: only the result is boxed.
+  (assert (= (count 'sb-vm::move-from-double
+                    (ctu:ir2-vops
+                     '(lambda (a b)
+                       (declare (double-float a) (single-float b))
+                       (let ((x a))
+                         (setq x (sqrt (abs x)))
+                         (let ((y (* x 2)))
+                           (setq x b)
+                           (+ y (* x x)))))))
+             1)))

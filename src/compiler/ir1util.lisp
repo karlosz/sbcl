@@ -2289,6 +2289,8 @@
          (refs (delq1 ref (leaf-refs leaf)))
          (home (node-home-lambda ref)))
     (setf (leaf-refs leaf) refs)
+    (when (and *ssa-convert* (lambda-var-p leaf))
+      (note-ssa-candidate leaf))
     (when (and (typep leaf '(or clambda lambda-var))
                (not (find home refs :key #'node-home-lambda)))
       ;; It was the last reference from this lambda, remove it
@@ -3562,6 +3564,27 @@ is :ANY, the function name is not checked."
         do (setf lvar (combination-lvar dest))
         finally (return t)))
 
+;;; The variable of the source which VAR holds the values of: VAR
+;;; itself, unless VAR is one of several holding them.
+(defun debug-var-origin (var)
+  (or (lambda-var-origin var) var))
+
+;;; Return the variable which LEXENV binds for VAR as far as the
+;;; debugger is concerned: VAR, or one of the variables holding its
+;;; values, whichever is bound innermost, or NIL if VAR isn't in scope.
+(defun lexenv-bound-var (lexenv var)
+  (declare (type lexenv lexenv) (type lambda-var var))
+  (let ((name (leaf-%source-name var)))
+    (or (loop for (entry-name . leaf) in (lexenv-vars lexenv)
+              when (and (eq entry-name name)
+                        (lambda-var-p leaf)
+                        (eq (debug-var-origin leaf) var))
+                return leaf)
+        (let* ((lambda (lexenv-lambda lexenv))
+               (call-lexenv (and lambda (lambda-call-lexenv lambda))))
+          (and call-lexenv
+               (lexenv-bound-var call-lexenv var))))))
+
 ;;; Don't substitute single-ref variables on high-debug / low speed,
 ;;; to improve the debugging experience, unless it is a special
 ;;; variable or a temporary variable used for hairy function entries.
@@ -4299,18 +4322,26 @@ is :ANY, the function name is not checked."
        (loop for d in x
              always (or (typep d 'index)
                         (eq d '*)))))
+;;; Note that the value of SET has been used, so that losing it later
+;;; is not an important result discarded by the program.
+(defun note-set-value-used (set)
+  (declare (type cset set))
+  (map-all-uses (lambda (node)
+                  (when (combination-p node)
+                    (setf (combination-info node) :important-result-discarded)))
+                (set-value set)
+                :sets t))
+
 (defun delete-set (set)
   (let ((var (set-var set)))
     (setf (lambda-var-sets var)
           (delq1 set (lambda-var-sets var)))
-    (map-all-uses (lambda (node)
-                    (when (combination-p node)
-                      (setf (combination-info node) :important-result-discarded)))
-                  (set-value set)
-                  :sets t)
+    (note-set-value-used set)
     (when (and (node-lvar set)
                (not (type-single-value-p (lvar-derived-type (set-value set)))))
       (filter-lvar (set-value set) (lambda (x) `(let ((v ,x)) v))))
+    (when (and *ssa-convert* (lambda-var-p var))
+      (note-ssa-candidate var))
     (delete-filter set (node-lvar set) (set-value set))))
 
 (defun transform-to-identity (nth-arg node n-args)

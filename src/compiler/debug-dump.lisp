@@ -137,6 +137,10 @@
              t)))
       (t t))))
 
+;;; True if the lexical environment of NODE binds VAR for its origin.
+(defun bound-at-p (var node)
+  (eq var (lexenv-bound-var (node-lexenv node) (debug-var-origin var))))
+
 (defun map-live-vars (function live node block vop)
   (declare (type function function) (type local-tn-bit-vector live)
            (type node node) (type ir2-block block)
@@ -163,15 +167,21 @@
                            (or (not (or (member (tn-kind tn)
                                                 '(:environment :debug-environment))
                                         (null (leaf-refs leaf))))
-                               (leaf-visible-to-debugger-p leaf node)))))
+                               (leaf-visible-to-debugger-p leaf node))
+                           (or (not (lambda-var-origin leaf))
+                               (bound-at-p leaf node)))))
             (when live
-              (funcall function leaf tn))
+              (funcall function (debug-var-origin leaf) tn))
             (dolist (copy (lambda-var-copies leaf))
               (when (and (null (leaf-refs copy))
-                         (not (and live (cl:symbol-package (leaf-debug-name leaf))))
-                         (cl:symbol-package (leaf-debug-name copy))
-                         (leaf-visible-to-debugger-p copy node))
-                (funcall function copy tn))))))))
+                         (if (lambda-var-origin copy)
+                             (bound-at-p copy node)
+                             (and (not (and live
+                                            (cl:symbol-package
+                                             (leaf-debug-name (debug-var-origin leaf)))))
+                                  (cl:symbol-package (leaf-debug-name copy))
+                                  (leaf-visible-to-debugger-p copy node))))
+                (funcall function (debug-var-origin copy) tn))))))))
   (values))
 
 (defstruct (dumped-var (:constructor make-dumped-var (var tn))
@@ -179,7 +189,8 @@
                        (:predicate nil))
   (var nil :type lambda-var :read-only t)
   (tn nil :type tn :read-only t)
-  (name nil :type symbol))
+  (name nil :type symbol)
+  (locations '()))
 
 ;;; Given a local conflicts vector and an IR2 block to represent the
 ;;; set of live TNs, and the VAR-LOCS hash-table representing the
@@ -630,7 +641,9 @@
     (when (and (not copy-p)
                (or (eq kind :environment)
                    (and (eq kind :debug-environment)
-                        (null (basic-var-sets var))))
+                        (null (basic-var-sets var))
+                        ;; Nor held by several variables.
+                        (not (lambda-var-origin var))))
                (not (gethash tn (ir2-component-spilled-tns
                                  (component-info *component-being-compiled*))))
                (or (eq (lambda-var-home var) fun)
@@ -681,16 +694,24 @@
 (defun compute-vars (fun level var-locs)
   (declare (type clambda fun) (type hash-table var-locs))
   (collect ((vars) (found))
-    (labels ((frob-live (live node block vop context)
+    (labels ((frob-live (live node block vop context label)
                (when live
                  (let ((*local-call-context*
                          (if (local-call-context-p context)
                              (local-call-context-fun context))))
                    (map-live-vars
                     (lambda (var tn)
-                      (unless (gethash var var-locs)
-                        (found (setf (gethash var var-locs)
-                                     (make-dumped-var var tn)))))
+                      (let ((dumped (gethash var var-locs)))
+                        (unless dumped
+                          (setq dumped (make-dumped-var var tn))
+                          (found dumped)
+                          (setf (gethash var var-locs) dumped))
+                        (when (lambda-var-origin var)
+                          (push (list (if (fixnump label) label (label-position label))
+                                      (tn-sc+offset tn)
+                                      (and (tn-save-tn tn)
+                                           (tn-sc+offset (tn-save-tn tn))))
+                                (dumped-var-locations dumped)))))
                     live node block vop))))
              (frob-dumped (dumped gensym-p)
                (let* ((leaf (dumped-var-var dumped))
@@ -702,6 +723,7 @@
                      (let ((copy (find-if (lambda (copy)
                                             (let ((other (gethash copy var-locs)))
                                               (and other
+                                                   (not (lambda-var-origin copy))
                                                    (not (dumped-var-name other)))))
                                           (lambda-var-copies leaf))))
                        (when copy
@@ -723,11 +745,12 @@
           (let ((block (ir2-block-block 2block)))
             (when (eq (block-info block) 2block)
               (frob-live (ir2-block-live-out 2block) (block-start-node block)
-                         2block nil nil)))
+                         2block nil nil (ir2-block-%label 2block))))
           (dolist (loc (ir2-block-locations 2block))
             (let ((vop (location-info-vop loc)))
               (frob-live (vop-save-set vop) (vop-node vop) (vop-block vop)
-                         vop (location-info-context loc))))))
+                         vop (location-info-context loc)
+                         (location-info-label loc))))))
       (frob-lambda fun t)
       (when (>= level 1)
         (dolist (x (ir2-environment-closure (environment-info (lambda-environment fun))))
@@ -763,7 +786,13 @@
           (dump-1-var fun var tn minimal *byte-buffer*
                       name
                       (and prev-name (eq prev-name name))
-                      (neq var (or (tn-leaf tn) var)))
+                      (neq var (or (tn-leaf tn) var))
+                      (let ((place (cdar (last (dumped-var-locations x)))))
+                        (loop for location in (stable-sort (dumped-var-locations x)
+                                                           #'< :key #'car)
+                              unless (equal (cdr location) place)
+                                collect location
+                              do (setq place (cdr location)))))
           (setf prev-name name)
           (setf (gethash var var-locs) i)
           (incf i)))

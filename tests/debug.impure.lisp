@@ -1928,6 +1928,30 @@
                                      ((n 1) (x 2))))
                    '(1)))))
 
+(with-test (:name (:debugger :variables :setq :dead-merge))
+  ;; Neither value X is set to is ever used.
+  (with-variables-test (:strict (3) :lax (1 2))
+      (sb-int:named-lambda variables-test (c)
+        (declare (optimize (debug :debug)))
+        (let ((x 0))
+          (opaque-identity x)
+          (if c (setq x 1) (setq x 2))
+          (signal 'variables-stop)
+          c))
+    (assert (equal (run-stops '(t) '(((x 1) (c t)))) '(t)))
+    (assert (equal (run-stops '(nil) '(((x 2) (c nil)))) '(nil)))))
+
+(with-test (:name (:debugger :variables :setq :used-once))
+  ;; The value X is set to is used once, so it replaces its reference
+  ;; under SSA conversion at (DEBUG 1).
+  (with-variables-test (:strict (1 2 3) :lax ())
+      (sb-int:named-lambda variables-test (x)
+        (declare (optimize (debug :debug)))
+        (setq x (1+ x))
+        (signal 'variables-stop)
+        (list x))
+    (assert (equal (run-stops '(5) '(((x 6)))) '((6))))))
+
 (with-test (:name (:debugger :variables :setq :parameter))
   (with-variables-test ()
       (sb-int:named-lambda variables-test (n)
