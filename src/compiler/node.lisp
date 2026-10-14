@@ -465,8 +465,9 @@
   ;; A list of the loops nested directly within this one.
   (inferiors nil :type list)
   (depth 0 :type fixnum)
-  ;; The head of the list of blocks directly within this loop.  We must recurse
-  ;; on INFERIORS to find all the blocks.
+  ;; The head of the list of blocks directly within this loop, in depth first
+  ;; order.  We must recurse on INFERIORS, which are in the order of their
+  ;; heads, to find all the blocks.
   (blocks nil :type (or null cblock))
   ;; Backend saves the first emitted block of each loop here.
   (info nil))

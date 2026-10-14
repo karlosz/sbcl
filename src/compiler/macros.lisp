@@ -553,6 +553,28 @@
            ((eq ,block-var ,n-head) ,result)
          ,@body))))
 
+;;; Iterate over the blocks contained in a loop, binding BLOCK-VAR to
+;;; each block in turn.
+;;;
+;;; If supplied, RESULT-FORM is the value to return.
+(defmacro do-loop-blocks ((block-var loop &optional result) &body body)
+  (with-unique-names (fun walk inner inferiors block)
+    `(block nil
+       (flet ((,fun (,block-var) ,@body))
+         (labels ((,walk (,inner)
+                    (let ((,inferiors (loop-inferiors ,inner)))
+                      (do ((,block (loop-blocks ,inner) (block-loop-next ,block)))
+                          ((null ,block))
+                        (do ()
+                            ((not (and ,inferiors
+                                       (> (block-number (loop-head (car ,inferiors)))
+                                          (block-number ,block)))))
+                          (,walk (pop ,inferiors)))
+                        (,fun ,block))
+                      (mapc #',walk ,inferiors))))
+           (,walk ,loop)))
+       ,result)))
+
 ;;; Iterate over the uses of LVAR, binding NODE to each one
 ;;; successively.
 (defmacro do-uses ((node-var lvar &optional result) &body body)

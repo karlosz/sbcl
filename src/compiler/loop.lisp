@@ -71,7 +71,9 @@
 ;;; strange loop, then we do some graph walking to flag the other
 ;;; segments in the strange loop.  While we are finding the loop
 ;;; structures in reverse DFO, we walk it to initialize the block
-;;; lists and initialize the nesting pointers. Then we assign loop depth.
+;;; lists and initialize the nesting pointers.  Finally, we assign the
+;;; depths in the loop nesting and sort each loop's inferiors and
+;;; blocks in depth first ordering.
 (defun loop-analyze (component)
   (let ((outer-loop (component-outer-loop component)))
     (do-blocks (block component :both)
@@ -99,11 +101,20 @@
             (return)))))
     ;; Remaining blocks belong to the outer loop.
     (find-loop-blocks outer-loop)
-    (labels ((assign-depth (loop depth)
-               (setf (loop-depth loop) depth)
+    (labels ((walk (loop depth)
+               (setf (loop-depth loop) depth
+                     (loop-blocks loop) nil
+                     (loop-inferiors loop) (sort (loop-inferiors loop) #'>
+                                                 :key (lambda (inferior)
+                                                        (block-number
+                                                         (loop-head inferior)))))
                (dolist (inferior (loop-inferiors loop))
-                 (assign-depth inferior (1+ depth)))))
-      (assign-depth outer-loop 0))))
+                 (walk inferior (1+ depth)))))
+      (walk outer-loop 0))
+    (do-blocks-backwards (block component :both)
+      (let ((loop (block-loop block)))
+        (when loop
+          (shiftf (block-loop-next block) (loop-blocks loop) block))))))
 
 ;;; FIND-LOOP-BLOCKS  --  Internal
 ;;;

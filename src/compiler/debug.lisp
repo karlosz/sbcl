@@ -252,7 +252,7 @@
 ;;; Descend through the loop nesting and check that the tree is well-formed
 ;;; and that all blocks in the loops are known blocks. We also mark each block
 ;;; that we see so that we can do a check later to detect blocks that weren't
-;;; in any loop.
+;;; in any loop. In addition, we check that the blocks are ordered properly.
 (defun check-loop-consistency (loop superior)
   (declare (type cloop loop) (type (or cloop null) superior))
   (unless (eq (loop-superior loop) superior)
@@ -275,8 +275,20 @@
     (unless (gethash block *seen-blocks*)
       (barf "unseen block ~S in Blocks for ~S" block loop))
     (unless (eq (block-loop block) loop)
-      (barf "wrong loop in ~S, should be ~S" block loop)))
+      (barf "wrong loop in ~S, should be ~S" block loop))
+    (let ((next (block-loop-next block)))
+      (when (and next
+                 (<= (block-number block) (block-number next)))
+        (barf "~S comes before ~S in the Blocks for ~S, ~
+               which are not in depth first order."
+              block next loop))))
 
+  (do ((inferiors (loop-inferiors loop) (cdr inferiors)))
+      ((null (cdr inferiors)))
+    (unless (> (block-number (loop-head (first inferiors)))
+               (block-number (loop-head (second inferiors))))
+      (barf "The Inferiors of ~S are not in the order of their heads."
+            loop)))
   (dolist (inferior (loop-inferiors loop))
     (check-loop-consistency inferior loop))
   (values))
