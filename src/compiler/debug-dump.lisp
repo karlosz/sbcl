@@ -638,7 +638,7 @@
       (setq flags (logior flags compiled-debug-var-indirect-p)))
     (when (integerp package-p)
       (setf flags (logior flags compiled-debug-var-uninterned)))
-    (vector-push-extend flags buffer)
+    (write-var-integer flags buffer)
     (unless (or minimal same-name-p)
       (write-var-string (symbol-name name) buffer)
       (when package-p

@@ -15,7 +15,7 @@
 
 ;;;    Compiled debug variables are in a packed binary representation in the
 ;;; DEBUG-FUN-VARS:
-;;;    single byte of boolean flags:
+;;;    varint of boolean flags:
 ;;;     uninterned name
 ;;;     packaged name
 ;;;     environment-live
