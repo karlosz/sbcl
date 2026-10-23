@@ -1750,7 +1750,7 @@
       (loop
        ;; The routines in the "SB-C" package are macros that advance the
        ;; index.
-       (let* ((flags (prog1 (aref packed-vars i) (incf i)))
+       (let* ((flags (sb-c::read-var-integerf packed-vars i))
               (minimal (logtest sb-c::compiled-debug-var-minimal-p flags))
               (deleted (logtest sb-c::compiled-debug-var-deleted-p flags))
               (packaged (logtest sb-c::compiled-debug-var-packaged flags))
