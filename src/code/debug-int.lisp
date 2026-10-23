@@ -211,7 +211,8 @@
             (:include debug-var)
             (:constructor make-compiled-debug-var
                 (name package id alive-p
-                 sc+offset save-sc+offset indirect-sc+offset))
+                 sc+offset save-sc+offset indirect-sc+offset
+                 &optional locations))
             (:copier nil))
   ;; storage class and offset (unexported)
   (sc+offset nil :type sb-c:sc+offset :read-only t)
@@ -219,7 +220,12 @@
   (save-sc+offset nil :type (or sb-c:sc+offset null) :read-only t)
   ;; For indirect closures the fp of the parent frame is stored in the
   ;; normal SC+OFFSETs above, and this has the offset into the frame
-  (indirect-sc+offset nil :type (or sb-c:sc+offset null) :read-only t))
+  (indirect-sc+offset nil :type (or sb-c:sc+offset null) :read-only t)
+  ;; For a debug var with multiple locations, this slot stores a
+  ;; vector of pc, sc+offset, and save sc+offset or NIL three by three
+  ;; in increasing PC order. The slots SC+OFFSET and SAVE-SC-OFFSET
+  ;; are in effect until the first PC in this vector.
+  (locations nil :type (or null simple-vector) :read-only t))
 
 ;;;; DEBUG-FUNs
 
@@ -1791,6 +1797,10 @@
               (indirect-sc+offset
                 (if (logtest sb-c::compiled-debug-var-indirect-p flags)
                     (sb-c::read-var-integerf packed-vars i)
+                    nil))
+              (locations
+                (if (logtest sb-c::compiled-debug-var-multi-location-p flags)
+                    (sb-c::read-var-locations packed-vars i)
                     nil)))
          (aver (not (and args-minimal (not minimal))))
          (cond ((and prev-name (string= prev-name name))
@@ -1804,7 +1814,8 @@
            name package id
            (logtest sb-c::compiled-debug-var-environment-live flags)
            sc+offset save-sc+offset
-           indirect-sc+offset)
+           indirect-sc+offset
+           locations)
           buffer))
        (when (>= i len) (return)))
       (let ((result (coerce buffer 'simple-vector)))
@@ -2304,6 +2315,20 @@
         (value-cell-ref res)
         res)))
 
+;;; Return the SC+OFFSET and save SC+OFFSET of DEBUG-VAR in FRAME.
+(defun frame-var-locations (debug-var frame)
+  (multiple-value-bind (sc+offset save-sc+offset)
+      (let ((locations (compiled-debug-var-locations debug-var))
+            (location (frame-code-location frame)))
+        (and locations
+             (typep location 'compiled-code-location)
+             (sb-c::var-location-at locations
+                                    (compiled-code-location-pc location))))
+    (if sc+offset
+        (values sc+offset save-sc+offset)
+        (values (compiled-debug-var-sc+offset debug-var)
+                (compiled-debug-var-save-sc+offset debug-var)))))
+
 ;;; This returns what is stored for the variable represented by
 ;;; DEBUG-VAR relative to the FRAME. This may be an indirect value
 ;;; cell if the variable is both closed over and set.
@@ -2323,23 +2348,24 @@
               escaped))
             (compiled-debug-var-indirect-sc+offset debug-var)
             escaped))
-          (escaped
-           (sub-access-debug-var-slot
-            (frame-pointer frame)
-            ;; Immediately after a call returns, saved locations have
-            ;; not been restored yet, so we access the debug var
-            ;; directly from the save location.
-            (or (let ((loc (frame-code-location frame)))
-                  (and (not (code-location-unknown-p loc))
-                       (memq (code-location-kind loc) '(:single-value-return :unknown-return :known-return))
-                       (compiled-debug-var-save-sc+offset debug-var)))
-                (compiled-debug-var-sc+offset debug-var))
-            escaped))
           (t
-           (sub-access-debug-var-slot
-            (frame-pointer frame)
-            (or (compiled-debug-var-save-sc+offset debug-var)
-                (compiled-debug-var-sc+offset debug-var)))))))
+           (multiple-value-bind (sc+offset save-sc+offset)
+               (frame-var-locations debug-var frame)
+             (if escaped
+                 (sub-access-debug-var-slot
+                  (frame-pointer frame)
+                  ;; Immediately after a call returns, saved locations have
+                  ;; not been restored yet, so we access the debug var
+                  ;; directly from the save location.
+                  (or (let ((loc (frame-code-location frame)))
+                        (and (not (code-location-unknown-p loc))
+                             (memq (code-location-kind loc) '(:single-value-return :unknown-return :known-return))
+                             save-sc+offset))
+                      sc+offset)
+                  escaped)
+                 (sub-access-debug-var-slot
+                  (frame-pointer frame)
+                  (or save-sc+offset sc+offset))))))))
 
 ;;; a helper function for working with possibly-invalid values:
 ;;; Do (%MAKE-LISP-OBJ VAL) only if the value looks valid.
@@ -2649,15 +2675,16 @@
 ;;; currently there in case the variable is both closed over and set.
 (defun set-compiled-debug-var-slot (debug-var frame value)
   (let ((escaped (compiled-frame-escaped frame)))
-    (if escaped
-        (sub-set-debug-var-slot (frame-pointer frame)
-                                (compiled-debug-var-sc+offset debug-var)
-                                value escaped)
-        (sub-set-debug-var-slot
-         (frame-pointer frame)
-         (or (compiled-debug-var-save-sc+offset debug-var)
-             (compiled-debug-var-sc+offset debug-var))
-         value))))
+    (multiple-value-bind (sc+offset save-sc+offset)
+        (frame-var-locations debug-var frame)
+      (if escaped
+          (sub-set-debug-var-slot (frame-pointer frame)
+                                  sc+offset
+                                  value escaped)
+          (sub-set-debug-var-slot
+           (frame-pointer frame)
+           (or save-sc+offset sc+offset)
+           value)))))
 
 (defun sub-set-debug-var-slot (fp sc+offset value &optional escaped)
   (declare ((or null system-area-pointer) fp))

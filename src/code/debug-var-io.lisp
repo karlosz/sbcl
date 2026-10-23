@@ -105,6 +105,63 @@
       (write-var-integer (char-code (schar string i)) vec)))
   (values))
 
+;;;; debug variable location lists
+
+;;; Write LOCATIONS, a list of (PC SC+OFFSET SAVE-SC+OFFSET) sorted by
+;;; increasing PC, into VEC. SAVE-SC+OFFSET, if not NIL, is where the
+;;; value in SC+OFFSET is saved across calls, which the debugger picks
+;;; by the kind of frame like for the primary location. Its presence
+;;; is flagged by the low bit of the PC delta.
+(defun write-var-locations (locations vec)
+  (declare (list locations))
+  (write-var-integer (length locations) vec)
+  (let ((prev 0))
+    (dolist (loc locations)
+      (let ((pc (first loc))
+            (sc+offset (second loc))
+            (save-sc+offset (third loc)))
+        (aver (>= pc prev))
+        (write-var-integer (logior (ash (- pc prev) 1)
+                                   (if save-sc+offset 1 0))
+                           vec)
+        (write-var-integer sc+offset vec)
+        (when save-sc+offset
+          (write-var-integer save-sc+offset vec))
+        (setq prev pc))))
+  (values))
+
+;;; Read a location list written by WRITE-VAR-LOCATIONS out of VEC at
+;;; INDEX, incrementing INDEX. Returns a simple-vector of absolute
+;;; PCs, SC+OFFSETs and save SC+OFFSETs or NIL, three by three.
+(defmacro read-var-locations (vec index)
+  (once-only ((n `(read-var-integerf ,vec ,index)))
+    `(let ((result (make-array (* 3 ,n)))
+           (prev 0))
+       (dotimes (i ,n result)
+         (let* ((delta (read-var-integerf ,vec ,index))
+                (pc (+ prev (ash delta -1))))
+           (setf (svref result (* 3 i)) pc
+                 (svref result (+ (* 3 i) 1)) (read-var-integerf ,vec ,index)
+                 (svref result (+ (* 3 i) 2)) (if (logbitp 0 delta)
+                                                  (read-var-integerf ,vec ,index)
+                                                  nil))
+           (setq prev pc))))))
+
+;;; Return the SC+OFFSET in effect at PC according to LOCATIONS, a
+;;; vector as returned by READ-VAR-LOCATIONS, and its save
+;;; SC+OFFSET. If the PC precedes every entry, we return NIL,
+;;; signifying that the primary location should be used.
+(defun var-location-at (locations pc)
+  (declare (type simple-vector locations))
+  (let ((result nil))
+    (do ((i 0 (+ i 3)))
+        ((or (>= i (length locations))
+             (> (the index (svref locations i)) pc)))
+      (setq result i))
+    (and result
+         (values (svref locations (1+ result))
+                 (svref locations (+ result 2))))))
+
 ;;;; packed bit vectors
 
 ;;; Read the specified number of BYTES out of VEC at INDEX and convert
