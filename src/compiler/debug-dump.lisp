@@ -583,10 +583,15 @@
 ;;; then we also exclude set variables, since the variable is not
 ;;; guaranteed to be live everywhere in that case.
 ;;;
+;;; If VAR has multiple locations, then the additional LOCATIONS are
+;;; represented by a list of (PC SC+OFFSET SAVE-SC+OFFSET) by
+;;; increasing PC.
+;;;
 ;;; This is read by sb-di::parse-compiled-debug-vars
-(defun dump-1-var (fun var tn minimal buffer &optional name same-name-p copy-p)
+(defun dump-1-var (fun var tn minimal buffer &optional name same-name-p copy-p
+                                                       locations)
   (declare (type lambda-var var) (type (or tn null) tn)
-           (type clambda fun))
+           (type clambda fun) (type list locations))
   (let* ((package (sb-xc:symbol-package name))
          (package-p (and package (not (eq package *package*))))
          (save-tn (and tn (tn-save-tn tn)))
@@ -638,6 +643,8 @@
       (setq flags (logior flags compiled-debug-var-indirect-p)))
     (when (integerp package-p)
       (setf flags (logior flags compiled-debug-var-uninterned)))
+    (when (and locations (not minimal))
+      (setq flags (logior flags compiled-debug-var-multi-location-p)))
     (write-var-integer flags buffer)
     (unless (or minimal same-name-p)
       (write-var-string (symbol-name name) buffer)
@@ -661,7 +668,9 @@
                (write-var-integer (tn-sc+offset tn) buffer)
                (aver minimal))
            (when save-tn
-             (write-var-integer (tn-sc+offset save-tn) buffer)))))
+             (write-var-integer (tn-sc+offset save-tn) buffer))))
+    (when (and locations (not minimal))
+      (write-var-locations locations buffer)))
   (values))
 
 ;;; Return a vector suitable for use as the DEBUG-FUN-VARS

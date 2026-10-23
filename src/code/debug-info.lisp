@@ -23,6 +23,7 @@
 ;;;     has ID (name not unique in this fun)
 ;;;     minimal debug-info argument (name generated as ARG-0, ...)
 ;;;     deleted: placeholder for unused minimal argument
+;;;     has multiple locations
 ;;;    [name length in bytes (as var-length integer), if not minimal]
 ;;;    [...name bytes..., if not minimal]
 ;;;    [if packaged, var-length integer that is package name length]
@@ -30,15 +31,25 @@
 ;;;    [If has ID, ID as var-length integer]
 ;;;    SC-Offset of primary location (as var-length integer)
 ;;;    [If has save SC, SC-OFFSET of save location (as var-length integer)]
+;;;    [If has multiple locations, number of locations (as var-length integer)
+;;;     ...location entries...
+;;;     Each location entry is a PC delta shifted left by one, whose
+;;;     low bit says whether a save location follows, encoded as an
+;;;     SC-OFFSET and the SC-OFFSET of the save location, each a
+;;;     var-length integer. The PCs are relative to the start of the
+;;;     code component and stored as deltas from the previous
+;;;     entry. The primary location above is the one in effect until
+;;;     the first such PC.]
 
-(defconstant compiled-debug-var-uninterned             #b00000001) ;; if -packaged then package-id is stored
-(defconstant compiled-debug-var-packaged               #b00000010)
-(defconstant compiled-debug-var-environment-live       #b00000100)
-(defconstant compiled-debug-var-save-loc-p             #b00001000)
-(defconstant compiled-debug-var-same-name-p            #b00010000) ;; if -packaged => -same-package-p
-(defconstant compiled-debug-var-minimal-p              #b00100000)
-(defconstant compiled-debug-var-deleted-p              #b01000000)
-(defconstant compiled-debug-var-indirect-p             #b10000000)
+(defconstant compiled-debug-var-uninterned             #b000000001) ;; if -packaged then package-id is stored
+(defconstant compiled-debug-var-packaged               #b000000010)
+(defconstant compiled-debug-var-environment-live       #b000000100)
+(defconstant compiled-debug-var-save-loc-p             #b000001000)
+(defconstant compiled-debug-var-same-name-p            #b000010000) ;; if -packaged => -same-package-p
+(defconstant compiled-debug-var-minimal-p              #b000100000)
+(defconstant compiled-debug-var-deleted-p              #b001000000)
+(defconstant compiled-debug-var-indirect-p             #b010000000)
+(defconstant compiled-debug-var-multi-location-p       #b100000000)
 
 ;;;; compiled debug blocks
 ;;;;
