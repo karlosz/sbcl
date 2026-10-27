@@ -1003,7 +1003,7 @@
          (when (and (functional-kind-eq (lambda-var-home leaf) let)
                     ;; Make sure the let is inside the dx let
                     (lexenv-contains-lambda (lambda-var-home leaf)
-                                            (node-lexenv dynamic-extent)))
+                                            (dynamic-extent-scope dynamic-extent)))
            (propagate-lvar-dx (let-var-initial-value leaf) old-lvar)))
         (clambda
          (setf (lvar-dynamic-extent old-lvar) nil)

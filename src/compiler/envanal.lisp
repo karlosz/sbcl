@@ -445,7 +445,7 @@
               (when (and (functional-kind-eq (lambda-var-home leaf) let)
                          (not (lambda-var-sets leaf))
                          (lexenv-contains-lambda (lambda-var-home leaf)
-                                                 (node-lexenv dynamic-extent))
+                                                 (dynamic-extent-scope dynamic-extent))
                          (leaf-refs-not-escape-elsewhere-p leaf use))
                 (when (find-stack-allocatable-parts (let-var-initial-value leaf)
                                                     dynamic-extent)
@@ -458,7 +458,7 @@
                   (when (and (or (not check-nesting)
                                  ;; Allow (let ((x (lambda () v))) (let ((d x)) (dynamic-extent d)))
                                  ;; but not (let ((x (lambda () v))) (let ((d (list x))) (dynamic-extent d)))
-                                 (lexenv-contains-lambda leaf (node-lexenv dynamic-extent)))
+                                 (lexenv-contains-lambda leaf (dynamic-extent-scope dynamic-extent)))
                              (environment-closure environment)
                              ;; At this point, DXIFY-DOWNWARD-FUNARGS
                              ;; and PROPAGATE-REF-DX should have

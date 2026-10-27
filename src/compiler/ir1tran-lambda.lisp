@@ -259,7 +259,8 @@
         (setf (bind-lambda bind) lambda)
         (setf (node-lexenv bind) *lexenv*)
         (when dynamic-extent
-          (setf (node-lexenv dynamic-extent) *lexenv*))
+          (setf (node-lexenv dynamic-extent) *lexenv*
+                (dynamic-extent-scope dynamic-extent) *lexenv*))
 
         (let ((block (ctran-starts-block result-ctran)))
           (declare (inline make-return))

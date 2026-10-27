@@ -1898,6 +1898,10 @@
   (values nil :type list)
   ;; the cleanup for this extent.
   (cleanup nil :type (or cleanup null))
+  ;; the lexical environment declaring this extent, which LETs and
+  ;; closures must be nested in for their values to be allocated with
+  ;; it. SSA conversion can replace the NODE-LEXENV with a copy.
+  (scope *lexenv* :type lexenv)
   ;; some kind of info used by the back end
   (info nil))
 
