@@ -1487,8 +1487,6 @@
   ;; Does it hold a constant that shouldn't be destructively modified
   (constant)
   (unused-initial-value)
-  ;; Instruct constraint propagation to do some work.
-  (compute-same-refs)
   (no-debug)
   ;; A version of a variable split among several, which the debugger
   ;; shows where it holds the value: keep it even if nothing reads it.
@@ -1595,9 +1593,6 @@
                 (:copier nil))
   ;; The leaf referenced.
   (leaf nil :type leaf)
-  ;; An cons added by constraint-propagate to all REFs that have the
-  ;; same value when referencing a lambda-var with sets.
-  (same-refs nil :type (or null cons))
   ;; The reaching definition when referencing a lambda-var with
   ;; sets. Only meaningful during SSA conversion.
   (ssa-definition nil :type (or null lambda-var cset phi)))

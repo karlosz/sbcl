@@ -2493,16 +2493,7 @@
                     (lambda-var-p var)
                     (null (leaf-refs var))
                     (not (lambda-var-deleted var)))
-           (delete-lambda-var var))
-         (when (and (null (basic-var-sets var))
-                    (lambda-var-p var)
-                    ;; Constraints won't compute it for vars without sets
-                    (lambda-var-compute-same-refs var))
-           (loop for ref in (cdr (leaf-refs var)) ;; skip one ref (doesn't matter which)
-                 do
-                 (let ((dest (principal-lvar-end (node-lvar ref))))
-                   (when dest
-                     (reoptimize-node dest)))))))
+           (delete-lambda-var var))))
       (cast
        (flush-dest (cast-value node)))
       (enclose)
@@ -3075,8 +3066,7 @@ is :ANY, the function name is not checked."
     (push ref (leaf-refs leaf))
     (update-ref-dependencies leaf ref)
     (delete-ref ref)
-    (setf (ref-leaf ref) leaf
-          (ref-same-refs ref) nil)
+    (setf (ref-leaf ref) leaf)
     (setf (leaf-ever-used leaf) t)
     (let* ((ltype (leaf-type leaf))
            (vltype (make-single-value-type ltype)))
@@ -3190,17 +3180,7 @@ is :ANY, the function name is not checked."
   (declare (type ref x y))
   (let ((leaf (ref-leaf x)))
    (and (eq leaf (ref-leaf y))
-        (or (constant-reference-p x)
-            (refs-unchanged-p x y)
-            (and (lambda-var-p leaf)
-                 (setf (lambda-var-compute-same-refs leaf) t)
-                 nil)))))
-
-(defun refs-unchanged-p (ref1 ref2)
-  (let ((same (ref-same-refs ref1)))
-    (and same
-         (eq same
-             (ref-same-refs ref2)))))
+        (constant-reference-p x))))
 
 
 ;;; Return true if VAR would have to be closed over if environment
