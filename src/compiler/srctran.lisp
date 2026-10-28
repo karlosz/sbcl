@@ -10167,8 +10167,19 @@
                              (let ((op2 (combination-fun-debug-name else))
                                    after-else)
                                (when (eq op2 op)
-                                 (let ((a2 (car (combination-args else))))
-                                   (when (and (same-leaf-ref-p a a2)
+                                 (let* ((a2 (car (combination-args else)))
+                                        (ref (principal-lvar-use a))
+                                        (ref2 (principal-lvar-use a2)))
+                                   ;; Only refs come between the two
+                                   ;; tests, so they see the same value
+                                   ;; even of a lexical variable which
+                                   ;; is set.
+                                   (when (and (ref-p ref)
+                                              (ref-p ref2)
+                                              (eq (ref-leaf ref) (ref-leaf ref2))
+                                              (or (constant-reference-p ref)
+                                                  (and (lambda-var-p (ref-leaf ref))
+                                                       (not (closure-var-p (ref-leaf ref)))))
                                               (if-p (setf after-else (next-node else))))
                                      (unless (eq (if-consequent if)
                                                  (if-consequent after-else))
