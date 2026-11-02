@@ -411,7 +411,7 @@
             (let ((type (single-value-type int)))
               (when (and (member-type-p type)
                          (eql (member-type-size type) 1)
-                         (not (preserve-single-use-debug-var-p node (ref-leaf node))))
+                         (not (preserve-single-use-debug-var-p node (ref-leaf node) nil)))
                 (change-ref-leaf node (find-constant
                                        (first (member-type-members type)))))))
           (reoptimize-lvar lvar)))))
@@ -2886,7 +2886,7 @@ not inlined.")
                      ;; This might make some things opaque, but type-annotations
                      ;; are used only in very specific cases, and preserving
                      ;; control flow with casts or combinations will be just as opaque.
-                     (unless (or (preserve-single-use-debug-var-p call var)
+                     (unless (or (preserve-single-use-debug-var-p call var leaf)
                                  (find-if #'lvar-type-annotation-p (lvar-annotations arg)))
                        (propagate-lvar-annotations-to-refs arg var)
                        (update-lvar-dependencies leaf arg)
@@ -2902,7 +2902,7 @@ not inlined.")
                      t))))))
        ((and arg
              (null (rest (leaf-refs var)))
-             (not (preserve-single-use-debug-var-p call var))
+             (not (preserve-single-use-debug-var-p call var nil))
              (substitute-single-use-lvar arg var)))
        (t
         (propagate-to-refs var type))))
@@ -3485,7 +3485,7 @@ not inlined.")
                (let ((bind (lambda-bind home)))
                  (functional-kind-case home
                    ((let mv-let) nil)
-                   (assignment (not (preserve-single-use-debug-var-p bind var)))
+                   (assignment (not (preserve-single-use-debug-var-p bind var leaf)))
                    (t (policy bind (> speed debug)))))
                ;; As in PROPAGATE-LET-ARGS, don't substitute lvars
                ;; with annotations or dynamic extent.
@@ -3499,6 +3499,14 @@ not inlined.")
                                (lvar-dynamic-extent arg))
                        (return nil))))))
       (note-var-copy var leaf)
+      ;; So is what each call passes, as the debugger may look for it there.
+      (let ((n (position var (lambda-vars home))))
+        (dolist (ref (leaf-refs home))
+          (let ((use (lvar-uses (nth n (combination-args (node-dest ref))))))
+            (when (and (ref-p use)
+                       (lambda-var-p (ref-leaf use))
+                       (lambda-var-origin (ref-leaf use)))
+              (note-var-copy (ref-leaf use) leaf)))))
       (let ((component (lambda-component home)))
         (substitute-leaf-if (lambda (ref)
                               (eq (node-component ref) component))

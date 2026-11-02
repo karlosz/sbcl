@@ -1388,7 +1388,7 @@
              ((and (singleton-p (leaf-refs var))
                    ;; Don't substitute single-ref variables on high-debug /
                    ;; low speed, to improve the debugging experience.
-                   (not (preserve-single-use-debug-var-p call var)))
+                   (not (preserve-single-use-debug-var-p call var nil)))
               (setf done-something t)
               (substitute-single-use-lvar arg var)))
        ;; if we've done something, the functional may now be used in

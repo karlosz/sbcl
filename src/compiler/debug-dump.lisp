@@ -137,6 +137,29 @@
              t)))
       (t t))))
 
+;;; Run BODY for each debug binding in BLOCK in order, with VAR bound to its
+;;; variable and VERSION to the version, up to those in effect at the node UNTIL.
+(defmacro do-debug-bindings ((var version block &optional until) &body body)
+  (let ((node (gensym "NODE")))
+    `(do-nodes (,node nil ,block)
+       (loop for (,var . ,version) in (ctran-debug-bindings (node-prev ,node))
+             do (progn ,@body))
+       ,@(when until
+           `((when (eq ,node ,until)
+               (return)))))))
+
+;;; True if VAR holds the value of its origin at NODE.
+(defun bound-at-p (var node)
+  (let ((number (lambda-var-debug-version-number var))
+        (origin (lambda-var-origin var))
+        (block (node-block node)))
+    (when number
+      (let ((bound (= (sbit (block-in block) number) 1)))
+        (do-debug-bindings (bound-var version block node)
+          (when (eq bound-var origin)
+            (setq bound (eq version var))))
+        (and bound (leaf-visible-to-debugger-p origin node))))))
+
 (defun map-live-vars (function live node block vop)
   (declare (type function function) (type local-tn-bit-vector live)
            (type node node) (type ir2-block block)
@@ -160,19 +183,25 @@
           (let ((live (and (not (lambda-var-no-debug leaf))
                            ;; The value of a variable substituted
                            ;; away is computed before its binding.
-                           (or (not (or (member (tn-kind tn)
-                                                '(:environment :debug-environment))
-                                        (null (leaf-refs leaf))
-                                        (lambda-var-copies leaf)))
-                               (leaf-visible-to-debugger-p leaf node)))))
+                           (if (lambda-var-origin leaf)
+                               (bound-at-p leaf node)
+                               (or (not (or (member (tn-kind tn)
+                                                    '(:environment :debug-environment))
+                                            (null (leaf-refs leaf))
+                                            (lambda-var-copies leaf)))
+                                   (leaf-visible-to-debugger-p leaf node))))))
             (when live
-              (funcall function leaf tn))
+              (funcall function (debug-var-origin leaf) tn))
             (dolist (copy (lambda-var-copies leaf))
               (when (and (null (leaf-refs copy))
-                         (not (and live (cl:symbol-package (leaf-debug-name leaf))))
-                         (cl:symbol-package (leaf-debug-name copy))
-                         (leaf-visible-to-debugger-p copy node))
-                (funcall function copy tn))))))))
+                         (if (lambda-var-origin copy)
+                             (bound-at-p copy node)
+                             (and (not (and live
+                                            (not (lambda-var-origin leaf))
+                                            (cl:symbol-package (leaf-debug-name leaf))))
+                                  (cl:symbol-package (leaf-debug-name copy))
+                                  (leaf-visible-to-debugger-p copy node))))
+                (funcall function (debug-var-origin copy) tn))))))))
   (values))
 
 (defstruct (dumped-var (:constructor make-dumped-var (var tn))
@@ -180,7 +209,19 @@
                        (:predicate nil))
   (var nil :type lambda-var :read-only t)
   (tn nil :type tn :read-only t)
-  (name nil :type symbol))
+  (name nil :type symbol)
+  (locations '()))
+
+;;; Return the locations of DUMPED by increasing PC, keeping only those
+;;; which differ from the one before. It starts in the first one found,
+;;; that of its TN, which is what is dumped as its primary location.
+(defun dumped-var-location-changes (dumped)
+  (let ((place (cdar (last (dumped-var-locations dumped)))))
+    (loop for location in (stable-sort (dumped-var-locations dumped)
+                                       #'< :key #'car)
+          unless (equal (cdr location) place)
+            collect location
+          do (setq place (cdr location)))))
 
 ;;; Given a local conflicts vector and an IR2 block to represent the
 ;;; set of live TNs, and the VAR-LOCS hash-table representing the
@@ -235,6 +276,10 @@
                             (ldb (byte registers-size 0) x))
             (ash x (- registers-size)))))
 
+;;; The PC of a location's LABEL, which NOTE-NEXT-INSTRUCTION gives as a position.
+(defun location-label-position (label)
+  (if (fixnump label) label (label-position label)))
+
 ;;; Dump a compiled debug-location into *BYTE-BUFFER* that describes
 ;;; the code/source map and live info. If true, VOP is the VOP
 ;;; associated with this location, for use in determining whether TNs
@@ -263,7 +308,7 @@
                           (equal live *previous-live*)))
 
          (path (node-source-path node))
-         (loc (if (fixnump label) label (label-position label)))
+         (loc (location-label-position label))
          (form-number (source-path-form-number path)))
     (vector-push-extend
      (logior
@@ -629,6 +674,8 @@
                     (when (< id sb-impl::+last-stable-package-id+) ;; exclude contribs
                       (setf package-p id)))))))
     (when (and (not copy-p)
+               ;; Its TN only holds one of the values of its origin.
+               (not (lambda-var-origin var))
                (or (eq kind :environment)
                    (and (eq kind :debug-environment)
                         (null (basic-var-sets var))))
@@ -682,20 +729,28 @@
 (defun compute-vars (fun level var-locs)
   (declare (type clambda fun) (type hash-table var-locs))
   (collect ((vars) (found))
-    (labels ((frob-live (live node block vop context env)
+    (labels ((frob-live (live node block vop context env label)
                (when live
                  (let ((*local-call-context*
                          (if (local-call-context-p context)
                              (local-call-context-fun context))))
                    (map-live-vars
                     (lambda (var tn)
-                      (unless (or (and (lambda-var-indirect var)
-                                       (not (lambda-var-explicit-value-cell var))
-                                       (neq (lambda-environment (lambda-var-home var))
-                                            env))
-                                  (gethash var var-locs))
-                        (found (setf (gethash var var-locs)
-                                     (make-dumped-var var tn)))))
+                      (unless (and (lambda-var-indirect var)
+                                   (not (lambda-var-explicit-value-cell var))
+                                   (neq (lambda-environment (lambda-var-home var))
+                                        env))
+                        (let ((dumped (gethash var var-locs)))
+                          (unless dumped
+                            (setq dumped (make-dumped-var var tn))
+                            (found dumped)
+                            (setf (gethash var var-locs) dumped))
+                          (when (lambda-var-origin var)
+                            (push (list (location-label-position label)
+                                        (tn-sc+offset tn)
+                                        (and (tn-save-tn tn)
+                                             (tn-sc+offset (tn-save-tn tn))))
+                                  (dumped-var-locations dumped))))))
                     live node block vop))))
              (frob-dumped (dumped gensym-p)
                (let* ((leaf (dumped-var-var dumped))
@@ -729,12 +784,14 @@
             (when (eq (block-info block) 2block)
               (frob-live (ir2-block-live-out 2block) (block-start-node block)
                          2block nil nil
-                         (lambda-environment fun))))
+                         (lambda-environment fun)
+                         (ir2-block-%label 2block))))
           (dolist (loc (ir2-block-locations 2block))
             (let ((vop (location-info-vop loc)))
               (frob-live (vop-save-set vop) (vop-node vop) (vop-block vop)
                          vop (location-info-context loc)
-                         (lambda-environment fun))))))
+                         (lambda-environment fun)
+                         (location-info-label loc))))))
       (frob-lambda fun t)
       (when (>= level 1)
         (dolist (x (ir2-environment-closure (environment-info (lambda-environment fun))))
@@ -770,7 +827,8 @@
           (dump-1-var fun var tn minimal *byte-buffer*
                       name
                       (and prev-name (eq prev-name name))
-                      (neq var (or (tn-leaf tn) var)))
+                      (neq var (or (tn-leaf tn) var))
+                      (dumped-var-location-changes x))
           (setf prev-name name)
           (setf (gethash var var-locs) i)
           (incf i)))
@@ -1128,6 +1186,46 @@
      next
      (neq (ir2-block-environment 2block)
           (ir2-block-environment next)))))
+
+;;; Find the set of versions of split variables holding their values at the
+;;; start of each block, by iterating over the flow graph like
+;;; LIFETIME-FLOW-ANALYSIS, over the debug bindings. A join only keeps what its
+;;; predecessors agree on, and nothing is known at an entry. Lifetime analysis
+;;; does this, for itself and for the dumper.
+(defun compute-debug-versions (component)
+  (let ((count 0))
+    (do-blocks (block component)
+      (do-debug-bindings (var version block)
+        (when (and version (not (lambda-var-debug-version-number version)))
+          (setf (lambda-var-debug-version-number version) count)
+          (incf count)
+          (push version (lambda-var-debug-versions var)))))
+    (when (plusp count)
+      (flet ((make-versions ()
+               (make-array count :element-type 'bit :initial-element 1)))
+        (do-blocks (block component)
+          (setf (block-in block) (make-versions)
+                (block-out block) (make-versions)))
+        (let ((versions (make-versions))
+              (did-something t))
+          (loop while did-something
+                do (setq did-something nil)
+                   (do-blocks (block component)
+                     (let ((in (block-in block)))
+                       (fill in 1)
+                       (dolist (pred (block-pred block))
+                         (if (eq pred (component-head component))
+                             (fill in 0)
+                             (bit-and in (block-out pred) in)))
+                       (replace versions in)
+                       (do-debug-bindings (var version block)
+                         (dolist (other (lambda-var-debug-versions var))
+                           (setf (sbit versions (lambda-var-debug-version-number other)) 0))
+                         (when version
+                           (setf (sbit versions (lambda-var-debug-version-number version)) 1)))
+                       (unless (equal versions (block-out block))
+                         (replace (block-out block) versions)
+                         (setq did-something t))))))))))
 
 ;;; Return a DEBUG-INFO structure describing COMPONENT. This has to be
 ;;; called after assembly so that source map information is available.

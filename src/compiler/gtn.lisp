@@ -55,7 +55,7 @@
   (declare (type clambda fun))
   (dolist (var (lambda-vars fun))
     (when (or (leaf-refs var) (preserve-set-only-debug-var-p var))
-      (let ((debug-variable-p (or (debug-environment-var-p var)
+      (let ((debug-variable-p (or (debug-environment-var-p (debug-var-origin var))
                                   (preserve-set-only-debug-var-p var))))
         (if (and let-p
                  (not debug-variable-p)
@@ -99,9 +99,11 @@
 
                 (debug-variable-p
                  ;; :DEBUG-ENVIRONMENT TNs might be spilled before they are initialized,
-                 ;; putting unboxed values onto the stack.
+                 ;; putting unboxed values onto the stack. That of a version of a split
+                 ;; variable is only live where it holds a value.
                  #-c-stack-is-control-stack
                  (when (and let-p
+                            (not (lambda-var-origin var))
                             (member sb-vm:any-reg-sc-number (primitive-type-scs type)))
                    (setf (tn-sc res) (sc-or-lose 'sb-vm::control-stack)))
                  ;; If it's a constant it may end up being never read,

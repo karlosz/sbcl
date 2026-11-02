@@ -196,7 +196,11 @@
   (block nil :type (or cblock null))
   ;; Use for reporting notes for the following node,
   ;; which can be transformed and lose its original source code.
-  (source-path nil :type list))
+  (source-path nil :type list)
+  ;; Which variables hold the values of split variables from here on: an
+  ;; alist, in order, from a split variable to the version holding its value,
+  ;; or to NIL if none does. See COMPUTE-DEBUG-VERSIONS.
+  (debug-bindings nil :type list))
 
 (defmethod print-object ((x ctran) stream)
   (print-unreadable-object (x stream :type t :identity t)
@@ -1532,6 +1536,14 @@
   (optimistic-leaf nil :type (or null leaf (eql :many)))
   ;; The variables which this variable has substituted for.
   (copies nil :type list)
+  ;; When the values of a variable of the source are split among several
+  ;; variables, as by SSA conversion, each of those points here to it, and
+  ;; so does it to itself. The debugger shows them all as that variable.
+  (origin nil :type (or null lambda-var))
+  ;; For COMPUTE-DEBUG-VERSIONS: the number of this variable in the sets
+  ;; of versions, and the versions of this variable.
+  (debug-version-number nil :type (or null index))
+  (debug-versions nil :type list)
   source-form)
 
 (def-struct-flag-accessors lambda-var)

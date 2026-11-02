@@ -2709,6 +2709,21 @@
       (dolist (pred (block-pred block))
         (maybe-reoptimize (block-last pred)))))))
 
+;;; CTRAN, the last point in BLOCK, is going away. What it says for the debugger
+;;; holds at the start of a successor only reached from BLOCK. A join says
+;;; nothing is known, as the other predecessors don't have this version.
+(defun move-debug-bindings (ctran block)
+  (when (ctran-debug-bindings ctran)
+    (dolist (succ (block-succ block))
+      (let ((start (block-start succ)))
+        (when (and start (neq start ctran))
+          (setf (ctran-debug-bindings start)
+                (append (if (singleton-p (block-pred succ))
+                            (ctran-debug-bindings ctran)
+                            (mapcar (lambda (binding) (list (car binding)))
+                                    (ctran-debug-bindings ctran)))
+                        (ctran-debug-bindings start))))))))
+
 ;;; Delete a node from a block, deleting the block if there are no
 ;;; nodes left. We remove the node from the uses of its LVAR.
 ;;;
@@ -2730,6 +2745,8 @@
          (prev-kind (ctran-kind prev))
          (last (block-last block)))
     (maybe-reoptimize-previous-node prev block)
+    (when (eq node last)
+      (move-debug-bindings prev block))
     (cond ((or (eq prev-kind :inside-block)
                (and (eq prev-kind :block-start)
                     (not (eq node last))))
@@ -2741,6 +2758,9 @@
                   (setf (node-prev next) prev)
                   (unless (ctran-source-path prev)
                     (setf (ctran-source-path prev) (ctran-source-path ctran)))
+                  (setf (ctran-debug-bindings prev)
+                        (nconc (ctran-debug-bindings prev)
+                               (ctran-debug-bindings ctran)))
                   (when (if-p next)
                     (reoptimize-lvar (if-test next)))))
            (setf (node-prev node) nil)
@@ -3597,15 +3617,26 @@ is :ANY, the function name is not checked."
         do (setf lvar (combination-lvar dest))
         finally (return t)))
 
+;;; The variable of the source which VAR holds the values of: VAR
+;;; itself, unless VAR is one of several holding them.
+(defun debug-var-origin (var)
+  (or (lambda-var-origin var) var))
+
 ;;; Don't substitute single-ref variables on high-debug / low speed,
 ;;; to improve the debugging experience, unless it is a special
 ;;; variable or a temporary variable used for hairy function entries.
-(defun preserve-single-use-debug-var-p (node var)
-  (and (policy node (eql preserve-single-use-debug-variables 3))
-       (not (lambda-var-specvar var))
-       (not (and (combination-p node)
-                 (typep (leaf-debug-name (combination-lambda node))
-                        '(cons (member hairy-function-entry) t))))))
+;;; LEAF is what would be substituted for VAR, or NIL if it isn't a leaf.
+;;; A variable holding some of the values of a variable can only be replaced
+;;; by another variable, which then shows it; with anything else, nothing
+;;; would hold the value.
+(defun preserve-single-use-debug-var-p (node var leaf)
+  (or (and (lambda-var-origin var)
+           (not (lambda-var-p leaf)))
+      (and (policy node (eql preserve-single-use-debug-variables 3))
+           (not (lambda-var-specvar var))
+           (not (and (combination-p node)
+                     (typep (leaf-debug-name (combination-lambda node))
+                            '(cons (member hairy-function-entry) t)))))))
 
 ;;; Don't delete set but unreferenced variables on high-debug to
 ;;; improve the debugging experience.

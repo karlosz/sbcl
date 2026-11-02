@@ -406,7 +406,8 @@
 
 ;;; Iterate over all the blocks in ENV, setting up :LIVE conflicts for
 ;;; TN. We make the TN global if it isn't already. The TN must have at
-;;; least one reference.
+;;; least one reference. The TN of a version of a split variable only
+;;; gets them where the version is current, from its write on.
 (defun setup-environment-tn-conflicts (component tn env debug-p)
   (declare (type component component) (type tn tn) (type environment env))
   (when (and debug-p
@@ -414,17 +415,28 @@
              (tn-local tn))
     (convert-to-global tn))
   (setf (tn-current-conflict tn) (tn-global-conflicts tn))
-  (do-blocks-backwards (block component)
-    (when (eq (cached-block-environment block) env)
-      (let* ((2block (block-info block))
-             (last (do ((b (ir2-block-next 2block) (ir2-block-next b))
-                        (prev 2block b))
-                       ((not (eq (ir2-block-block b) block))
-                        prev))))
-        (do ((b last (ir2-block-prev b)))
-            ((not (eq (ir2-block-block b) block)))
-          (setup-environment-tn-conflict tn b debug-p)))))
+  (let ((version (and debug-p (debug-version-of-tn tn))))
+    (do-blocks-backwards (block component)
+      (when (and (eq (cached-block-environment block) env)
+                 (or (not version) (debug-version-current-p version block)))
+        (let* ((2block (block-info block))
+               (last (do ((b (ir2-block-next 2block) (ir2-block-next b))
+                          (prev 2block b))
+                         ((not (eq (ir2-block-block b) block))
+                          prev))))
+          (do ((b last (ir2-block-prev b)))
+              ((not (eq (ir2-block-block b) block)))
+            (setup-environment-tn-conflict tn b debug-p)
+            (when (and version (tn-written-in-p tn b))
+              (return)))))))
   (values))
+
+;;; Is TN written in the IR2 block BLOCK?
+(defun tn-written-in-p (tn block)
+  (do ((ref (tn-writes tn) (tn-ref-next ref)))
+      ((null ref) nil)
+    (when (eq (vop-block (tn-ref-vop ref)) block)
+      (return t))))
 
 ;;; Iterate over all functions in the tail-set of FUN which close-over
 ;;; TN, adding appropriate conflict information. Indirect TNs should
@@ -622,40 +634,60 @@
     (when (find-in #'tn-ref-across tn (vop-args vop) :key #'tn-ref-tn)
       (return nil))))
 
+;;; The variable which TN is the TN of, if it is a version of a split
+;;; variable. Its TN only holds the value of the variable where the
+;;; version is current, as COMPUTE-DEBUG-VERSIONS finds, and so is kept
+;;; live for the debugger there rather than throughout its environment.
+;;; As the version is current there on every path, it is never live
+;;; before it is written.
+(defun debug-version-of-tn (tn)
+  (let ((var (tn-leaf tn)))
+    (and (lambda-var-p var) (lambda-var-origin var) var)))
+
+;;; Is VERSION, a version of a split variable, current at the end of BLOCK?
+(defun debug-version-current-p (version block)
+  (let ((number (lambda-var-debug-version-number version)))
+    (and number (= (sbit (block-out block) number) 1))))
+
 ;;; If the block has no successors, or its successor is the component
 ;;; tail, then all :DEBUG-ENVIRONMENT TNs are always added, regardless
 ;;; of whether they appeared to be live. This ensures that these TNs
 ;;; are considered to be live throughout blocks that read them, but
 ;;; don't have any interesting successors (such as a return or tail
 ;;; call.) In this case, we set the corresponding bit in LIVE-IN as
-;;; well.
+;;; well. The TN of a version of a split variable is added instead at
+;;; the end of each block where the version is current.
 (defun make-debug-environment-tns-live (block live-bits live-list)
   (let* ((1block (ir2-block-block block))
          (live-in (ir2-block-live-in block))
          (succ (block-succ 1block))
          (next (ir2-block-next block)))
     (when (and next
-               (not (eq (ir2-block-block next) 1block))
-               (or (null succ)
-                   (eq (first succ)
-                       (component-tail (block-component 1block)))
-                   (let ((node (block-last 1block)))
-                     (and (combination-p node)
-                          (eq (combination-kind node) :local)
-                          (node-tail-p node)))))
-      (do ((conf (ir2-block-global-tns block)
-                 (global-conflicts-next-blockwise conf)))
-          ((null conf))
-        (let* ((tn (global-conflicts-tn conf))
-               (num (global-conflicts-number conf)))
-          (when (and num (zerop (sbit live-bits num))
-                     (eq (tn-kind tn) :debug-environment)
-                     (eq (tn-environment tn) (cached-block-environment 1block))
-                     (saved-after-read tn block))
-            (note-conflicts live-bits live-list tn num)
-            (setf (sbit live-bits num) 1)
-            (push-in tn-next* tn live-list)
-            (setf (sbit live-in num) 1))))))
+               (not (eq (ir2-block-block next) 1block)))
+      (let ((exit-p (or (null succ)
+                        (eq (first succ)
+                            (component-tail (block-component 1block)))
+                        (let ((node (block-last 1block)))
+                          (and (combination-p node)
+                               (eq (combination-kind node) :local)
+                               (node-tail-p node))))))
+        (do ((conf (ir2-block-global-tns block)
+                   (global-conflicts-next-blockwise conf)))
+            ((null conf))
+          (let* ((tn (global-conflicts-tn conf))
+                 (num (global-conflicts-number conf)))
+            (when (and num (zerop (sbit live-bits num))
+                       (eq (tn-kind tn) :debug-environment)
+                       (eq (tn-environment tn) (cached-block-environment 1block))
+                       (let ((version (debug-version-of-tn tn)))
+                         (if version
+                             (debug-version-current-p version 1block)
+                             exit-p))
+                       (saved-after-read tn block))
+              (note-conflicts live-bits live-list tn num)
+              (setf (sbit live-bits num) 1)
+              (push-in tn-next* tn live-list)
+              (setf (sbit live-in num) 1)))))))
 
   (values live-bits live-list))
 
@@ -982,6 +1014,7 @@
 
 
 (defun lifetime-analyze (component)
+  (compute-debug-versions component)
   (lifetime-pre-pass component)
   (maybe-environmentalize-closure-tns component)
   (setup-environment-live-conflicts component)
