@@ -100,8 +100,12 @@
                               ;; TN for debugging?
                               (or
                                (not (cl:symbol-package (leaf-debug-name leaf)))
-                               (policy (vop-node vop)
-                                   (= preserve-single-use-debug-variables 0)))
+                               (and (not (and (lambda-var-p leaf)
+                                              (or (lambda-var-origin leaf)
+                                                  (some #'lambda-var-origin
+                                                        (lambda-var-copies leaf)))))
+                                    (policy (vop-node vop)
+                                        (= preserve-single-use-debug-variables 0))))
                               ;; arguments of local functions have hidden write
                               (not (and (lambda-var-p leaf)
                                         (functional-kind-eq (lambda-var-home leaf) nil optional))))))
