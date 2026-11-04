@@ -274,27 +274,70 @@
                  (return)))))))))
   (values))
 
-;;; Return the best representation for a normal TN. SCs is a list
-;;; of the SC numbers of the SCs to select from. Costs is a scratch
-;;; vector.
+;;; Return TN and the TNs connected to it, directly or through others,
+;;; by the MOVEs giving the variables of assignment lambdas their values,
+;;; whose representations are yet to be chosen from the same SCs. Such a
+;;; variable gets a value from each call, as on each iteration of a loop:
+;;; choosing their representations together keeps the moves between them
+;;; simple moves, where choosing each by its own references can leave a
+;;; coercion on every call, as when the variable is tagged and the value
+;;; computed for the next iteration untagged.
+(defun moved-tns (tn)
+  (declare (type tn tn))
+  (let ((tns (list tn)))
+    (flet ((assigned-p (to)
+             (let ((var (tn-leaf to)))
+               (and (lambda-var-p var)
+                    (functional-kind-eq (lambda-var-home var) assignment))))
+           (add (other)
+             (when (and (null (tn-sc other))
+                        (memq (tn-kind other) '(:normal :environment :debug-environment))
+                        (eq (tn-primitive-type other) (tn-primitive-type tn))
+                        (not (memq other tns)))
+               (push other tns)
+               t)))
+      (do ((pending tns))
+          ((null pending))
+        (let ((tn (pop pending)))
+          (do ((ref (tn-writes tn) (tn-ref-next ref)))
+              ((null ref))
+            (let ((vop (tn-ref-vop ref)))
+              (when (and (eq (vop-info-name (vop-info vop)) 'move)
+                         (assigned-p tn)
+                         (add (tn-ref-tn (vop-args vop))))
+                (push (first tns) pending))))
+          (do ((ref (tn-reads tn) (tn-ref-next ref)))
+              ((null ref))
+            (let ((vop (tn-ref-vop ref)))
+              (when (and (eq (vop-info-name (vop-info vop)) 'move)
+                         (assigned-p (tn-ref-tn (vop-results vop)))
+                         (add (tn-ref-tn (vop-results vop))))
+                (push (first tns) pending)))))))
+    tns))
+
+;;; Return the best representation for a normal TN and the TNs moved to
+;;; and from it, from MOVED-TNS. SCs is a list of the SC numbers of the
+;;; SCs to select from. Costs is a scratch vector.
 ;;;
-;;; What we do is sum the costs for each reference to TN in each of
-;;; the SCs, and then return the SC having the lowest cost. A second
+;;; What we do is sum the costs for each reference to these TNs in each
+;;; of the SCs, and then return the SC having the lowest cost. A second
 ;;; value is returned which is true when the selection is unique which
-;;; is often not the case for the MOVE VOP.
+;;; is often not the case for the MOVE VOP. The third value is the TNs.
 (defun select-tn-representation (tn scs costs)
   (declare (type tn tn) (type sc-cost-vector costs))
   (dolist (scn scs)
     (setf (aref costs scn) 0))
 
-  (add-representation-costs tn (tn-reads tn) scs costs
-                            #'vop-args #'vop-info-arg-costs
-                            #'vop-info-more-arg-costs
-                            nil)
-  (add-representation-costs tn (tn-writes tn) scs costs
-                            #'vop-results #'vop-info-result-costs
-                            #'vop-info-more-result-costs
-                            t)
+  (let ((tns (if (eq (tn-kind tn) :constant) (list tn) (moved-tns tn))))
+    (dolist (tn tns)
+      (add-representation-costs tn (tn-reads tn) scs costs
+                                #'vop-args #'vop-info-arg-costs
+                                #'vop-info-more-arg-costs
+                                nil)
+      (add-representation-costs tn (tn-writes tn) scs costs
+                                #'vop-results #'vop-info-result-costs
+                                #'vop-info-more-result-costs
+                                t))
 
 
   (let ((min most-positive-fixnum)
@@ -308,7 +351,7 @@
                (setq min cost)
                (setq min-scn scn)
                (setq unique t)))))
-    (values min-scn unique)))
+    (values min-scn unique tns))))
 
 (declaim (end-block))
 
@@ -1099,11 +1142,12 @@
                  (unless (tn-sc tn)
                    (let ((scs (possible-scs tn)))
                      (cond ((rest scs)
-                            (multiple-value-bind (sc uniquep)
+                            (multiple-value-bind (sc uniquep tns)
                                 (select-tn-representation tn scs costs)
                               (when (or (not unique)
                                         uniquep)
-                                (set-sc tn sc))))
+                                (dolist (tn tns)
+                                  (set-sc tn sc)))))
                            (t
                             (set-sc tn (first scs)))))))))
 

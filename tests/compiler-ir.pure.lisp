@@ -167,6 +167,27 @@
                             (incf moved))))))))
     (assert (zerop moved))))
 
+;;; The two loops pass the index between them, and both get one
+;;; representation of it: nothing untags it on the way into the inner loop
+;;; and tags it again on the way out.
+(with-test (:name (:representation :assignment-moves))
+  (assert (<= (count-if (lambda (name)
+                          (search "WORD/FIXNUM" (symbol-name name)))
+                        (ir2-vops '(lambda (s)
+                                    (declare (simple-string s))
+                                    (labels ((outer (i sum)
+                                               (if (< i (length s))
+                                                   (inner i sum 0)
+                                                   sum))
+                                             (inner (j sum n)
+                                               (let ((d (and (< j (length s))
+                                                             (digit-char-p (schar s j)))))
+                                                 (if d
+                                                     (inner (1+ j) sum (+ (* n 10) d))
+                                                     (outer (1+ j) (+ sum n))))))
+                                      (outer 0 0)))))
+              2)))
+
 #+sb-devel
 (with-test (:name (:assignment-convert :iterative-tail))
   (let ((converted nil))
