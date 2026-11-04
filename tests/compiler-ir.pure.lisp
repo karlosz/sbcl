@@ -145,6 +145,28 @@
                                      nil))))
              1)))
 
+;;; LOOP steps C by moves of what PEEK-CHAR returns, which targeting can't
+;;; use, as there are several of them: C is packed where the value comes
+;;; back all the same, leaving it nothing to move.
+(with-test (:name (:pack :several-moves))
+  (let ((moved 0))
+    (inspect-ir '(lambda (input)
+                  (loop for c = (peek-char nil input nil nil)
+                        while (and c (char= c #\space))
+                        do (read-char input)))
+                (lambda (component)
+                  (ctu:do-ir2-blocks (block component)
+                    (do ((vop (sb-c::ir2-block-start-vop block) (sb-c::vop-next vop)))
+                        ((null vop))
+                      (when (eq (sb-c::vop-name vop) 'sb-c::move)
+                        (let ((writes (sb-c::tn-writes
+                                       (sb-c::tn-ref-tn (sb-c::vop-args vop)))))
+                          (when (and writes
+                                     (eq (sb-c::vop-name (sb-c::tn-ref-vop writes))
+                                         'sb-c::call-named))
+                            (incf moved))))))))
+    (assert (zerop moved))))
+
 #+sb-devel
 (with-test (:name (:assignment-convert :iterative-tail))
   (let ((converted nil))

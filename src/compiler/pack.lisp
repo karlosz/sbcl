@@ -1497,6 +1497,59 @@
                 (check-ok-target target tn sc))
       (return-from find-ok-target-offset it))))
 
+;;; Return a location for TN, which is written by several moves, such as
+;;; the variable of an assignment lambda, where as many of the moves as
+;;; possible do nothing: the location of a TN moved into TN if that suits
+;;; the TNs yet to be packed which are moved into TN too, or else any
+;;; location which suits all of them. Targeting follows a single writer
+;;; only, and TN often goes first, which would leave the others to find
+;;; it taken by what they conflict with, like the registers a call
+;;; clobbers.
+(defun find-ok-moved-tns-offset (tn sc)
+  (declare (type tn tn) (type storage-class sc))
+  (let ((writes (tn-writes tn)))
+    (when (and writes (tn-ref-next writes))
+      (macrolet ((do-moved-tns ((var) &body body)
+                   `(do ((ref writes (tn-ref-next ref)))
+                        ((null ref))
+                      (let* ((target (tn-ref-target ref))
+                             (,var (and target (tn-ref-tn target))))
+                        (when (and ,var (eq (tn-kind ,var) :normal))
+                          ,@body)))))
+        (flet ((suits-unpacked-p (loc)
+                 (do-moved-tns (moved)
+                   (when (and (not (tn-offset moved))
+                              (conflicts-in-sc moved sc loc))
+                     (return-from suits-unpacked-p nil)))
+                 t))
+          (do-moved-tns (moved)
+            (when (tn-offset moved)
+              (let ((loc (check-ok-target moved tn sc)))
+                (when (and loc (suits-unpacked-p loc))
+                  (return-from find-ok-moved-tns-offset loc)))))
+          (let ((unpacked nil))
+            (do-moved-tns (moved)
+              (unless (tn-offset moved)
+                (setq unpacked t)))
+            (when unpacked
+              (let* ((sb (sc-sb sc))
+                     (size (sc-element-size sc)))
+                (flet ((try-location (loc)
+                         (when (and (not (conflicts-in-sc tn sc loc))
+                                    (suits-unpacked-p loc))
+                           (return-from find-ok-moved-tns-offset loc))))
+                  (if (eq (sb-kind sb) :unbounded)
+                      (loop for loc from 0 by (sc-alignment sc)
+                            until (> (+ loc size) (finite-sb-current-size sb))
+                            do (try-location loc))
+                      (let ((locations (sc-locations sc))
+                            (wired (finite-sb-wired-map sb)))
+                        (do-sc-locations (loc (logandc2 locations wired) nil size)
+                          (try-location loc))
+                        (do-sc-locations (loc (logand locations wired) nil size)
+                          (try-location loc))))
+                  nil)))))))))
+
 ;;;; location selection
 
 ;;; Select some location for TN in SC, returning the offset if we
@@ -1597,6 +1650,7 @@
       (when (or restricted
                 (not (and (minusp (tn-cost tn)) (sc-save-p sc))))
         (let ((loc (or (find-ok-target-offset original sc)
+                       (find-ok-moved-tns-offset original sc)
                        (select-location original sc :use-reserved-locs restricted)
                        (when (unbounded-sc-p sc)
                          (grow-sc sc)
