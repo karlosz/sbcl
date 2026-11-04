@@ -3118,3 +3118,28 @@
             (list x))))
     (assert (equal (run-stops '(2) '(((:frame variables-test) (x 2) (:set x 42))))
                    '((42))))))
+
+;;; ACC is passed to VAL and back, and they share a TN where the loops are
+;;; assignment lambdas. ACC stays in scope in the inner loop, where only
+;;; VAL has a value.
+(with-test (:name (:debugger :variables :merged-assignment-variables))
+  (with-variables-test (:strict () :lax (1))
+      (sb-int:named-lambda variables-test (n)
+        (declare (optimize (debug :debug)))
+        (labels ((outer (i acc)
+                   (signal 'variables-stop)
+                   (if (< i n)
+                       (labels ((inner (j val)
+                                  (signal 'variables-stop)
+                                  (if (< j 2)
+                                      (inner (1+ j) (cons j val))
+                                      (outer (1+ i) val))))
+                         (inner 0 acc))
+                       acc)))
+          (outer 0 nil)))
+    (assert (equal (run-stops '(1) '(((i 0) (acc nil))
+                                     ((j 0) (val nil) (acc nil))
+                                     ((j 1) (val (0)) (acc nil))
+                                     ((j 2) (val (1 0)) (acc nil))
+                                     ((i 1) (acc (1 0)))))
+                   '((1 0))))))

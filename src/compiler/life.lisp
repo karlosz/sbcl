@@ -931,73 +931,128 @@
          (aver (and (null (tn-reads tn)) (null (tn-writes tn))))))
   (values))
 
+;;; Destructively merge the conflict info of TN into ORIGINAL and
+;;; replace the uses of TN.
+;;;
+;;; For any block that uses only TN, just insert that conflict into the
+;;; conflicts for the original TN, changing the LTN map to refer to the
+;;; original TN. This gives a result indistinguishable from the what
+;;; there would have been if the original TN had always been referenced.
+;;; This leaves no sign that TN was ever involved.
+;;;
+;;; If a block has references to both TN and the original TN, then we
+;;; call MERGE-ALIAS-BLOCK-CONFLICTS to combine the conflicts into the
+;;; original conflict.
+(defun merge-tn-conflicts (tn original)
+  (declare (type tn tn original))
+  (ensure-global-tn tn)
+  (ensure-global-tn original)
+  (setf (tn-vertex original) nil)
+  (let ((conf (tn-global-conflicts tn))
+        (oconf (tn-global-conflicts original))
+        (oprev nil))
+    (loop
+      (unless oconf
+        (if oprev
+            (setf (global-conflicts-next-tnwise oprev) conf)
+            (setf (tn-global-conflicts original) conf))
+        (do ((current conf (global-conflicts-next-tnwise current)))
+            ((null current))
+          (change-global-conflicts-tn current original))
+        (return))
+      (let* ((block (global-conflicts-block conf))
+             (num (ir2-block-number block))
+             (onum (ir2-block-number (global-conflicts-block oconf))))
+
+        (cond ((< onum num)
+               (shiftf oprev oconf (global-conflicts-next-tnwise oconf)))
+              ((> onum num)
+               (if oprev
+                   (setf (global-conflicts-next-tnwise oprev) conf)
+                   (setf (tn-global-conflicts original) conf))
+               (change-global-conflicts-tn conf original)
+               (shiftf oprev
+                       conf
+                       (global-conflicts-next-tnwise conf)
+                       oconf))
+              (t
+               (merge-alias-block-conflicts conf oconf)
+               (shiftf oprev oconf (global-conflicts-next-tnwise oconf))
+               (setf conf (global-conflicts-next-tnwise conf)))))
+      (unless conf (return))))
+
+  (flet ((frob (refs)
+           (let ((ref refs)
+                 (next nil))
+             (loop
+               (unless ref (return))
+               (setq next (tn-ref-next ref))
+               (change-tn-ref-tn ref original)
+               (setq ref next)))))
+    (frob (tn-reads tn))
+    (frob (tn-writes tn)))
+  (setf (tn-global-conflicts tn) nil)
+  (values))
+
 ;;; For each :ALIAS TN, destructively merge the conflict info into the
 ;;; original TN and replace the uses of the alias.
-;;;
-;;; For any block that uses only the alias TN, just insert that
-;;; conflict into the conflicts for the original TN, changing the LTN
-;;; map to refer to the original TN. This gives a result
-;;; indistinguishable from the what there would have been if the
-;;; original TN had always been referenced. This leaves no sign that
-;;; an alias TN was ever involved.
-;;;
-;;; If a block has references to both the alias and the original TN,
-;;; then we call MERGE-ALIAS-BLOCK-CONFLICTS to combine the conflicts
-;;; into the original conflict.
 (defun merge-alias-conflicts (component)
   (declare (type component component))
   (do ((tn (ir2-component-alias-tns (component-info component))
            (tn-next tn)))
       ((null tn))
-    (let ((original (tn-save-tn tn)))
-      (ensure-global-tn tn)
-      (ensure-global-tn original)
-      (setf (tn-vertex original) nil)
-      (let ((conf (tn-global-conflicts tn))
-            (oconf (tn-global-conflicts original))
-            (oprev nil))
-        (loop
-          (unless oconf
-            (if oprev
-                (setf (global-conflicts-next-tnwise oprev) conf)
-                (setf (tn-global-conflicts original) conf))
-            (do ((current conf (global-conflicts-next-tnwise current)))
-                ((null current))
-              (change-global-conflicts-tn current original))
-            (return))
-          (let* ((block (global-conflicts-block conf))
-                 (num (ir2-block-number block))
-                 (onum (ir2-block-number (global-conflicts-block oconf))))
+    (merge-tn-conflicts tn (tn-save-tn tn)))
+  (values))
 
-            (cond ((< onum num)
-                   (shiftf oprev oconf (global-conflicts-next-tnwise oconf)))
-                  ((> onum num)
-                   (if oprev
-                       (setf (global-conflicts-next-tnwise oprev) conf)
-                       (setf (tn-global-conflicts original) conf))
-                   (change-global-conflicts-tn conf original)
-                   (shiftf oprev
-                           conf
-                           (global-conflicts-next-tnwise conf)
-                           oconf))
-                  (t
-                   (merge-alias-block-conflicts conf oconf)
-                   (shiftf oprev oconf (global-conflicts-next-tnwise oconf))
-                   (setf conf (global-conflicts-next-tnwise conf)))))
-          (unless conf (return))))
-
-      (flet ((frob (refs)
-               (let ((ref refs)
-                     (next nil))
-                 (loop
-                   (unless ref (return))
-                   (setq next (tn-ref-next ref))
-                   (change-tn-ref-tn ref original)
-                   (setq ref next)))))
-        (frob (tn-reads tn))
-        (frob (tn-writes tn)))
-      (setf (tn-global-conflicts tn) nil)))
-
+;;; Merge the TNs which a MOVE copies between, when they are of the
+;;; variables of assignment lambdas, as of loops, and don't conflict: with
+;;; one TN the move does nothing, where packing them apart, as by where
+;;; else they are moved to and from, makes it a load or a store. Merging
+;;; the TN of a variable bound by a LET too would give the merged TN several
+;;; writers, and so keep targeting from packing it with the TN computing
+;;; the value, as of the next index of a loop. The debugger finds the
+;;; values of the variable merged away in the other TN, as of a copy.
+(defun coalesce-moved-tns (component)
+  (declare (type component component))
+  (let ((merged '()))
+    (do-ir2-blocks (block component)
+      (do ((vop (ir2-block-start-vop block) (vop-next vop)))
+          ((null vop))
+        (when (eq (vop-info-name (vop-info vop)) 'move)
+          (let* ((from (tn-ref-tn (vop-args vop)))
+                 (to (tn-ref-tn (vop-results vop)))
+                 (from-var (tn-leaf from))
+                 (to-var (tn-leaf to)))
+            (when (and (eq (tn-kind from) :normal)
+                       (eq (tn-kind to) :normal)
+                       (eq (tn-sc from) (tn-sc to))
+                       (lambda-var-p from-var)
+                       (lambda-var-p to-var)
+                       (or (eq from to)
+                           (and (functional-kind-eq (lambda-var-home from-var) assignment)
+                                (functional-kind-eq (lambda-var-home to-var) assignment)
+                                (not (tns-conflict from to)))))
+              (unless (eq from to)
+                (merge-tn-conflicts from to)
+                ;; Including the variables merged into FROM before.
+                (dolist (var (cons from-var (lambda-var-copies from-var)))
+                  (when (eq (leaf-info var) from)
+                    (setf (leaf-info var) to)))
+                (note-var-copy from-var to-var)
+                (setf (tn-kind from) :unused)
+                (push from merged))
+              ;; It would count as references in deciding where to pack TO.
+              (delete-vop vop))))))
+    (when merged
+      (let ((2comp (component-info component)))
+        (do ((tn (ir2-component-normal-tns 2comp) (tn-next tn))
+             (prev nil))
+            ((null tn))
+          (if (memq tn merged)
+              (if prev
+                  (setf (tn-next prev) (tn-next tn))
+                  (setf (ir2-component-normal-tns 2comp) (tn-next tn)))
+              (setq prev tn))))))
   (values))
 
 ;;; On high debug levels, for all variables that a lambda closes over
@@ -1020,7 +1075,8 @@
   (setup-environment-live-conflicts component)
   (lifetime-flow-analysis component)
   (lifetime-post-pass component)
-  (merge-alias-conflicts component))
+  (merge-alias-conflicts component)
+  (coalesce-moved-tns component))
 
 ;;;; conflict testing
 

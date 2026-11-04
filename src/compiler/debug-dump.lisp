@@ -193,7 +193,9 @@
             (when live
               (funcall function (debug-var-origin leaf) tn))
             (dolist (copy (lambda-var-copies leaf))
-              (when (and (null (leaf-refs copy))
+              ;; A copy merged into TN keeps its references.
+              (when (and (or (null (leaf-refs copy))
+                             (eq (leaf-info copy) tn))
                          (if (lambda-var-origin copy)
                              (bound-at-p copy node)
                              (and (not (and live

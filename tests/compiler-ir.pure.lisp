@@ -197,6 +197,29 @@
     (assert (search "PRINT" (first calls)))
     (assert (search "PRIN1" (second calls)))))
 
+;;; SUM is passed from the loop to the join in its body and back: the two
+;;; variables share one TN.
+(with-test (:name (:pack :merged-assignment-variables))
+  (let ((tns '()))
+    (inspect-ir '(lambda (v f)
+                  (declare (simple-vector v) (function f))
+                  (labels ((lp (i sum)
+                             (if (< i (length v))
+                                 (if (funcall f (svref v i))
+                                     (j i (+ sum 1))
+                                     (j i sum))
+                                 sum))
+                           (j (i sum) (lp (1+ i) sum)))
+                    (lp 0 0)))
+                (lambda (component)
+                  (dolist (fun (sb-c::component-lambdas component))
+                    (dolist (lambda (cons fun (sb-c::lambda-lets fun)))
+                      (dolist (var (sb-c::lambda-vars lambda))
+                        (when (and (string= (sb-c::leaf-%source-name var) "SUM")
+                                   (sb-c::tn-p (sb-c::leaf-info var)))
+                          (pushnew (sb-c::leaf-info var) tns)))))))
+    (assert (= (length tns) 1))))
+
 #+sb-devel
 (with-test (:name (:assignment-convert :iterative-tail))
   (let ((converted nil))
