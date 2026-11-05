@@ -970,25 +970,25 @@
    "         1"
    "         (* N (! (1- N)))))"
    "1: (ZEROP N)"
-   "2: (* N (! (1- N)))"
-   "3: (1- N)"
-   "4: (! (1- N))"
-   "5: (* N (! (1- N)))"
-   "6: (DEFUN ! (N)"
+   "2: (IF (ZEROP N)"
+   "       1"
+   "       (* N (! (1- N))))"
+   "3: (DEFUN ! (N)"
    "     (DECLARE (OPTIMIZE DEBUG))"
    "     (IF (ZEROP N)"
    "         1"
    "         (* N (! (1- N)))))"
-   "7: (IF (ZEROP N)"
-   "       1"
-   "       (* N (! (1- N))))"
+   "4: (* N (! (1- N)))"
+   "5: (1- N)"
+   "6: (! (1- N))"
+   "7: (* N (! (1- N)))"
    "0]"))
 
 (with-test (:name (:debugger :breakpoint-and-step)
             :fails-on (:or :freebsd :arm :riscv))
   (test-debugger
    "ll #'!
-    br #.(progn (setq *ok-p* t) 2)"
+    br #.(progn (setq *ok-p* t) 4)"
    '(break)
    '*
    "debugger invoked"
@@ -1001,7 +1001,7 @@
    '*
    "(* N (! (1- N)))"
    '*
-   "1: 2 in !"
+   "1: 4 in !"
    "added"
    "0]")
   (test-debugger

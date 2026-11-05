@@ -188,6 +188,15 @@
                                       (outer 0 0)))))
               2)))
 
+;;; The consequent is the drop-through, however the successors were linked.
+(with-test (:name (:control :source-order))
+  (let ((calls (ctu:asm-search "FDEFN " '(lambda (x)
+                                         (if (consp x)
+                                             (progn (print x) 1)
+                                             (progn (prin1 x) 2))))))
+    (assert (search "PRINT" (first calls)))
+    (assert (search "PRIN1" (second calls)))))
+
 #+sb-devel
 (with-test (:name (:assignment-convert :iterative-tail))
   (let ((converted nil))

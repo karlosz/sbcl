@@ -115,11 +115,16 @@
     (t 0)))
 
 (defun control-order-successors (block successors)
-  (if (and (= (length successors) 2)
-           (< (control-relevance-to block (first successors))
-              (control-relevance-to block (second successors))))
-      (list (second successors) (first successors))
-      successors))
+  (let* ((last (block-last block))
+         ;; In the order of the source, rather than of how they were linked.
+         (successors (if (and (if-p last) (rest successors))
+                         (list (if-consequent last) (if-alternative last))
+                         successors)))
+    (if (and (= (length successors) 2)
+             (< (control-relevance-to block (first successors))
+                (control-relevance-to block (second successors))))
+        (list (second successors) (first successors))
+        successors)))
 
 ;;; Do a graph walk linking blocks into the emit order as we go. We
 ;;; call FIND-ROTATED-LOOP-HEAD to do while-loop optimization, and
