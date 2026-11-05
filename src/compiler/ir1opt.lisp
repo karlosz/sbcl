@@ -4017,7 +4017,8 @@ not inlined.")
                                              (setf bad-use use))
                                          nil))
                               (or (immediately-used-p value use)
-                                  (progn (when (almost-immediately-used-p value use :flushable t)
+                                  (progn (when (almost-immediately-used-p value use :flushable t
+                                                                                    :through-assignments t)
                                            (setf good-types-not-immediately-used t))
                                          nil)))
                      (unless next-block

@@ -789,6 +789,13 @@
                    (eq (block-start succ)
                        (node-prev dest))))))))
 
+;;; Is NODE a call giving the variables of an assignment lambda their
+;;; values?
+(defun assignment-call-p (node)
+  (and (combination-p node)
+       (eq (combination-kind node) :local)
+       (functional-kind-eq (combination-lambda node) assignment)))
+
 ;;; Return true if LVAR destination is executed after node with only
 ;;; uninteresting nodes intervening.
 ;;;
@@ -796,7 +803,8 @@
 ;;; REFs, ENCLOSEs, or external CASTs to the same destination.
 (defun almost-immediately-used-p (lvar node &key flushable
                                                  no-multiple-value-lvars
-                                                 no-effect)
+                                                 no-effect
+                                                 through-assignments)
   (declare (type lvar lvar)
            (type (or null node) node))
   (unless node
@@ -848,8 +856,11 @@
                          (go :next))
                        (unless no-effect
                          (let (fun)
-                           (when (and (eq (combination-kind node) :local)
-                                      (functional-kind-eq (setf fun (combination-lambda node)) let))
+                           (when (or (and (eq (combination-kind node) :local)
+                                          (functional-kind-eq (setf fun (combination-lambda node)) let))
+                                     (and through-assignments
+                                          (assignment-call-p node)
+                                          (setf fun (combination-lambda node))))
                              (setf node (lambda-bind fun))
                              (go :next)))))
                       (entry

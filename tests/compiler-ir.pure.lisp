@@ -11,7 +11,6 @@
 
 (enable-test-parallelism)
 
-
 (import '(sb-c::combination-fun-debug-name
           sb-c::combination-fun-source-name
           sb-c::*compile-component-hook*
@@ -810,7 +809,6 @@
     (assert (= (count 'sb-vm::allocate-vector-on-stack vops) 1))
     (assert (= (count 'sb-vm::allocate-vector-on-heap vops) 0))))
 
-
 (with-test (:name :no-type-check-tail-call)
   (destructuring-bind (combination)
       (ir-full-calls `(lambda (x)
@@ -1578,3 +1576,41 @@
                            (setq x b)
                            (+ y (* x x)))))))
              1)))
+
+;;; The index is moved into the variable stepped by the loop on each
+;;; iteration, and both get one representation: nothing tags or untags it
+;;; in the loop, only the length is untagged.
+(with-test (:name (:representation :assignment-moves :ssa))
+  (assert (<= (count-if (lambda (name)
+                          (search "WORD/FIXNUM" (symbol-name name)))
+                        (ir2-vops '(lambda (bits)
+                                    (declare (simple-bit-vector bits))
+                                    (loop for i below (length bits)
+                                          do (setf (sbit bits i) 1))
+                                    bits)))
+              1)))
+
+;;; SUM is set on one path through the loop only: the variables joining its
+;;; values at the head of the loop and where the paths meet share one TN.
+(with-test (:name (:pack :merged-joins))
+  (let ((tns '()))
+    (inspect-ir '(lambda (string)
+                  (declare (simple-string string))
+                  (let ((sum 0) (n 0) (in nil))
+                    (loop for c across string
+                          do (let ((d (digit-char-p c)))
+                               (cond (d (setq n (+ (* n 10) d) in t))
+                                     (in (setq sum (+ sum n) n 0 in nil)))))
+                    (+ sum n)))
+                (lambda (component)
+                  (dolist (fun (sb-c::component-lambdas component))
+                    (dolist (lambda (cons fun (sb-c::lambda-lets fun)))
+                      (dolist (var (sb-c::lambda-vars lambda))
+                        (let ((origin (sb-c::lambda-var-origin var)))
+                          (when (and origin
+                                     (string= (sb-c::leaf-%source-name origin) "SUM")
+                                     (equal (sb-c::lambda-%debug-name lambda) "phi")
+                                     (sb-c::tn-p (sb-c::leaf-info var)))
+                            (pushnew (sb-c::leaf-info var) tns))))))))
+    (assert (= (length tns) 1))))
+
