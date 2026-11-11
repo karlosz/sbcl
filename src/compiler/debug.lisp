@@ -1047,17 +1047,7 @@
                   (cont-num (node-lvar node))))
         (etypecase node
           (ref
-           (print-leaf (ref-leaf node))
-           #+nil
-           (let ((leaf (ref-leaf node)))
-             (when (and (lambda-var-p leaf)
-                        (lambda-var-compute-same-refs leaf))
-               (let ((same (loop for other-ref in (leaf-refs leaf)
-                                 unless (or (eq other-ref node)
-                                            (not (refs-unchanged-p node other-ref)))
-                                 collect (cont-num (node-lvar other-ref)))))
-                 (when same
-                   (format t " same: ~{~a~^ ~}" same))))))
+           (print-leaf (ref-leaf node)))
           (basic-combination
            (let ((kind (basic-combination-kind node)))
              (format t "~(~A~A ~A~) "
