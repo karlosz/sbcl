@@ -66,6 +66,11 @@
 ;;; POSITIVE-FIXNUM for FIXNUM, etc. Note that more SCs implies fewer
 ;;; possible values, or a subtype relationship, since more SCs implies
 ;;; more possible representations.
+;;;
+;;; A version of a variable holds the value of one of its writes, so it
+;;; is subject to copy propagation only where the variable itself would
+;;; be: when it is the only one of the variable's versions which is
+;;; written, and the variable isn't a parameter, whose writes are hidden.
 (defun tn-is-copy-of (tn)
   (declare (type tn tn))
   (declare (inline subsetp))
@@ -104,14 +109,18 @@
                                                           (debug-var-origin leaf)
                                                           leaf))))
                                (and (not (and (lambda-var-p leaf)
-                                              (or (lambda-var-origin leaf)
+                                              (or (and (lambda-var-origin leaf)
+                                                       (/= (lambda-var-written-versions
+                                                            (lambda-var-origin leaf))
+                                                           1))
                                                   (some #'lambda-var-origin
                                                         (lambda-var-copies leaf)))))
                                     (policy (vop-node vop)
                                         (= preserve-single-use-debug-variables 0))))
                               ;; arguments of local functions have hidden write
                               (not (and (lambda-var-p leaf)
-                                        (functional-kind-eq (lambda-var-home leaf) nil optional))))))
+                                        (functional-kind-eq (lambda-var-home (debug-var-origin leaf))
+                                                            nil optional))))))
                        arg-tn)))))))
 
 (defun reads-within-block-p (tn block)
@@ -276,6 +285,7 @@
 ;;; sets, doing flow analysis, and then propagating copies using the
 ;;; results.
 (defun copy-propagate (component)
+  (count-written-versions component)
   (setf (block-out (component-head component)) (make-sset))
   (do-blocks (block component)
     (init-copy-sets block))
@@ -291,4 +301,16 @@
     (do-blocks (block component)
       (propagate-copies block original-copies)))
 
+  (values))
+
+;;; Record in each variable how many of the variables holding its
+;;; values have a written TN, which, as conversion gives each one write,
+;;; are the writes of the variable: where only one is written, the
+;;; variable would have the single write which makes a copy.
+(defun count-written-versions (component)
+  (do ((tn (ir2-component-normal-tns (component-info component)) (tn-next tn)))
+      ((null tn))
+    (let ((leaf (tn-leaf tn)))
+      (when (and (lambda-var-p leaf) (lambda-var-origin leaf) (tn-writes tn))
+        (incf (lambda-var-written-versions (lambda-var-origin leaf))))))
   (values))

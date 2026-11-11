@@ -1543,6 +1543,12 @@
   ;; variables, as by SSA conversion, each of those points here to it, and
   ;; so does it to itself. The debugger shows them all as that variable.
   (origin nil :type (or null lambda-var))
+  ;; How many of the variables holding the values of this one, which
+  ;; is one of them itself, have a written TN: as conversion gives each
+  ;; of them one write, these are the writes of the variable. Copy
+  ;; propagation counts them, to treat a version as the copy its
+  ;; variable would be.
+  (written-versions 0 :type fixnum)
   ;; For COMPUTE-DEBUG-VERSIONS: the number of this variable in the sets
   ;; of versions, and the versions of this variable.
   (debug-version-number nil :type (or null index))

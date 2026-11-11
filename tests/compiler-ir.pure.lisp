@@ -1363,6 +1363,34 @@
                                                         (outer (1+ j) (+ sum n))))))
                                          (outer 0 0))))))))
 
+;;; U's initial value is never read, so the SETQ is its only write, and
+;;; that copies the octet just read. The policy doesn't ask for such
+;;; variables to be kept, so copy propagation leaves U with no TN, as it
+;;; does when U is bound by LET in each iteration.
+(with-test (:name (:copy-propagation :set-variable :not-preserved))
+  (let ((tns 0))
+    (inspect-ir '(lambda (src end)
+                  (declare (type (simple-array (unsigned-byte 8) (*)) src)
+                           (fixnum end))
+                  (let ((u 0) (n 0))
+                    (declare (fixnum n))
+                    (dotimes (i end n)
+                      (setq u (aref src i))
+                      (setq n (logand most-positive-fixnum
+                                      (+ n (logand u 63)))))))
+                (lambda (component)
+                  (ctu:do-ir2-blocks (block component)
+                    (do ((vop (sb-c::ir2-block-start-vop block) (sb-c::vop-next vop)))
+                        ((null vop))
+                      (do ((ref (sb-c::vop-results vop) (sb-c::tn-ref-across ref)))
+                          ((null ref))
+                        (let ((leaf (sb-c::tn-leaf (sb-c::tn-ref-tn ref))))
+                          (when (and (sb-c::lambda-var-p leaf)
+                                     (eq (sb-c::leaf-debug-name
+                                          (sb-c::debug-var-origin leaf))
+                                         'u))
+                            (incf tns))))))))
+    (assert (zerop tns))))
 
 ;;; The SSA versions of a variable which still have references in
 ;;; FORM's IR, as a list of the kinds of lambdas binding them.
@@ -1581,6 +1609,7 @@
                       (when (eq (sb-c::vop-name vop) 'sb-c::keep-live)
                         (setq keep-live t))))))
     (assert (not keep-live))))
+
 ;;; LP and JOIN pass ten variables between them, across a call: the two
 ;;; parameters for each variable end up in one location, as one variable
 ;;; set in the loop would, rather than one on the stack and the other in a
