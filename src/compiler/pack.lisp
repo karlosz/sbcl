@@ -13,6 +13,21 @@
 
 (in-package "SB-REGALLOC")
 
+;;; TN -> its MOVE-GROUP, for TNs grouped with others.
+(defvar *move-groups* nil)
+
+;;; TNs connected by moves, to be packed in one location. COST is that of
+;;; all their references less the moves between them, LOCATIONS those all
+;;; their SCs allow. TRIED is set once the group was tried in a register.
+(defstruct (move-group (:constructor make-move-group (tn)))
+  (tns (list tn) :type list)
+  (cost (tn-cost tn) :type fixnum)
+  (locations 0 :type sc-locations)
+  (tried nil :type boolean))
+
+(defun move-group (tn)
+  (and *move-groups* (gethash tn *move-groups*)))
+
 ;;; for debugging: some parameters controlling which optimizations we
 ;;; attempt
 (defvar *pack-assign-costs* t)
@@ -1813,6 +1828,7 @@
   (unwind-protect
        (let ((optimize nil)
              (speed-3 nil)
+             (*move-groups* nil)
              (2comp (component-info component)))
          (init-sb-vectors component)
 
@@ -1890,7 +1906,9 @@
                                     (schwartzian-stable-sort-list
                                      tns #'< :key #'tn-lexical-depth)))
                       (unless (tn-offset tn)
-                        (pack-tn tn nil)))))
+                        (let ((group (move-group tn)))
+                          (unless (and group (pack-move-group group t))
+                            (pack-tn tn nil)))))))
              ;; first pack TNs that are known to have simple live
              ;; ranges (contiguous lexical scopes)
              (pack-tns component-tns t)
@@ -1918,6 +1936,204 @@
          (values))
     (clean-up-pack-structures)))
 
+;;;; Move groups
+;;;
+;;; Variables connected by moves, such as the parameters of LABELS
+;;; functions calling each other in a loop, are grouped, heaviest moves
+;;; first, as long as no TNs of the two groups conflict and some location
+;;; suits all of them. A min-cut then splits each group between the TNs
+;;; worth a register and the rest, and each part is packed in a single
+;;; location. The TNs themselves are not merged, so debug info is
+;;; unaffected.
+
+(defun groupable-tn-p (tn)
+  (and (member (tn-kind tn) '(:normal :debug-environment))
+       (sb-c::lambda-var-p (tn-leaf tn))
+       (not (tn-offset tn))
+       (tn-sc tn)
+       (= (sc-element-size (tn-sc tn)) 1)))
+
+;;; Where TN will go, if known before it is packed: its location, or its
+;;; target's, as for a value returned by a call.
+(defun pinned-offset (tn)
+  (or (tn-offset tn)
+      (and (not (groupable-tn-p tn))
+           (tn-sc tn)
+           (not (unbounded-tn-p tn))
+           (find-ok-target-offset tn (tn-sc tn)))))
+
+;;; The locations TN may go in, or 0 for the stack.
+(defun tn-group-locations (tn)
+  (if (unbounded-tn-p tn)
+      0
+      (logandc2 (sc-locations (tn-sc tn))
+                (sc-reserve-locations (tn-sc tn)))))
+
+(defun make-move-groups (component)
+  (let ((groups (make-hash-table :test 'eq))
+        (moves '()))
+    (do-ir2-blocks (block component)
+      (do ((vop (ir2-block-start-vop block) (vop-next vop)))
+          ((null vop))
+        (when (eq (sb-c::vop-info-move-vop-p (vop-info vop)) :move)
+          (let ((from (tn-ref-tn (vop-args vop)))
+                (to (tn-ref-tn (vop-results vop))))
+            (when (and (not (eq from to))
+                       (groupable-tn-p from)
+                       (groupable-tn-p to)
+                       (eq (sc-sb (tn-sc from)) (sc-sb (tn-sc to))))
+              (push (list (move-loop-weight vop) from to) moves))))))
+    (flet ((group (tn)
+             (or (gethash tn groups)
+                 (let ((group (make-move-group tn)))
+                   (setf (move-group-locations group) (tn-group-locations tn))
+                   (setf (gethash tn groups) group)))))
+      (dolist (move (stable-sort moves #'> :key #'first))
+        (destructuring-bind (weight from to) move
+          (let ((a (group from))
+                (b (group to)))
+            (cond ((eq a b)
+                   (decf (move-group-cost a) (+ (* 2 weight) (1- *tn-write-cost*))))
+                  ((and (<= (+ (length (move-group-tns a)) (length (move-group-tns b))) 16)
+                        (or (unbounded-tn-p from)
+                            (/= 0 (logand (move-group-locations a)
+                                          (move-group-locations b))))
+                        (dolist (x (move-group-tns a) t)
+                          (when (dolist (y (move-group-tns b) nil)
+                                  (when (sb-c::tns-conflict x y) (return t)))
+                            (return nil))))
+                   (setf (move-group-tns a) (append (move-group-tns a) (move-group-tns b))
+                         (move-group-cost a) (- (+ (move-group-cost a) (move-group-cost b))
+                                                (+ (* 2 weight) (1- *tn-write-cost*)))
+                         (move-group-locations a) (logand (move-group-locations a)
+                                                          (move-group-locations b)))
+                   (dolist (tn (move-group-tns b))
+                     (setf (gethash tn groups) a))))))))
+    ;; Only groups of several TNs count.
+    (maphash (lambda (tn group)
+               (when (null (rest (move-group-tns group)))
+                 (remhash tn groups)))
+             groups)
+    groups))
+
+;;; Try to pack all of GROUP in one location: in their own SCs, or with
+;;; STACK in their stack SCs. Prefer the location of the most moves out
+;;; of the group.
+(defun pack-move-group (group stack)
+  (let* ((tns (move-group-tns group))
+         (scs (mapcar (lambda (tn)
+                        (let ((sc (tn-sc tn)))
+                          (if (not stack)
+                              sc
+                              (if (unbounded-sc-p sc)
+                                  sc
+                                  (find-if #'unbounded-sc-p (sc-alternate-scs sc))))))
+                      tns)))
+    (when (and (every #'identity scs)
+               (notany #'tn-offset tns)
+               (let ((sb (sc-sb (first scs))))
+                 (every (lambda (sc) (eq (sc-sb sc) sb)) scs)))
+      (let ((sb (sc-sb (first scs)))
+            (best nil)
+            (best-score -1))
+        (flet ((fits-p (loc)
+                 (loop for tn in tns for sc in scs
+                       never (conflicts-in-sc tn sc loc)))
+               (score (loc)
+                 (let ((score 0))
+                   (dolist (tn tns score)
+                     (map-move-partners
+                      (lambda (other weight)
+                        (when (and (not (memq other tns))
+                                   (eq (sc-sb (tn-sc other)) sb)
+                                   (eql (if stack (tn-offset other) (pinned-offset other))
+                                        loc))
+                          (incf score weight)))
+                      tn)))))
+          (if stack
+              (let ((size (finite-sb-current-size sb)))
+                (dotimes (loc size)
+                  (when (and (fits-p loc) (> (score loc) best-score))
+                    (setq best loc best-score (score loc))))
+                (unless best
+                  (grow-sc (first scs) (1+ size))
+                  (when (fits-p size)
+                    (setq best size))))
+              (let* ((locations (move-group-locations group))
+                     (wired (finite-sb-wired-map sb)))
+                (do-sc-locations (loc (logandc2 locations wired) nil 1)
+                  (when (and (fits-p loc) (> (score loc) best-score))
+                    (setq best loc best-score (score loc))))
+                (do-sc-locations (loc (logand locations wired) nil 1)
+                  (when (and (fits-p loc) (> (score loc) best-score))
+                    (setq best loc best-score (score loc))))))
+          (when best
+            (loop for tn in tns for sc in scs
+                  do (add-location-conflicts tn sc best)
+                     (setf (tn-sc tn) sc
+                           (tn-offset tn) best))
+            t))))))
+
+;;; Split GROUP by a min-cut into the TNs worth a register and the rest,
+;;; returned as two values. A TN's references other than moves within the
+;;; group favor a register, its saves around calls the stack, and a move
+;;; between the two parts costs its weight.
+(defun split-move-group (group)
+  (let ((tns (move-group-tns group))
+        (net (sb-c::make-net)))
+    (flet ((internal-move-p (vop)
+             (and (eq (sb-c::vop-info-move-vop-p (vop-info vop)) :move)
+                  (memq (tn-ref-tn (vop-args vop)) tns)
+                  (memq (tn-ref-tn (vop-results vop)) tns))))
+      (dolist (tn tns)
+        (sb-c::nid net tn)
+        (let ((all 0) (other 0))
+          (declare (fixnum all other))
+          (flet ((visit (ref)
+                   (let* ((vop (tn-ref-vop ref))
+                          (cost (+ (1- (move-loop-weight vop))
+                                   (if (tn-ref-write-p ref) *tn-write-cost* 1))))
+                     (incf all cost)
+                     (unless (internal-move-p vop)
+                       (incf other cost)))))
+            (do ((ref (tn-reads tn) (tn-ref-next ref))) ((null ref)) (visit ref))
+            (do ((ref (tn-writes tn) (tn-ref-next ref))) ((null ref)) (visit ref)))
+          (when (plusp other)
+            (sb-c::add-edge net :tag tn other))
+          (let ((saves (- all (tn-cost tn))))
+            (when (plusp saves)
+              (sb-c::add-edge net tn :untag saves)))))
+      (dolist (tn tns)
+        (do ((ref (tn-reads tn) (tn-ref-next ref)))
+            ((null ref))
+          (let ((vop (tn-ref-vop ref)))
+            (when (internal-move-p vop)
+              (let ((to (tn-ref-tn (vop-results vop)))
+                    (weight (move-loop-weight vop)))
+                (sb-c::add-edge net tn to weight weight)))))))
+    (let ((in-register (sb-c::min-cut net))
+          (register '())
+          (stack '()))
+      (dolist (tn tns)
+        (if (funcall in-register tn) (push tn register) (push tn stack)))
+      (values (nreverse register) (nreverse stack)))))
+
+;;; Make TNS a group of their own, or no group if there is only one.
+(defun regroup (tns)
+  (cond ((rest tns)
+         (let ((group (make-move-group (first tns))))
+           (setf (move-group-tns group) tns
+                 (move-group-cost group) (reduce #'+ tns :key #'tn-cost)
+                 (move-group-locations group)
+                 (reduce #'logand tns :key #'tn-group-locations)
+                 (move-group-tried group) t)
+           (dolist (tn tns)
+             (setf (gethash tn *move-groups*) group))
+           group))
+        (t
+         (remhash (first tns) *move-groups*)
+         nil)))
+
 (defun pack-greedy (component 2comp)
   (declare (type component component)
            (type ir2-component 2comp))
@@ -1941,6 +2157,8 @@
       (pack-tns (component))
       (pack-tns (normal))))
 
+  (when *pack-assign-costs*
+    (setq *move-groups* (make-move-groups component)))
   (cond (*pack-assign-costs*
          ;; Allocate normal TNs, starting with the TNs that are
          ;; heavily used in deep loops (which is taken into account in
@@ -1952,13 +2170,38 @@
              (unless (or (tn-offset tn)
                          (unbounded-tn-p tn)
                          (and (sc-save-p (tn-sc tn))  ; SC caller-save, but TN
-                              (minusp (tn-cost tn)))) ; lives over many calls
+                              (minusp (tn-cost tn))   ; lives over many calls
+                              (not (move-group tn))))
                (tns tn)))
-           (dolist (tn (stable-sort (tns) #'> :key #'tn-cost))
-             (unless (tn-offset tn)
-               ;; if it can't fit in a bounded SC, the final pass will
-               ;; take care of stack packing.
-               (pack-tn tn nil :allow-unbounded-sc nil)))))
+           (flet ((cost (tn)
+                    (let ((group (move-group tn)))
+                      (if group (move-group-cost group) (tn-cost tn)))))
+             (dolist (tn (stable-sort (tns) #'> :key #'cost))
+               (let ((group (move-group tn)))
+                 (cond ((tn-offset tn))
+                       (group
+                        ;; Pack the part worth a register in one. The rest,
+                        ;; or all of it if none suits, goes on the stack in
+                        ;; the final pass.
+                        (unless (move-group-tried group)
+                          (setf (move-group-tried group) t)
+                          (multiple-value-bind (register stack)
+                              (split-move-group group)
+                            (cond ((null register))
+                                  ((null stack)
+                                   (pack-move-group group nil))
+                                  (t
+                                   (regroup stack)
+                                   (let ((group (regroup register)))
+                                     (if group
+                                         (pack-move-group group nil)
+                                         (pack-tn (first register) nil
+                                                  :allow-unbounded-sc nil))))))))
+                       ((and (sc-save-p (tn-sc tn)) (minusp (tn-cost tn))))
+                       (t
+                        ;; if it can't fit in a bounded SC, the final pass will
+                        ;; take care of stack packing.
+                        (pack-tn tn nil :allow-unbounded-sc nil))))))))
         (t
          ;; If loop analysis has been disabled we might as well revert
          ;; to the old behaviour of just packing TNs linearly as they
