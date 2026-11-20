@@ -13,9 +13,6 @@
 
 (in-package "SB-REGALLOC")
 
-;;; TN -> its MOVE-GROUP, for TNs grouped with others.
-(defvar *move-groups* nil)
-
 ;;; TNs connected by moves, to be packed in one location. COST is that of
 ;;; all their references less the moves between them, LOCATIONS those all
 ;;; their SCs allow. TRIED is set once the group was tried in a register.
@@ -25,8 +22,8 @@
   (locations 0 :type sc-locations)
   (tried nil :type boolean))
 
-(defun move-group (tn)
-  (and *move-groups* (gethash tn *move-groups*)))
+(defun move-group (tn groups)
+  (and groups (gethash tn groups)))
 
 ;;; for debugging: some parameters controlling which optimizations we
 ;;; attempt
@@ -1828,7 +1825,7 @@
   (unwind-protect
        (let ((optimize nil)
              (speed-3 nil)
-             (*move-groups* nil)
+             (move-groups nil)
              (2comp (component-info component)))
          (init-sb-vectors component)
 
@@ -1865,11 +1862,13 @@
          ;; Actually allocate registers for most TNs. After this, only
          ;; :normal tns may be left unallocated (or TNs :restricted to
          ;; an unbounded SC).
-         (funcall (ecase *register-allocation-method*
-                    (:greedy #'pack-greedy)
-                    (:iterative #'pack-iterative)
-                    (:adaptive (if speed-3 #'pack-iterative #'pack-greedy)))
-                  component 2comp)
+         (setq move-groups
+               (funcall (ecase *register-allocation-method*
+                          (:greedy #'pack-greedy)
+                          (:iterative #'pack-iterative)
+                          (:adaptive (if speed-3 #'pack-iterative
+                                        #'pack-greedy)))
+                        component 2comp))
 
          ;; Pack any leftover normal/restricted TN that is not already
          ;; allocated to a finite SC, or TNs that do not appear in any
@@ -1906,7 +1905,7 @@
                                     (schwartzian-stable-sort-list
                                      tns #'< :key #'tn-lexical-depth)))
                       (unless (tn-offset tn)
-                        (let ((group (move-group tn)))
+                        (let ((group (move-group tn move-groups)))
                           (unless (and group (pack-move-group group t))
                             (pack-tn tn nil)))))))
              ;; first pack TNs that are known to have simple live
@@ -2119,7 +2118,7 @@
       (values (nreverse register) (nreverse stack)))))
 
 ;;; Make TNS a group of their own, or no group if there is only one.
-(defun regroup (tns)
+(defun regroup (tns groups)
   (cond ((rest tns)
          (let ((group (make-move-group (first tns))))
            (setf (move-group-tns group) tns
@@ -2128,13 +2127,13 @@
                  (reduce #'logand tns :key #'tn-group-locations)
                  (move-group-tried group) t)
            (dolist (tn tns)
-             (setf (gethash tn *move-groups*) group))
+             (setf (gethash tn groups) group))
            group))
         (t
-         (remhash (first tns) *move-groups*)
+         (remhash (first tns) groups)
          nil)))
 
-(defun pack-greedy (component 2comp)
+(defun pack-greedy (component 2comp &aux (move-groups nil))
   (declare (type component component)
            (type ir2-component 2comp))
   ;; Pack wired TNs first.
@@ -2158,7 +2157,7 @@
       (pack-tns (normal))))
 
   (when *pack-assign-costs*
-    (setq *move-groups* (make-move-groups component)))
+    (setq move-groups (make-move-groups component)))
   (cond (*pack-assign-costs*
          ;; Allocate normal TNs, starting with the TNs that are
          ;; heavily used in deep loops (which is taken into account in
@@ -2171,13 +2170,13 @@
                          (unbounded-tn-p tn)
                          (and (sc-save-p (tn-sc tn))  ; SC caller-save, but TN
                               (minusp (tn-cost tn))   ; lives over many calls
-                              (not (move-group tn))))
+                              (not (move-group tn move-groups))))
                (tns tn)))
            (flet ((cost (tn)
-                    (let ((group (move-group tn)))
+                    (let ((group (move-group tn move-groups)))
                       (if group (move-group-cost group) (tn-cost tn)))))
              (dolist (tn (stable-sort (tns) #'> :key #'cost))
-               (let ((group (move-group tn)))
+               (let ((group (move-group tn move-groups)))
                  (cond ((tn-offset tn))
                        (group
                         ;; Pack the part worth a register in one. The rest,
@@ -2191,8 +2190,8 @@
                                   ((null stack)
                                    (pack-move-group group nil))
                                   (t
-                                   (regroup stack)
-                                   (let ((group (regroup register)))
+                                   (regroup stack move-groups)
+                                   (let ((group (regroup register move-groups)))
                                      (if group
                                          (pack-move-group group nil)
                                          (pack-tn (first register) nil
@@ -2216,4 +2215,5 @@
                              (eq tn :more)
                              (tn-offset tn)
                              (unbounded-tn-p tn))
-                   (pack-tn tn nil :allow-unbounded-sc nil)))))))))
+                   (pack-tn tn nil :allow-unbounded-sc nil))))))))
+  move-groups)
