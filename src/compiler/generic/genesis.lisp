@@ -315,7 +315,7 @@
   (+ (gspace-byte-address gspace)
      (ash (gspace-free-word-index gspace) sb-vm:word-shift)))
 
-(cl:defmethod print-object ((gspace gspace) stream)
+(cl:defmethod cl:print-object ((gspace gspace) stream)
   (print-unreadable-object (gspace stream :type t)
     (format stream "@#x~X ~S" (gspace-byte-address gspace) (gspace-name gspace))))
 
@@ -717,7 +717,34 @@
 ;;;
 ;;; Each TOPLEVEL-THING can be a function to be executed or a fixup or
 ;;; loadtime value, represented by (CONS KEYWORD ..).
-(declaim (special *!cold-toplevels* *cold-methods*))
+(declaim (special *!cold-toplevels*))
+;;; names of layouts of PCL classes, written by src/cold/host-pcl-dump.lisp
+(defvar *cold-pcl-wrapper-names* nil)
+;;; (name qualifier* specializers) of a method -> its cold function
+(defvar *cold-pcl-method-functions* (make-hash-table :test 'equal))
+;;; True while loading code for its functions only (COLD-COMPILE in
+;;; src/cold/host-pcl-dump.lisp): its toplevel forms are not cold init's.
+(defvar *cold-load-functions-only* nil)
+;;; True while loading a PCL file
+(defvar *cold-loading-pcl-file* nil)
+;;; The load-time values, fixups and named constants of PCL's code and of
+;;; what host PCL cross-compiles, which cold init computes before its
+;;; toplevel forms: PCL is bootstrapped on the host, and its code may run
+;;; before any of those (a generic function's discriminating function, say).
+;;; Its other toplevel forms are the usual definitions' bookkeeping, where
+;;; they are.
+(defvar *pcl-cold-toplevels*)
+(defun cold-push-load-time (toplevel)
+  (if (or *cold-load-functions-only* *cold-loading-pcl-file*)
+      (push toplevel *pcl-cold-toplevels*)
+      (push toplevel *!cold-toplevels*)))
+;;; The methods that host PCL makes from what the cross-compiler dumped of
+;;; them (FOP-MSET): those of the files before boot.lisp, and those whose
+;;; bodies are the target's only.  Each is (name qualifiers specializers
+;;; lambda-list source-location initargs early-p).
+(defvar *cold-early-methods* nil)
+;;; ... and that of every method, by its key in *COLD-PCL-METHOD-FUNCTIONS*
+(defvar *cold-method-records* (make-hash-table :test 'equal))
 
 
 ;;;; miscellaneous stuff to read and write the core memory
@@ -747,11 +774,11 @@
      (cond ((ltv-patch-p value)
             (if (or (= (descriptor-lowtag address) sb-vm:list-pointer-lowtag)
                     (= (descriptor-widetag address) sb-vm:code-header-widetag))
-                (push (cold-list (cold-intern :load-time-value-fixup)
-                                 address
-                                 (number-to-core index)
-                                 (number-to-core (ltv-patch-index value)))
-                      *!cold-toplevels*)
+                (let ((toplevel (cold-list (cold-intern :load-time-value-fixup)
+                                           address
+                                           (number-to-core index)
+                                           (number-to-core (ltv-patch-index value)))))
+                  (cold-push-load-time toplevel))
                 (bug "Can't patch load-time-value into ~S" address))
             sb-vm:unbound-marker-widetag)
           (t
@@ -1307,29 +1334,6 @@ core and return a descriptor to it."
 ;;; to the host's COLD-LAYOUT proxy for that layout.
 (defvar *cold-layout-by-addr*)
 
-;;; Initial methods require that we sort possible methods by the depthoid.
-;;; Most of the objects printed in cold-init are ordered hierarchically in our
-;;; type lattice; the major exceptions are ARRAY and VECTOR at depthoid -1.
-;;; Of course we need to print VECTORs because a STRING is a vector,
-;;; and vector has to precede ARRAY. Kludge it for now.
-(defun class-depthoid (class-name) ; DEPTHOID-ish thing, any which way you can
-  (case class-name
-    (vector 1/2)
-    (array  1/4)
-    ;; The depthoid of CONDITION has to be faked. The proper value is 1.
-    ;; But STRUCTURE-OBJECT is also at depthoid 1, and its predicate
-    ;; is %INSTANCEP (which is too weak), so to select the correct method
-    ;; we have to make CONDITION more specific.
-    ;; In reality it is type disjoint from structure-object.
-    (condition 2)
-    (t
-     (acond ((gethash class-name *cold-layouts*)
-             (cold-layout-depthoid it))
-            ((info :type :compiler-layout class-name)
-             (layout-depthoid it))
-            (t
-             (error "Unknown depthoid for ~S" class-name))))))
-
 (declaim (ftype function read-slot %write-slots write-slots))
 (flet ((infer-metadata (x)
          (type-dd-slots-or-lose
@@ -1390,11 +1394,14 @@ core and return a descriptor to it."
   (cond ((boundp '*permgen*) *permgen*)
         #+compact-instance-header ((boundp '*immobile-fixedobj*) *immobile-fixedobj*)
         (t *dynamic*)))
-(declaim (ftype (function (symbol layout-depthoid integer index integer descriptor)
+(declaim (ftype (function (symbol layout-depthoid integer index integer descriptor
+                                  &optional t t)
                           descriptor)
                 make-cold-layout))
 
-(defun make-cold-layout (name depthoid flags length bitmap inherits)
+(defun make-cold-layout (name depthoid flags length bitmap inherits &optional (id-p t) existing)
+  ;; EXISTING: a cold layout to fill in rather than allocate, e.g. the one
+  ;; compiled code refers to for a PCL class (see host-pcl-dump.lisp)
   ;; Layouts created in genesis can't vary in length due to the number of ancestor
   ;; types in the IS-A vector. They may vary in length due to the bitmap word count.
   ;; But we can at least assert that there is one less thing to worry about.
@@ -1402,12 +1409,19 @@ core and return a descriptor to it."
   (aver (cold-simple-vector-p inherits))
   (let* ((fixed-words (sb-kernel::type-dd-length layout))
          (bitmap-words (ceiling (1+ (integer-length bitmap)) sb-vm:n-word-bits))
-         (result (allocate-struct (+ fixed-words bitmap-words)
-                                  (or (awhen (gethash 'layout *cold-layouts*)
-                                        (cold-layout-descriptor it))
-                                      (make-fixnum-descriptor 0))
-                                  (cold-layout-gspace)))
-         (this-id (sb-kernel::choose-layout-id name (logtest flags +condition-layout-flag+)))
+         (result (if existing
+                     (progn
+                       (aver (= (ceiling (1+ (integer-length (cold-layout-bitmap existing)))
+                                         sb-vm:n-word-bits)
+                                bitmap-words))
+                       (cold-layout-descriptor existing))
+                     (allocate-struct (+ fixed-words bitmap-words)
+                                      (or (awhen (gethash 'layout *cold-layouts*)
+                                            (cold-layout-descriptor it))
+                                          (make-fixnum-descriptor 0))
+                                      (cold-layout-gspace))))
+         (this-id (and id-p
+                       (sb-kernel::choose-layout-id name (logtest flags +condition-layout-flag+))))
          (hash (make-fixnum-descriptor (sb-impl::hash-layout-name name))))
 
     (let ((proxy (%make-cold-layout :id this-id
@@ -1468,22 +1482,6 @@ core and return a descriptor to it."
 
     result))
 
-(defun predicate-for-specializer (type-name)
-  (let ((classoid (find-classoid type-name nil)))
-    (typecase classoid
-      (structure-classoid
-       (dd-predicate-name (sb-kernel::layout-%info (classoid-layout classoid))))
-      (built-in-classoid
-       (let ((translation (specifier-type type-name)))
-         (aver (not (contains-unknown-type-p translation)))
-         (let ((predicate (find translation sb-c::*backend-type-predicates*
-                                :test #'type= :key #'car)))
-           (cond (predicate (cdr predicate))
-                 ((eq type-name 'stream) 'streamp)
-                 ((eq type-name 'pathname) 'pathnamep)
-                 ((eq type-name 't) 'constantly-t)
-                 (t (error "No predicate for builtin: ~S" type-name)))))))))
-
 ;;; Map from host object to target object
 (defvar *host->cold-ctype*)
 
@@ -1541,6 +1539,8 @@ core and return a descriptor to it."
                          (,(dsd-index-cached 'built-in-classoid 'sb-kernel::predicate) .
                           ,(make-random-descriptor sb-vm:unbound-marker-widetag))
                          (,(dsd-index-cached 'classoid 'sb-kernel::subclasses) . nil)
+                         ;; PCL's, which host-pcl-dump.lisp writes
+                         (,(dsd-index-cached 'classoid 'sb-kernel::pcl-class) . nil)
                          ;; Even though (gethash (classoid-name obj) *cold-layouts*) may exist,
                          ;; we nonetheless must set LAYOUT to NIL or else warm build fails
                          ;; in the twisty maze of class initializations.
@@ -1577,9 +1577,12 @@ core and return a descriptor to it."
              ((word sb-vm:signed-word)
               (write-wordindexed/raw result (+ sb-vm:instance-slots-offset index)
                                      (or (cdr override) (funcall reader obj)))))))
-       (cond ((classoid-p obj) ; Place classoid into its classoid-cell.
-              (let ((cell (cold-find-classoid-cell (classoid-name obj) :create t)))
-                (write-slots cell :classoid result)))
+       (cond ((classoid-p obj)
+              ;; Place classoid into its classoid-cell, if it is its name's
+              ;; (not, say, a classoid of host PCL's old layouts)
+              (when (eq (find-classoid (classoid-name obj) nil) obj)
+                (let ((cell (cold-find-classoid-cell (classoid-name obj) :create t)))
+                  (write-slots cell :classoid result))))
              ((ctype-p obj)
               ;; If OBJ belongs in a hash container, then deduce which
               (let* ((hashset (sb-kernel::ctype->hashset-sym obj))
@@ -1594,6 +1597,14 @@ core and return a descriptor to it."
                 (when preload ; Record it
                   (cold-push (cold-cons result preload) 'sb-kernel::*!initial-ctypes*)))))
        result))))
+
+(defun fill-primitive-object-layouts ()
+  (let ((vector (cold-symbol-value '**primitive-object-layouts**)))
+    (loop for name across (sb-kernel::primitive-object-layout-names)
+          for i from 0
+          do (let ((layout (gethash name *cold-layouts*)))
+               (when layout
+                 (cold-svset vector i (cold-layout-descriptor layout)))))))
 
 (defun initialize-layouts ()
   (flet ((chill-layout (name &rest inherits)
@@ -1677,7 +1688,7 @@ core and return a descriptor to it."
             (t
              (let ((package (find-package name)))
                (values (package-nicknames package)
-                       (documentation package t)
+                       (cl:documentation package t)
                        (package-id-generator name)
                        (sort (package-shadowing-symbols package) #'string<)
                        ;; SB-COREFILE is not actually part of
@@ -1777,11 +1788,14 @@ core and return a descriptor to it."
                    (error "host-constant-to-core: can't convert ~S"
                           value))))))))
 
-;; Look up the target's descriptor for #'FUN where FUN is a host or cold symbol.
-(defun cold-symbol-function (symbol &optional (errorp t))
-  (let* ((symbol (if (symbolp symbol) symbol (warm-symbol symbol)))
-         (f #+linkage-space (read-wordindexed (cold-intern symbol) sb-vm:symbol-fdefn-slot)
-            #-linkage-space (cold-fdefn-fun (ensure-cold-fdefn symbol))))
+;; Look up the target's descriptor for #'FUN where FUN is a host or cold
+;; function name: a symbol, or (SETF symbol) say
+(defun cold-symbol-function (name &optional (errorp t))
+  (let* ((symbol (if (symbolp name) name (warm-fun-name name)))
+         (f (if (symbolp symbol)
+                #+linkage-space (read-wordindexed (cold-intern symbol) sb-vm:symbol-fdefn-slot)
+                #-linkage-space (cold-fdefn-fun (ensure-cold-fdefn symbol))
+                (cold-fdefn-fun (ensure-cold-fdefn name))))) ; the core's (SETF x) say
     (cond ((and (not (cold-null f)) (/= (descriptor-bits f) 0)) f)
           (errorp (error "Expected a definition for ~S in cold load" symbol))
           (t nil))))
@@ -1819,7 +1833,12 @@ core and return a descriptor to it."
         #+sb-thread
         (let ((index (info :variable :wired-tls symbol)))
           (when (integerp index) ; thread slot or known TLS
-            (cold-assign-tls-index handle index)))
+            (cold-assign-tls-index handle index)
+            ;; ... as ENSURE-SYMBOL-TLS-INDEX would have, if genesis runs
+            ;; where it was assigned (make-host-2, after DEFINE-THREAD-LOCAL)
+            (setq *genesis-tls-counter*
+                  (max *genesis-tls-counter*
+                       (+ (ash index (- sb-vm:word-shift)) *tls-increment*)))))
         ;; Steps that only make sense when writing a core file
         (when core-file-name
           (record-accessibility (or access (nth-value 1 (find-symbol name package)))
@@ -1984,11 +2003,14 @@ core and return a descriptor to it."
     (setq *t-descriptor* t-symbol)
     (cold-set t-symbol t-symbol))
 
-  ;; Establish the value of **PRIMITIVE-OBJECT-LAYOUTS**
-  #+x86-64
+  ;; Establish the value of **PRIMITIVE-OBJECT-LAYOUTS**, filled in once
+  ;; the layouts are made (FILL-PRIMITIVE-OBJECT-LAYOUTS)
   (cold-set '**primitive-object-layouts**
+            #+x86-64
             (make-random-descriptor
-             (logior sb-vm:static-space-start sb-vm:other-pointer-lowtag)))
+             (logior sb-vm:static-space-start sb-vm:other-pointer-lowtag))
+            #-x86-64
+            (vector-in-core (make-list 256)))
 
   ;; Dynamic-space code can't use "call rel32" to reach the assembly code
   ;; in a single instruction if too far away. The solution is to have a static-space
@@ -2028,7 +2050,9 @@ core and return a descriptor to it."
              (mapcar (lambda (pair)
                        (cold-cons (cold-intern (car pair))
                                   (cold-layout-descriptor (cdr pair))))
-                     (sort-cold-layouts))))
+                     ;; PCL's layouts belong to PCL, not to the classoid system
+                     (remove-if (lambda (pair) (member (car pair) *cold-pcl-wrapper-names*))
+                                (sort-cold-layouts)))))
   ;; MAKE-LAYOUT uses ATOMIC-INCF which returns the value in the cell prior to
   ;; increment, so we need to add 1 to get to the next value for it because
   ;; we always pre-increment *general-layout-uniqueid-counter* when reading it.
@@ -2150,8 +2174,9 @@ core and return a descriptor to it."
         do (write-wordindexed/raw fdefn sb-vm:fdefn-raw-addr-slot ud-tramp))
 
   (dump-symbol-infos
-   (attach-fdefinitions-to-symbols
-    (attach-classoid-cells-to-symbols (make-hash-table :test #'eq))))
+   (attach-generic-function-info
+    (attach-fdefinitions-to-symbols
+     (attach-classoid-cells-to-symbols (make-hash-table :test #'eq)))))
 
   #+x86
   (progn
@@ -2290,6 +2315,29 @@ core and return a descriptor to it."
                    (setf (gethash symbol hashtable) packed-info)))
                *classoid-cells*)))
   hashtable)
+
+;;; The generic functions' globaldb info. Host PCL wrote it into the
+;;; cross-compiler's as the target's PCL does (DEFER-FTYPE-COMPUTATION, and
+;;; COMPUTE-GF-FTYPE when a cross-compiled call asked for the type); the
+;;; target computes the type again from its own generic function.
+(defun attach-generic-function-info (hashtable)
+  (let ((where-from (sb-c::meta-info-number (sb-c::meta-info :function :where-from)))
+        (type (sb-c::meta-info-number (sb-c::meta-info :function :type))))
+    (flet ((insert (key1 key2)
+             (setf (gethash key1 hashtable)
+                   (packed-info-insert
+                    (packed-info-insert (gethash key1 hashtable +nil-packed-infos+)
+                                        key2 where-from (cold-intern :defined))
+                    key2 type (cold-intern :generic-function)))))
+      (loop for name being each hash-key of *cold-fdefn-objects*
+            when (or (eq (info :function :type name) :generic-function)
+                     (eq (info :function :where-from name) :defined-method))
+              do (if (symbolp name)
+                     (insert name sb-impl::+no-auxiliary-key+)
+                     (with-globaldb-name (key1 key2) name
+                       :hairy (error "Hairy generic function name in genesis: ~S" name)
+                       :simple (insert key1 key2)))))
+    hashtable))
 
 ;; Create pointer from SYMBOL and/or (SETF SYMBOL) to respective fdefinition
 ;;
@@ -2692,9 +2740,10 @@ Legal values for OFFSET are -4, -8, -12, ..."
 (define-cold-fop (fop-funcall (n))
   (if (= n 0)
       (let ((counter *load-time-value-counter*))
-        (push (cold-list (cold-intern :load-time-value)
-                         (pop-stack)
-                         (number-to-core counter)) *!cold-toplevels*)
+        (let ((toplevel (cold-list (cold-intern :load-time-value)
+                                   (pop-stack)
+                                   (number-to-core counter))))
+          (cold-push-load-time toplevel))
         (setf *load-time-value-counter* (1+ counter))
         (make-ltv-patch counter))
       (let ((des (pop-stack)))
@@ -2712,17 +2761,20 @@ Legal values for OFFSET are -4, -8, -12, ..."
                              *load-time-value-counter*
                              *load-time-value-counter*)))
 
+;;; Called once the object files are loaded
+(defvar *cold-load-finish-hook* nil)
 (define-cold-fop (fop-funcall-for-effect (n))
-  (if (= n 0)
-      (push (pop-stack) *!cold-toplevels*)
-      (error "Can't FOP-FUNCALL-FOR-EFFECT random stuff in cold load")))
+  (cond ((/= n 0)
+         (error "Can't FOP-FUNCALL-FOR-EFFECT random stuff in cold load"))
+        (*cold-load-functions-only* (pop-stack))
+        (t (push (pop-stack) *!cold-toplevels*))))
 
 (define-cold-fop (fop-named-constant-set (index))
-  (push (cold-list (cold-intern :named-constant)
-                   (pop-stack)
-                   (number-to-core index)
-                   (pop-stack))
-        *!cold-toplevels*))
+  (let ((toplevel (cold-list (cold-intern :named-constant)
+                             (pop-stack)
+                             (number-to-core index)
+                             (pop-stack))))
+    (cold-push-load-time toplevel)))
 
 
 ;;;; cold fops for fixing up circularities
@@ -2753,66 +2805,87 @@ Legal values for OFFSET are -4, -8, -12, ..."
 
 ;;;; cold fops for loading code objects and functions
 
+;;; The names DEFUNed in PCL's files, whose toplevel forms run in cold init
+;;; (see host-pcl-dump.lisp)
+(defvar *cold-pcl-defun-names* (make-hash-table :test 'equal))
 (define-cold-fop (fop-fset)
   (let ((fn (pop-stack))
         (name (pop-stack)))
+    (when *cold-loading-pcl-file*
+      (setf (gethash (if (descriptor-p name) (host-object-from-core name) name)
+                     *cold-pcl-defun-names*)
+            t))
     (cold-fset name fn)))
+
+;;; The functions of PCL's TEMPLATE-LAMBDAs, by name, and the variables in
+;;; their closures' slots (:NONE if not a closure): host-pcl-dump.lisp makes
+;;; closures of them.
+(defvar *cold-template-funs* (make-hash-table :test 'equal))
+(define-cold-fop (fop-template-closure)
+  (let* ((fn (pop-stack))
+         ;; (uninterned symbols, SB-XC:COMPILE's, by their names)
+         (vars (host-object-from-core (pop-stack) nil))
+         (name (cold-pcl-method-key (host-object-from-core (pop-stack)))))
+    (aver (not (gethash name *cold-template-funs*)))
+    (setf (gethash name *cold-template-funs*) (cons fn vars))))
+
+;;; A method's name and specializers, or a template's name, as host PCL has
+;;; them: PCL's definitions of CL's names (*PCL-SHADOWS*, *PCL-CLASS-SHADOWS*)
+;;; are SB-XC's (HOST-PCL-CANONICAL-SYMBOL)
+(defun cold-pcl-method-key (x)
+  (cond ((and (symbolp x) (eq (cl:symbol-package x) (find-package "CL"))
+              (or (member (symbol-name x) sb-cold::*pcl-shadows* :test #'string=)
+                  (member (symbol-name x) sb-cold::*pcl-class-shadows* :test #'string=)))
+         (find-symbol (symbol-name x) "SB-XC"))
+        ((consp x) (cons (cold-pcl-method-key (car x)) (cold-pcl-method-key (cdr x))))
+        (t x)))
 
 (define-cold-fop (fop-mset)
   (let ((fn (pop-stack))
+        (info (pop-stack))
         (specializers (pop-stack))
         (qualifiers (pop-stack))
         (name (pop-stack)))
-    ;; Methods that are qualified or are specialized on more than
-    ;; one argument do not work on start-up, since our start-up
-    ;; implementation of method dispatch is single dispatch only.
-    (cond ((and (null qualifiers)
-                (= (do ((n 0) (list specializers (cold-cdr list)))
-                       ((cold-null list) n)
-                     (unless (descriptor= (cold-car list) *t-descriptor*) (incf n)))
-                   1))
-           (push (list (cold-car specializers) fn)
-                 (cdr (or (assoc name *cold-methods*)
-                          (car (push (list name) *cold-methods*))))))
-          (t
-           ;; I think it's a bit suspicious that genesis can just ignore some stuff
-           ;; that was compiled into the cold core.
-           #+nil
-           (format t "~&Skipping fop-mset ~S ~:S ~S~%"
-                   (host-object-from-core name)
-                   (host-object-from-core qualifiers)
-                   (host-object-from-core specializers))))))
-
-;;; Order all initial methods so that the first one whose guard
-;;; returns T is the most specific method. LAYOUT-DEPTHOID is a valid
-;;; sort key for this because we don't have multiple inheritance in
-;;; the system object type lattice.
-(defun sort-initial-methods ()
-  (cold-set
-   'sb-pcl::*!initial-methods*
-   (list-to-core
-    (loop for (gf-name . methods) in *cold-methods*
-          collect
-          (cold-cons
-           (cold-intern gf-name)
-           (vector-in-core
-            (loop for (class fun)
-                    ;; Methods must be sorted because we invoke
-                    ;; only the first applicable one.
-                    in (stable-sort methods #'> ; highest depthoid first
-                                    :key (lambda (method)
-                                           (class-depthoid (warm-symbol (car method)))))
-                  collect
-                  (vector-in-core
-                   (let ((class-symbol (warm-symbol class)))
-                     (list (cold-intern
-                            (predicate-for-specializer class-symbol))
-                           (acond ((gethash class-symbol *cold-layouts*)
-                                   (cold-layout-descriptor it))
-                                  (t
-                                   (aver (predicate-for-specializer class-symbol))
-                                   class))
-                           fun))))))))))
+    ;; every cross-compiled method's: the methods the host builds get these
+    ;; functions
+    (setf (gethash (cold-pcl-method-key (append (list (host-object-from-core name))
+                                                (host-object-from-core qualifiers)
+                                                (list (host-object-from-core specializers))))
+                   *cold-pcl-method-functions*)
+          fn)
+    (when (or (null info) (and (descriptor-p info) (cold-null info)))
+      (error "no record of the method ~S ~S ~S" (host-object-from-core name)
+             (host-object-from-core qualifiers) (host-object-from-core specializers)))
+    (flet ((host-object (x) ; may have gensyms
+             (named-let recurse ((x x))
+               (cond ((cold-null x) nil)
+                     ((= (descriptor-lowtag x) sb-vm:list-pointer-lowtag)
+                      (cons (recurse (cold-car x)) (recurse (cold-cdr x))))
+                     ((nth-value 1 (gethash (descriptor-bits x) *cold-symbols*))
+                      (warm-symbol x))
+                     ((and (= (descriptor-lowtag x) sb-vm:other-pointer-lowtag)
+                           (= (descriptor-widetag x) sb-vm:symbol-widetag))
+                      (make-symbol (read-cold-symbol-name x)))
+                     (t (host-object-from-core x))))))
+      (destructuring-bind (lambda-list namestring indices initargs make-p)
+          (let ((list nil))
+            (do ((x info (cold-cdr x))) ((cold-null x) (nreverse list))
+              (push (cold-car x) list)))
+        ;; (name qualifiers specializers lambda-list source-location initargs
+        ;; early-p), the source location as the core's object
+        (let ((record (list (cold-pcl-method-key (host-object-from-core name))
+                            (cold-pcl-method-key (host-object-from-core qualifiers))
+                            (cold-pcl-method-key (host-object-from-core specializers))
+                            (host-object lambda-list)
+                            (write-slots (allocate-struct-of-type 'sb-c:definition-source-location)
+                                         :namestring namestring :indices indices)
+                            (host-object initargs)
+                            (eq (host-object make-p) :early))))
+          (setf (gethash (append (list (first record)) (second record) (list (third record)))
+                         *cold-method-records*)
+                record)
+          (unless (cold-null make-p)
+            (push record *cold-early-methods*)))))))
 
 (define-cold-fop (fop-fdefn)
   (let ((name (pop-stack)))
@@ -4381,9 +4454,9 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
            (*cold-layouts* (make-hash-table :test 'eq)) ; symbol -> cold-layout
            (*cold-layout-by-addr* (make-hash-table :test 'eql)) ; addr -> cold-layout
            (*tls-index-to-symbol* nil)
-           ;; '*COLD-METHODS* is never seen in the target, so does not need
-           ;; to adhere to the #\! convention for automatic uninterning.
-           (*cold-methods* nil)
+           (*cold-early-methods* nil)
+           (*pcl-cold-toplevels* nil)
+           (*cold-method-records* (make-hash-table :test 'equal))
            (*!cold-toplevels* nil)
            *asm-routine-alist*
            *assembler-routines*
@@ -4440,21 +4513,28 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
       (dolist (file-name object-file-names)
         (push (cold-cons :begin-file (string-literal-to-core file-name))
               *!cold-toplevels*)
-        (cold-load file-name verbose (find file-name foptrace-file-names :test 'equal)))
+        (let ((*cold-loading-pcl-file* (search "/pcl/" file-name)))
+          (cold-load file-name verbose (find file-name foptrace-file-names :test 'equal))))
 
       (sb-cold::check-no-new-cl-symbols)
+      ;; e.g. host PCL's build of the class hierarchy (src/cold/genesis-2.lisp),
+      ;; which may load what it compiles
+      (when *cold-load-finish-hook* (funcall *cold-load-finish-hook*))
+      (fill-primitive-object-layouts)
 
       (when (and verbose core-file-name)
         (format t "~&; SB-Loader: (~D~@{+~D~}) methods/other~%"
-                (reduce #'+ *cold-methods* :key (lambda (x) (length (cdr x))))
+                (length *cold-early-methods*)
                 (length *!cold-toplevels*)))
 
-      (cold-set '*!cold-toplevels* (list-to-core (nreverse *!cold-toplevels*)))
+      (cold-set '*!cold-toplevels* (list-to-core (append (reverse *pcl-cold-toplevels*)
+                                                         (nreverse *!cold-toplevels*))))
       (makunbound '*!cold-toplevels*) ; so no further PUSHes can be done
 
       ;; Tidy up loose ends left by cold loading. ("Postpare from cold load?")
       (when core-file-name
-        (sort-initial-methods)
+        ;; the class hierarchy that PCL built on the host
+        (when (fboundp 'host-pcl-dump) (funcall 'host-pcl-dump))
         (resolve-deferred-known-funs)
         (setq foreign-symbols (foreign-symbols-to-core))
         (finish-symbols)

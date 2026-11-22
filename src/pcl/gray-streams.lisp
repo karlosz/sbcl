@@ -15,17 +15,14 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
 (defclass stream-function (standard-generic-function) ()
   (:metaclass sb-mop:funcallable-standard-class)))
-(defmacro !def-stream-generic (name ll &rest rest)
-  `(progn (fmakunbound ',name)
-          (defgeneric ,name ,ll (:generic-function-class stream-function) ,@rest)
-          (sb-pcl::!install-cross-compiled-methods ',name)))
 (defmethod no-applicable-method ((function stream-function) &rest args)
   (let ((stream (car args)))
     (if (streamp stream)
         (call-next-method)
         (error 'type-error :datum stream :expected-type 'stream))))
 
-(!def-stream-generic stream-element-type (stream)
+(defgeneric stream-element-type (stream)
+  (:generic-function-class stream-function)
   (:documentation
    "Return a type specifier for the kind of object returned by the
   STREAM. The class SB-GRAY:FUNDAMENTAL-CHARACTER-STREAM provides a
@@ -34,7 +31,8 @@
 (defmethod stream-element-type ((stream fundamental-character-stream))
   'character)
 
-(!def-stream-generic open-stream-p (stream)
+(defgeneric open-stream-p (stream)
+  (:generic-function-class stream-function)
   (:documentation
    "Return true if STREAM is not closed. A default method is provided
   by class FUNDAMENTAL-STREAM which returns true if CLOSE has not been
@@ -43,7 +41,8 @@
 (defmethod open-stream-p ((stream fundamental-stream))
   (stream-open-p stream))
 
-(!def-stream-generic close (stream &key abort)
+(defgeneric close (stream &key abort)
+  (:generic-function-class stream-function)
   (:documentation
    "Close the given STREAM. No more I/O may be performed, but
   inquiries may still be made. If :ABORT is true, an attempt is made
@@ -55,39 +54,46 @@
   t)
 
 (progn
-  (!def-stream-generic input-stream-p (stream)
+  (defgeneric input-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Can STREAM perform input operations?"))
   (defmethod input-stream-p ((stream fundamental-stream)) nil)
   (defmethod input-stream-p ((stream fundamental-input-stream)) t))
 
 (progn
-  (!def-stream-generic interactive-stream-p (stream)
+  (defgeneric interactive-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Is STREAM an interactive stream?"))
   (defmethod interactive-stream-p ((stream fundamental-stream)) nil))
 
 (progn
-  (!def-stream-generic output-stream-p (stream)
+  (defgeneric output-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Can STREAM perform output operations?"))
   (defmethod output-stream-p ((stream fundamental-stream)) nil)
   (defmethod output-stream-p ((stream fundamental-output-stream)) t))
 
 (progn
-  (!def-stream-generic binary-input-stream-p (stream)
+  (defgeneric binary-input-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Does STREAM perform binary input operations?"))
   (defmethod binary-input-stream-p ((stream fundamental-stream)) nil)
   (defmethod binary-input-stream-p ((stream fundamental-binary-input-stream)) t))
 (progn
-  (!def-stream-generic binary-output-stream-p (stream)
+  (defgeneric binary-output-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Does STREAM perform binary output operations?"))
   (defmethod binary-output-stream-p ((stream fundamental-stream)) nil)
   (defmethod binary-output-stream-p ((stream fundamental-binary-output-stream)) t))
 (progn
-  (!def-stream-generic character-input-stream-p (stream)
+  (defgeneric character-input-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Does STREAM perform character input operations?"))
   (defmethod character-input-stream-p ((stream fundamental-stream)) nil)
   (defmethod character-input-stream-p ((stream fundamental-character-input-stream)) t))
 (progn
-  (!def-stream-generic character-output-stream-p (stream)
+  (defgeneric character-output-stream-p (stream)
+    (:generic-function-class stream-function)
     (:documentation "Does STREAM perform character output operations?"))
   (defmethod character-output-stream-p ((stream fundamental-stream)) nil)
   (defmethod character-output-stream-p ((stream fundamental-character-output-stream)) t))
@@ -387,7 +393,6 @@
 (defgeneric stream-file-position (stream &optional position-spec)
   (:documentation
    "Used by FILE-POSITION. Returns or changes the current position within STREAM."))
-(sb-pcl::!install-cross-compiled-methods 'stream-file-position)
 
 (defmethod stream-file-position ((stream fundamental-stream) &optional position-spec)
   (declare (ignore stream position-spec))

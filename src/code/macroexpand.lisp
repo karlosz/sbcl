@@ -75,6 +75,9 @@
    the expanded form and a T-or-NIL flag indicating whether the form was, in
    fact, a macro. ENV is the lexical environment to expand in, which defaults
    to the null environment."
+  #+sb-xc-host
+  (when (sb-c::host-environment-p env)
+    (return-from macroexpand-1 (cl:macroexpand-1 form env)))
   (flet ((perform-expansion (expander &optional (expansion nil expansion-p))
            ;; There is no compelling reason to coerce NIL to a LEXENV when
            ;; supplying it to a user-defined macro which receives &ENVIRONMENT,
@@ -129,6 +132,9 @@
    Returns the final resultant form, and T if it was expanded. ENV is the
    lexical environment to expand in, or NIL (the default) for the null
    environment."
+  #+sb-xc-host
+  (when (sb-c::host-environment-p env)
+    (return-from macroexpand (cl:macroexpand form env)))
   (labels ((frob (form expanded)
              (multiple-value-bind (new-form newly-expanded-p)
                  (macroexpand-1 form env)
@@ -159,6 +165,9 @@
   "If NAME names a compiler-macro in ENV, return the expansion function, else
 return NIL. Can be set with SETF when ENV is NIL."
   (declare (explicit-check name))
+  #+sb-xc-host
+  (when (sb-c::host-environment-p env)
+    (return-from compiler-macro-function (cl:compiler-macro-function name env)))
   (legal-fun-name-or-type-error name)
   ;; CLHS 3.2.2.1: Creating a lexical binding for the function name
   ;; not only creates a new local function or macro definition, but

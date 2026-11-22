@@ -27,10 +27,7 @@
   (let ((fn (cadr (assoc method method-alist))))
     (if fn
         (values fn nil nil nil)
-        (multiple-value-bind (mf fmf)
-            (if (listp method)
-                (early-method-function method)
-                (values nil (safe-method-fast-function method)))
+        (multiple-value-bind (mf fmf) (values nil (safe-method-fast-function method))
           (let* ((pv-table (and fmf (method-plist-value method :pv-table))))
             (if (and fmf (or (null pv-table) wrappers))
                 (let* ((pv-wrappers (when pv-table
@@ -78,10 +75,7 @@
                   (method-p method))
               (if method-alist-p
                   t
-                  (multiple-value-bind (mf fmf)
-                      (if (listp method)
-                          (early-method-function method)
-                          (values nil (safe-method-fast-function method)))
+                  (multiple-value-bind (mf fmf) (values nil (safe-method-fast-function method))
                     (declare (ignore mf))
                     (let* ((pv-table (and fmf (method-plist-value method :pv-table))))
                       (if (and fmf (or (null pv-table) wrappers-p))
@@ -106,7 +100,7 @@
   ;; or aren't to prevent the leaky next methods bug.
   (let* ((cm-args (cdr form))
          (fmf-p (and (null no-fmf-p)
-                     (or (not (eq **boot-state** 'complete))
+                     (or (not (pcl-ready-p))
                          (gf-fast-method-function-p generic-function))
                      (null (cddr cm-args))))
          (method (car cm-args))
@@ -257,8 +251,9 @@
               (append *global-effective-method-gensyms* (list new)))
         new)))
 
+(!precompute
 (let ((*rebound-effective-method-gensyms* ()))
-  (dotimes-fixnum (i 10) (get-effective-method-gensym)))
+  (dotimes-fixnum (i 10) (get-effective-method-gensym))))
 
 (defun expand-effective-method-function (gf effective-method &optional env)
   (declare (ignore env))
@@ -267,7 +262,7 @@
       (get-generic-fun-info gf)
     (let ((ll (make-fast-method-call-lambda-list nreq applyp))
           (mc-args-p
-           (when (eq **boot-state** 'complete)
+           (when (pcl-ready-p)
              ;; Otherwise the METHOD-COMBINATION slot is not bound.
              (let ((combin (generic-function-method-combination gf)))
                (and (long-method-combination-p combin)
@@ -377,9 +372,7 @@
     (declare (ignore nkeys arg-info))
     (let* ((*rebound-effective-method-gensyms*
             *global-effective-method-gensyms*)
-           (name (if (early-gf-p generic-function)
-                     (!early-gf-name generic-function)
-                     (generic-function-name generic-function)))
+           (name (generic-function-name generic-function))
            (arg-info (cons nreq applyp))
            (effective-method-lambda (expand-effective-method-function
                                      generic-function effective-method)))
@@ -436,9 +429,7 @@
              (return-from standard-compute-effective-method
                `(invalid-qualifiers ',generic-function ',combin ',method))))
       (dolist (m applicable-methods)
-        (let ((qualifiers (if (listp m)
-                              (early-method-qualifiers m)
-                              (safe-method-qualifiers m))))
+        (let ((qualifiers (safe-method-qualifiers m)))
           (cond
             ((null qualifiers) (primary m))
             ((cdr qualifiers) (invalid m))
@@ -564,9 +555,7 @@
       (multiple-value-bind (nopt allowp keys)
           (analyze (gf-lambda-list gf))
         (dolist (method methods)
-          (let ((ll (if (consp method)
-                        (early-method-lambda-list method)
-                        (method-lambda-list method))))
+          (let ((ll (method-lambda-list method)))
             (multiple-value-bind (n allowp method-keys)
                 (analyze ll)
               (declare (ignore n))
@@ -620,6 +609,7 @@
 ;;;; reason. This code must conform to the code in the file
 ;;;; defcombin.lisp, look there for more details.
 
+#+sb-xc-host ; host PCL's early version: the target's is the generic function
 (defun compute-effective-method (generic-function combin applicable-methods)
   (standard-compute-effective-method generic-function
                                      combin

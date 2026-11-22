@@ -851,5 +851,3 @@ error otherwise.")
               (package-name pkg))))
   (format t "~8d~%" tot-ncells)))
 
-(let ((package (find-package "SB-SEQUENCE")))
-  (rename-package package package (list "SEQUENCE")))

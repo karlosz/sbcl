@@ -154,7 +154,6 @@
 (defgeneric documentation (object doc-type)
   (:argument-precedence-order doc-type object))
 
-(fmakunbound '(setf documentation))
 (defgeneric (setf documentation) (new-value object doc-type)
   (:argument-precedence-order doc-type object new-value))
 
@@ -467,11 +466,6 @@ Value of +SLOT-UNBOUND+ is unspecified, and should not be relied to be
 of any particular type, but it is guaranteed to be suitable for EQ
 comparison.")
 
-(!install-cross-compiled-methods 'documentation)
-(!install-cross-compiled-methods '(setf documentation))
-
-(dolist (args (prog1 *!docstrings* (makunbound '*!docstrings*)))
-  (apply #'(setf documentation) args))
 
 
 ;;;; We NORMALIZE-SBCL-DOCSTRINGs at run-time to support interactive
@@ -580,7 +574,9 @@ comparison.")
           'vector))
 
 (defun whitespacep (char)
-  (find char '(#\Tab #\Space #\Page #\Newline #\Return)))
+  ;; Tab, Space, Page, Newline, Return (by code: the cross-compiler's
+  ;; source has only standard characters)
+  (find (char-code char) '(9 32 12 10 13)))
 
 (defun blankp (line)
   (null (indentation line)))

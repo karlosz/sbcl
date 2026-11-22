@@ -15,6 +15,9 @@
   "If SYMBOL names a macro in ENV, returns the expansion function,
 else returns NIL. If ENV is unspecified or NIL, use the global environment
 only."
+  #+sb-xc-host
+  (when (sb-c::host-environment-p env)
+    (return-from macro-function (cl:macro-function symbol env)))
   ;; local function definitions (ordinary) can shadow a global macro
   (typecase env
     #+(and sb-fasteval (not sb-xc-host))

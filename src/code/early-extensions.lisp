@@ -1252,7 +1252,7 @@ NOTE: This interface is experimental and subject to change."
     (class
      (let ((name (cl:class-name type-specifier)))
        (when (and name (symbolp name)
-                  (eq type-specifier (find-class name nil)))
+                  (eq type-specifier (cl:find-class name nil)))
          (%check-deprecated-type name))))))
 
 ;;; STATE is one of

@@ -184,7 +184,10 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
     standard-effective-slot-definition standard-direct-slot-definition)
   #'equal)
 
-(define-load-time-global *standard-slot-locations* (make-hash-table :test 'equal))
+(define-load-time-global *standard-slot-locations* nil)
+(declaim (ftype function compute-standard-slot-locations))
+(define-lazy-table standard-slot-locations *standard-slot-locations*
+  (compute-standard-slot-locations))
 
 (defun compute-standard-slot-locations ()
   (let ((new (make-hash-table :test 'equal)))
@@ -203,7 +206,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
   ;; by MOP some tests. Therefore I don't care to improve it beyond the avoidance
   ;; of 1 cons operation.
   (let* ((key (cons class slot-name))
-         (location (gethash key *standard-slot-locations*)))
+         (location (gethash key (standard-slot-locations))))
     (declare (dynamic-extent key))
     (if location
         (let ((value (if (funcallable-instance-p object)
@@ -362,10 +365,10 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
 (defun accessor-miss-function (gf dfun-info)
   (ecase (dfun-info-accessor-type dfun-info)
     ((reader boundp makunbound)
-     (lambda (arg)
+     (template-lambda (accessor-miss :reader) (gf dfun-info) (arg)
        (accessor-miss gf nil arg dfun-info)))
     (writer
-     (lambda (new arg)
+     (template-lambda (accessor-miss :writer) (gf dfun-info) (new arg)
        (accessor-miss gf new arg dfun-info)))))
 
 (declaim (sb-ext:freeze-type dfun-info))
@@ -457,7 +460,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
            (funcall (get-dfun-constructor 'emit-checking metatypes applyp)
                     cache
                     function
-                    (lambda (&rest args)
+                    (template-lambda (checking-miss) (generic-function dfun-info) (&rest args)
                       (checking-miss generic-function args dfun-info)))
            cache
            dfun-info)))))
@@ -467,7 +470,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
       (get-generic-fun-info generic-function)
     (declare (ignore nreq applyp nkeys))
     (if (every (lambda (mt) (eq mt t)) metatypes)
-        (values (lambda (&rest args)
+        (values (template-lambda (default-method-only-dfun) (function) (&rest args)
                   (invoke-emf function args))
                 nil (default-method-only-dfun-info))
         (let ((cache (make-final-ordinary-dfun-cache
@@ -488,10 +491,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
         ;; the compiler isn't smart enough to understand the :TYPE
         ;; slot option for DEFCLASS, so we just tell
         ;; it the type by hand here.
-        (the list
-             (if (early-gf-p generic-function)
-                 (early-gf-methods generic-function)
-                 (generic-function-methods generic-function)))))
+        (the list (generic-function-methods generic-function))))
 
 (defun make-caching-dfun (generic-function &optional cache)
   (unless cache
@@ -509,7 +509,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
       (values
        (funcall (get-dfun-constructor 'emit-caching metatypes applyp)
                 cache
-                (lambda (&rest args)
+                (template-lambda (caching-miss) (generic-function dfun-info) (&rest args)
                   (caching-miss generic-function args dfun-info)))
        cache
        dfun-info))))
@@ -533,13 +533,10 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
   (multiple-value-bind (nreq applyp metatypes nkeys)
       (get-generic-fun-info gf)
     (declare (ignore nreq metatypes nkeys))
-    (let* ((early-p (early-gf-p gf))
-           (methods (if early-p
-                        (early-gf-methods gf)
-                        (generic-function-methods gf)))
+    (let* ((methods (generic-function-methods gf))
            (default '(unknown)))
       (and (null applyp)
-           (or (not (eq **boot-state** 'complete))
+           (or (not (pcl-ready-p))
                ;; If COMPUTE-APPLICABLE-METHODS is specialized, we
                ;; can't use this, of course, because we can't tell
                ;; which methods will be considered applicable.
@@ -560,7 +557,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
            ;; method has qualifiers, to make sure that emfs are really
            ;; method functions; see above.
            (dolist (method methods t)
-             (when (eq **boot-state** 'complete)
+             (when (pcl-ready-p)
                (when (or (some #'eql-specializer-p
                                (safe-method-specializers method))
                          (safe-method-qualifiers method))
@@ -581,7 +578,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
       (values
        (funcall (get-dfun-constructor 'emit-constant-value metatypes)
                 cache
-                (lambda (&rest args)
+                (template-lambda (constant-value-miss) (generic-function dfun-info) (&rest args)
                   (constant-value-miss generic-function args dfun-info)))
        cache
        dfun-info))))
@@ -599,7 +596,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
         (return t)))))
 
 (defun use-dispatch-dfun-p (gf &optional (caching-p (use-caching-dfun-p gf)))
-  (when (eq **boot-state** 'complete)
+  (when (pcl-ready-p)
     (unless (or caching-p
                 (gf-requires-emf-keyword-checks gf)
                 ;; DISPATCH-DFUN-COST will error if it encounters a
@@ -735,47 +732,18 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
 ;;; Note that within the states that cache, there are dfun updates
 ;;; which simply select a new cache or cache field. Those are not
 ;;; considered as state transitions.
-(defvar *early-p* nil)
-
 (defun make-initial-dfun (gf)
-  (let ((initial-dfun #'(lambda (&rest args) (initial-dfun gf args))))
+  (let ((initial-dfun (template-lambda (initial-dfun) (gf) (&rest args) (initial-dfun gf args))))
     (multiple-value-bind (dfun cache info)
-        (if (eq **boot-state** 'complete)
+        (if (pcl-ready-p)
             (values initial-dfun nil (initial-dfun-info))
-            (let ((arg-info (if (early-gf-p gf)
-                                (early-gf-arg-info gf)
-                                (gf-arg-info gf)))
+            (let ((arg-info (gf-arg-info gf))
                   (type nil))
               (if (and (gf-precompute-dfun-and-emf-p arg-info)
                        (setq type (final-accessor-dfun-type gf)))
-                  (if *early-p*
-                      (values (make-early-accessor gf type) nil nil)
-                      (make-final-accessor-dfun gf type))
+                  (make-final-accessor-dfun gf type)
                   (values initial-dfun nil (initial-dfun-info)))))
       (set-dfun gf dfun cache info))))
-
-(defun make-early-accessor (gf type)
-  (let* ((methods (early-gf-methods gf))
-         (slot-name (early-method-standard-accessor-slot-name (car methods))))
-    (ecase type
-      (reader #'(lambda (instance)
-                  (let* ((class (class-of instance))
-                         (class-name (!bootstrap-get-slot 'class class 'name)))
-                    (!bootstrap-get-slot class-name instance slot-name))))
-      (boundp #'(lambda (instance)
-                  (let* ((class (class-of instance))
-                         (class-name (!bootstrap-get-slot 'class class 'name)))
-                    (not (unbound-marker-p
-                          (!bootstrap-get-slot class-name instance slot-name))))))
-      (writer #'(lambda (new-value instance)
-                  (let* ((class (class-of instance))
-                         (class-name (!bootstrap-get-slot 'class class 'name)))
-                    (!bootstrap-set-slot class-name instance slot-name new-value))))
-      (makunbound #'(lambda (instance)
-                      (let* ((class (class-of instance))
-                             (class-name (!bootstrap-get-slot 'class class 'name)))
-                        (!bootstrap-set-slot class-name instance slot-name +slot-unbound+)
-                        instance))))))
 
 (defun initial-dfun (gf args)
   (dfun-miss (gf args wrappers invalidp nemf ntype nindex)
@@ -799,44 +767,24 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
 (defvar *new-class* nil)
 
 (defun final-accessor-dfun-type (gf)
-  (let ((methods (if (early-gf-p gf)
-                     (early-gf-methods gf)
-                     (generic-function-methods gf))))
+  (let ((methods (generic-function-methods gf)))
     (cond ((every (lambda (method)
-                    (if (consp method)
-                        (let ((class (early-method-class method)))
-                          (or (eq class *the-class-standard-reader-method*)
-                              (eq class *the-class-global-reader-method*)))
-                        (or (standard-reader-method-p method)
-                            (global-reader-method-p method))))
+                    (or (standard-reader-method-p method)
+                        (global-reader-method-p method)))
                   methods)
            'reader)
           ((every (lambda (method)
-                    (if (consp method)
-                        (let ((class (early-method-class method)))
-                          (or (eq class *the-class-standard-writer-method*)
-                              (eq class *the-class-global-writer-method*)))
-                        (and
-                         (or (standard-writer-method-p method)
-                             (global-writer-method-p method))
-                         (not (safe-p
-                               (slot-definition-class
-                                (accessor-method-slot-definition method)))))))
+                    (and
+                     (or (standard-writer-method-p method)
+                         (global-writer-method-p method))
+                     (not (safe-p
+                           (slot-definition-class
+                            (accessor-method-slot-definition method))))))
                   methods)
            'writer)
-          ((every (lambda (method)
-                    (if (consp method)
-                        (let ((class (early-method-class method)))
-                          (eq class *the-class-global-boundp-method*))
-                        (global-boundp-method-p method)))
-                  methods)
+          ((every #'global-boundp-method-p methods)
            'boundp)
-          ((every (lambda (method)
-                    (if (consp method)
-                        (let ((class (early-method-class method)))
-                          (eq class *the-class-global-makunbound-method*))
-                        (global-makunbound-method-p method)))
-                  methods)
+          ((every #'global-makunbound-method-p methods)
            'makunbound))))
 
 (defun make-final-accessor-dfun (gf type &optional classes-list new-class)
@@ -867,8 +815,8 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
         specls all-same-p)
     (cond ((null methods)
            (values
-            #'(lambda (&rest args)
-                (call-no-applicable-method gf args))
+            (template-lambda (no-methods-dfun) (gf) (&rest args)
+              (call-no-applicable-method gf args))
             nil
             (no-methods-dfun-info)))
           ((setq type (final-accessor-dfun-type gf))
@@ -1203,65 +1151,39 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
   (unless accessor-class
     (return-from accessor-values-internal (values nil nil)))
   (dolist (meth methods)
-    (when (if (consp meth)
-              (early-method-qualifiers meth)
-              (safe-method-qualifiers meth))
+    (when (safe-method-qualifiers meth)
       (return-from accessor-values-internal (values nil nil))))
   (let* ((meth (car methods))
-         (early-p (not (eq **boot-state** 'complete)))
          (slot-name
           (cond
-            ((and (consp meth)
-                  (early-method-standard-accessor-p meth))
-             (early-method-standard-accessor-slot-name meth))
             ((and (accessor-method-p meth)
                   (member *the-class-standard-object*
-                          (if early-p
-                              (early-class-precedence-list accessor-class)
-                              (class-precedence-list accessor-class))))
+                          (class-precedence-list accessor-class)))
              (accessor-method-slot-name meth))
             (t (return-from accessor-values-internal (values nil nil)))))
-         (slotd (if early-p
-                    (dolist (slot (early-class-slotds accessor-class) nil)
-                      (when (eql slot-name (early-slot-definition-name slot))
-                        (return slot)))
-                    (find-slot-definition accessor-class slot-name))))
+         (slotd (find-slot-definition accessor-class slot-name)))
     (when (and slotd
-               (or early-p (slot-accessor-std-p slotd accessor-type))
-               (or early-p (not (safe-p accessor-class))))
-      (values (if early-p
-                  (early-slot-definition-location slotd)
-                  (slot-definition-location slotd))
-              accessor-type))))
+               (slot-accessor-std-p slotd accessor-type)
+               (not (safe-p accessor-class)))
+      (values (slot-definition-location slotd) accessor-type))))
 
 (defun make-accessor-table (gf type &optional table)
   (unless table (setq table (make-hash-table :test 'eq)))
-  (let ((methods (if (early-gf-p gf)
-                     (early-gf-methods gf)
-                     (generic-function-methods gf)))
+  (let ((methods (generic-function-methods gf))
         (all-index nil)
         (no-class-slots-p t)
-        (early-p (not (eq **boot-state** 'complete)))
         first second (size 0))
     (declare (fixnum size))
     ;; class -> {(specl slotd)}
     (dolist (method methods)
-      (let* ((specializers (if (consp method)
-                               (early-method-specializers method t)
-                               (method-specializers method)))
+      (let* ((specializers (method-specializers method))
              (specl (ecase type
                       ((reader boundp makunbound) (car specializers))
                       (writer (cadr specializers))))
-             (specl-cpl (if early-p
-                            (early-class-precedence-list specl)
-                            (when (class-finalized-p specl)
-                              (class-precedence-list specl))))
+             (specl-cpl (when (class-finalized-p specl)
+                          (class-precedence-list specl)))
              (so-p (member *the-class-standard-object* specl-cpl :test #'eq))
-             (slot-name (if (consp method)
-                            (and (early-method-standard-accessor-p method)
-                                 (early-method-standard-accessor-slot-name
-                                  method))
-                            (accessor-method-slot-name method))))
+             (slot-name (accessor-method-slot-name method)))
         (when (or (null specl-cpl)
                   (null so-p)
                   (member *the-class-structure-object* specl-cpl :test #'eq))
@@ -1272,7 +1194,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
         (labels ((aux (class)
                    (let ((slotd (find-slot-definition class slot-name)))
                      (when slotd
-                       (unless (or early-p (slot-accessor-std-p slotd type))
+                       (unless (slot-accessor-std-p slotd type)
                          (return-from make-accessor-table nil))
                        (push (cons specl slotd) (gethash class table))))
                    (dolist (subclass (sb-pcl::class-direct-subclasses class))
@@ -1281,16 +1203,12 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
                      (aux subclass))))
           (aux specl))))
     (maphash (lambda (class specl+slotd-list)
-               (dolist (sclass (if early-p
-                                   (early-class-precedence-list class)
-                                   (class-precedence-list class))
+               (dolist (sclass (class-precedence-list class)
                                (error "This can't happen."))
                  (let ((a (assq sclass specl+slotd-list)))
                    (when a
                      (let* ((slotd (cdr a))
-                            (index (if early-p
-                                       (early-slot-definition-location slotd)
-                                       (slot-definition-location slotd))))
+                            (index (slot-definition-location slotd)))
                        (unless index (return-from make-accessor-table nil))
                        (setf (gethash class table) index)
                        (when (consp index) (setq no-class-slots-p nil))
@@ -1306,12 +1224,8 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
 
 (defun compute-applicable-methods-using-types (generic-function types)
   (let ((definite-p t) (possibly-applicable-methods nil))
-    (dolist (method (if (early-gf-p generic-function)
-                        (early-gf-methods generic-function)
-                        (safe-generic-function-methods generic-function)))
-      (let ((specls (if (consp method)
-                        (early-method-specializers method t)
-                        (safe-method-specializers method)))
+    (dolist (method (safe-generic-function-methods generic-function))
+      (let ((specls (safe-method-specializers method))
             (types types)
             (possibly-applicable-p t) (applicable-p t))
         (dolist (specl specls)
@@ -1339,23 +1253,15 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
                 precedence
                 (lambda (class1 class2 index)
                   (let* ((class (type-class (nth index types)))
-                         (cpl (if (eq **boot-state** 'complete)
-                                  (class-precedence-list class)
-                                  (early-class-precedence-list class))))
+                         (cpl (class-precedence-list class)))
                     (if (memq class2 (memq class1 cpl))
                         class1 class2)))))
 
 (defun sort-methods (methods precedence compare-classes-function)
   (flet ((sorter (method1 method2)
            (dolist (index precedence)
-             (let* ((specl1 (nth index (if (listp method1)
-                                           (early-method-specializers method1
-                                                                      t)
-                                           (method-specializers method1))))
-                    (specl2 (nth index (if (listp method2)
-                                           (early-method-specializers method2
-                                                                      t)
-                                           (method-specializers method2))))
+             (let* ((specl1 (nth index (method-specializers method1)))
+                    (specl2 (nth index (method-specializers method2)))
                     (order (order-specializers
                              specl1 specl2 index compare-classes-function)))
                (when order
@@ -1363,12 +1269,8 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
     (stable-sort methods #'sorter)))
 
 (defun order-specializers (specl1 specl2 index compare-classes-function)
-  (let ((type1 (if (eq **boot-state** 'complete)
-                   (specializer-type specl1)
-                   (!bootstrap-get-slot 'specializer specl1 '%type)))
-        (type2 (if (eq **boot-state** 'complete)
-                   (specializer-type specl2)
-                   (!bootstrap-get-slot 'specializer specl2 '%type))))
+  (let ((type1 (specializer-type specl1))
+        (type2 (specializer-type specl2)))
     (cond ((eq specl1 specl2)
            nil)
           ((atom type1)
@@ -1454,7 +1356,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
               argument-precedence-order)))
 
 (defun cpl-or-nil (class)
-  (if (eq **boot-state** 'complete)
+  (if (pcl-ready-p)
       (progn
         ;; KLUDGE: why not use (slot-boundp class
         ;; 'class-precedence-list)?  Well, unfortunately, CPL-OR-NIL is
@@ -1480,7 +1382,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
           (finalize-inheritance class)
           (class-precedence-list class)))
 
-      (early-class-precedence-list class)))
+      (class-precedence-list class)))
 
 (defun saut-and (specl type)
   (let ((applicable nil)
@@ -1597,17 +1499,13 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
                            type)))))
 
 (defun map-all-classes (fun &optional (root t))
-  (let ((all-classes (make-hash-table :test 'eq))
-        (braid-p (or (eq **boot-state** 'braid)
-                     (eq **boot-state** 'complete))))
+  (let ((all-classes (make-hash-table :test 'eq)))
     (labels ((do-class (class)
                (unless (gethash class all-classes)
                  (setf (gethash class all-classes) t)
                  (funcall fun class)
                  (mapc #'do-class
-                       (if braid-p
-                           (class-direct-subclasses class)
-                           (early-class-direct-subclasses class))))))
+                       (class-direct-subclasses class)))))
       (do-class (if (symbolp root)
                     (find-class root)
                     root)))
@@ -1638,7 +1536,7 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
   (if (null methods)
       (lambda (method-alist wrappers)
         (declare (ignore method-alist wrappers))
-        (lambda (&rest args)
+        (template-lambda (no-applicable-method-emf) (gf) (&rest args)
           (call-no-applicable-method gf args)))
       (let* ((key (car methods))
              (cache
@@ -1681,12 +1579,12 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
        (let ((net (generate-discrimination-net
                    gf methods types all-sorted-p)))
          (compute-secondary-dispatch-function1 gf net function-p)))
-      ((eq **boot-state** 'complete)
+      ((pcl-ready-p)
        (let ((combin (generic-function-method-combination gf)))
          (if (null (compute-primary-methods gf combin methods))
              (lambda (method-alist wrappers)
                (declare (ignore method-alist wrappers))
-               (lambda (&rest args)
+               (template-lambda (no-primary-method-emf) (gf) (&rest args)
                  (call-no-primary-method gf args)))
              (let ((effective (maybe-wrap (compute-effective-method gf combin methods))))
                (make-effective-method-function1
@@ -1715,30 +1613,27 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
   (get-secondary-dispatch-function1 gf methods nil nil nil t sorted-p))
 
 (defun methods-contain-eql-specializer-p (methods)
-  (and (eq **boot-state** 'complete)
+  (and (pcl-ready-p)
        (dolist (method methods nil)
          (when (dolist (spec (method-specializers method) nil)
                  (when (eql-specializer-p spec) (return t)))
            (return t)))))
 
 (defun update-dfun (generic-function &optional dfun cache info)
-  (let ((early-p (early-gf-p generic-function)))
     (flet ((update ()
              ;; If GENERIC-FUNCTION has a CALL-NEXT-METHOD argument
              ;; checker, the methods of the checker (the checker is a
              ;; generic function, each method caches a computation for
              ;; a combination of original and C-N-M argument classes)
              ;; must be re-computed.
-             (when (eq **boot-state** 'complete)
+             (when (pcl-ready-p)
                (let ((checker (gf-info-cnm-checker (gf-arg-info generic-function))))
                  (when checker
                    (remove-methods checker))))
              ;; Save DFUN-STATE, so that COMPUTE-DISCRIMINATING-FUNCTION can
              ;; access it, and so that it's there for eg. future cache updates.
              (set-dfun generic-function dfun cache info)
-             (let ((dfun (if early-p
-                             (or dfun (make-initial-dfun generic-function))
-                             (compute-discriminating-function generic-function))))
+             (let ((dfun (compute-discriminating-function generic-function)))
                (set-funcallable-instance-function generic-function dfun)
                dfun)))
       ;; This needs to be atomic per generic function, consider:
@@ -1757,16 +1652,12 @@ Except see also BREAK-VICIOUS-METACIRCLE.  -- CSR, 2003-05-28
       ;; This is sufficient, because all the other calls to SET-DFUN
       ;; are part of this same code path (done while the lock is held),
       ;; which we AVER.
-      ;;
-      ;; KLUDGE: No need to lock during bootstrap.
-      (if early-p
-          (update)
-          (let ((lock (gf-lock generic-function)))
-            ;; FIXME: GF-LOCK is a generic function... Are there cases
-            ;; where we can end up in a metacircular loop here? In
-            ;; case there are, better fetch it while interrupts are
-            ;; still enabled...
-            (sb-thread::call-with-recursive-system-lock #'update lock))))))
+      (let ((lock (gf-lock generic-function)))
+        ;; FIXME: GF-LOCK is a generic function... Are there cases
+        ;; where we can end up in a metacircular loop here? In
+        ;; case there are, better fetch it while interrupts are
+        ;; still enabled...
+        (sb-thread::call-with-recursive-system-lock #'update lock))))
 
 ;;; These functions aren't used in SBCL, or documented anywhere that
 ;;; I'm aware of, but they look like they might be useful for

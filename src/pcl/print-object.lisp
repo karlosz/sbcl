@@ -29,20 +29,7 @@
 
 ;;;; the PRINT-OBJECT generic function
 
-;;; Blow away the old non-generic function placeholder which was used
-;;; by the printer doing bootstrapping, and immediately replace it
-;;; with some new printing logic, so that the Lisp printer stays
-;;; crippled only for the shortest necessary time.
-(unless (sb-impl::!c-runtime-noinform-p)
-  (write-string "; Removing placeholder PRINT-OBJECT ...")
-  (force-output))
-(let ((*print-pretty* t)) ; use pretty printer dispatch table, not PRINT-OBJECT
-  (fmakunbound 'print-object)
-  (defgeneric print-object (object stream))
-  (!install-cross-compiled-methods 'print-object))
-(unless (sb-impl::!c-runtime-noinform-p)
-  (write-string " done
-"))
+(defgeneric print-object (object stream))
 
 ;;;; PRINT-OBJECT methods for objects from PCL classes
 ;;;;
@@ -190,8 +177,3 @@ sb-kernel::(progn
           (print-reference r s)
           (unless (null (cdr rs))
             (terpri s)))))))) ; end PROGN
-
-;;; Ordinary DEFMETHOD should be used from here on out.
-;;; This variable actually has some semantics to being unbound.
-;;; FIXME: see if we can eliminate the associated hack in 'methods.lisp'
-(makunbound '*!delayed-defmethod-args*)

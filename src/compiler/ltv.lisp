@@ -13,11 +13,22 @@
 
 (defknown %load-time-value (t) t (flushable movable))
 
+;;; True while host PCL's code is cross-compiled for genesis to write
+;;; (COLD-COMPILE in src/cold/host-pcl-dump.lisp): it can run before cold
+;;; init's toplevel forms, which compute load-time values, so a global's
+;;; load-time value is read when needed (LAYOUT-OF's
+;;; **PRIMITIVE-OBJECT-LAYOUTS**, which genesis fills in).
+#+sb-xc-host
+(defvar *load-time-value-of-global-read* nil)
+
 (def-ir1-translator load-time-value
     ((form &optional read-only-p) start next result)
   "Arrange for FORM to be evaluated at load-time and use the value produced as
 if it were a constant. If READ-ONLY-P is non-NIL, then the resultant object is
 guaranteed to never be modified, so it can be put in read-only storage."
+  (if (and #+sb-xc-host *load-time-value-of-global-read* #-sb-xc-host nil
+           (symbolp form) (eq (info :variable :kind form) :global))
+      (ir1-convert start next result `(symbol-global-value ',form))
   (let ((fold (and #+sb-fasteval
                    (not (when (eq read-only-p
                                   'sb-interpreter::modifiable-constant)
@@ -26,6 +37,7 @@ guaranteed to never be modified, so it can be put in read-only storage."
     (if (and fold
              (constantp form))
         (ir1-convert start next result `',(eval form))
+
         (let* ((*allow-instrumenting* nil)
                ;; First derive an approximate type from the source form, because it allows
                ;; us to use READ-ONLY-P implicitly.
@@ -111,7 +123,7 @@ guaranteed to never be modified, so it can be put in read-only storage."
                                    start next result)
                     #+generational
                     ;; Avoid complaints about constant modification
-                    (ir1-convert start next result `(ltv-wrapper ',value)))))))))
+                    (ir1-convert start next result `(ltv-wrapper ',value))))))))))
 
 (defoptimizer (%load-time-value ir2-convert) ((handle) node block)
   (aver (constant-lvar-p handle))

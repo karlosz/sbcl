@@ -38,9 +38,8 @@
   (declare (ignore args))
   `(the ,type ,expr))
 
-(defmacro named-lambda (name args &body body)
-  (declare (ignore name))
-  `#'(lambda ,args ,@body))
+(defmacro named-lambda (name args &body body) ; (the name: cross-pcl.lisp)
+  `(sb-pcl::host-named ',name #'(lambda ,args ,@body)))
 
 (defmacro define-thread-local (&rest rest) `(defvar ,@rest))
 
@@ -89,12 +88,12 @@
   '(or (and structure-object (not target-num))
        package))
 (defun %instancep (x)
-  (typep x 'instance))
+  (or (typep x 'instance) (sb-pcl::host-instance-p x))) ; cross-pcl.lisp
 
 (deftype funcallable-instance ()
   (error "not clear how to represent FUNCALLABLE-INSTANCE type"))
-(defun funcallable-instance-p (x)
-  (error "Called FUNCALLABLE-INSTANCE-P ~s" x))
+(defun funcallable-instance-p (x) ; host PCL's (cross-pcl.lisp)
+  (and (sb-pcl::host-funcallable-record x) t))
 
 (defun simple-fun-p (x)
   (if (symbolp x) nil (error "Called SIMPLE-FUN-P on ~S" x)))
@@ -291,7 +290,9 @@
 ;;   - COMMA
 (defun %instance-layout (instance)
   (declare (notinline classoid-layout))
-  (classoid-layout (find-classoid (type-of instance))))
+  (if (sb-pcl::host-instance-p instance) ; cross-pcl.lisp
+      (sb-pcl::host-instance-wrapper instance)
+      (classoid-layout (find-classoid (type-of instance)))))
 
 (defun %find-position (item seq from-end start end key test)
   (let ((position (position item seq :from-end from-end
@@ -414,6 +415,22 @@
 (defmacro with-system-mutex ((lock) &body body)
   (declare (ignore lock))
   `(progn ,@body))
+(defmacro sb-thread::with-recursive-system-lock ((lock) &body body)
+  (declare (ignore lock))
+  `(progn ,@body))
+;;; Compare-and-swap, without the atomicity
+(defun host-cas-expansion (place old new)
+  (let ((o (gensym)) (n (gensym)) (current (gensym)))
+    `(let* ((,o ,old) (,n ,new) (,current ,place))
+       (when (eq ,current ,o) (setf ,place ,n))
+       ,current)))
+(defmacro sb-ext:compare-and-swap (place old new) (host-cas-expansion place old new))
+(defmacro sb-ext:cas (place old new) (host-cas-expansion place old new))
+(defmacro sb-vm:without-arena (&body body) `(progn ,@body))
+(define-modify-macro sb-int:mixf (y) sb-int:mix)
+(defun sb-thread::call-with-recursive-system-lock (function lock)
+  (declare (ignore lock))
+  (funcall function))
 
 ;;; Used by our lockfree memoization functions (define-hash-cache)
 (defmacro sb-thread:barrier ((kind) &body body)
@@ -477,3 +494,30 @@
   `(dolist (,var ,rest-var ,@(when result
                                `(,result)))
      ,@body))
+
+;;; PCL's names, shadowed (set-up-cold-packages.lisp's *PCL-SHADOWS*): in
+;;; the cross-compiler they are the host's, as the target's classes are not
+;;; the cross-compiler's (PCL's definitions of them are the target's only)
+(defun sb-xc:find-class (name &optional (errorp t) environment)
+  (cl:find-class name errorp environment))
+(defun sb-xc:class-name (class) (cl:class-name class))
+(macrolet ((def (&rest names)
+             `(progn
+                ,@(mapcar (lambda (name)
+                            `(defun ,name (&rest args)
+                               (apply #',(sb-impl::uncross-pcl-name name) args)))
+                          names))))
+  (def sb-xc:allocate-instance sb-xc:change-class sb-xc:compute-applicable-methods
+    sb-xc:describe-object sb-xc:find-method sb-xc:function-keywords
+    sb-xc:initialize-instance sb-xc:make-instance sb-xc:make-instances-obsolete
+    sb-xc:no-applicable-method sb-xc:no-next-method sb-xc:print-object
+    sb-xc:reinitialize-instance sb-xc:shared-initialize sb-xc:slot-boundp
+    sb-xc:slot-exists-p sb-xc:slot-makunbound sb-xc:slot-missing sb-xc:slot-unbound
+    sb-xc:update-instance-for-different-class sb-xc:update-instance-for-redefined-class
+    sb-xc:close sb-xc:input-stream-p sb-xc:output-stream-p sb-xc:open-stream-p
+    sb-xc:interactive-stream-p sb-xc:stream-element-type sb-xc:documentation))
+(defun (setf sb-xc:documentation) (new-value x doc-type)
+  (setf (cl:documentation x doc-type) new-value))
+(defun sb-xc:slot-value (object slot-name) (cl:slot-value object slot-name))
+(defun (setf sb-xc:slot-value) (new-value object slot-name)
+  (setf (cl:slot-value object slot-name) new-value))

@@ -95,7 +95,7 @@
                      (methods (compute-applicable-methods-using-types gf types)))
                 (null (cdr methods))))
         (setf (slot-accessor-function slotd type)
-              (lambda (&rest args)
+              (template-lambda (initial-slot-accessor) (slotd type gf) (&rest args)
                 (declare (dynamic-extent args))
                 ;; FIXME: a tiny amount of wasted SLOT-ACCESSOR-STD-P
                 ;; work here (see KLUDGE comment above).
@@ -132,7 +132,7 @@
          (class (slot-value slotd '%class)))
     (declare (ignore name))
     (multiple-value-bind (function std-p)
-        (if (eq **boot-state** 'complete)
+        (if (pcl-ready-p)
             (get-accessor-method-function gf type class slotd)
             (get-optimized-std-accessor-method-function class slotd type))
       (setf (slot-accessor-std-p slotd type) std-p)
@@ -161,6 +161,14 @@
   (def std-class)
   (def condition-class)
   (def structure-class))
+
+;;; Genesis leaves it unbound (src/cold/host-pcl-dump.lisp): it is the
+;;; target's own object, made in cold init (*BUILT-IN-CLASSES*).
+(defmethod class-prototype ((class built-in-class))
+  (if (slot-boundp class 'prototype)
+      (slot-value class 'prototype)
+      (setf (slot-value class 'prototype)
+            (fifth (assoc (class-name class) *built-in-classes*)))))
 
 (defmethod class-direct-default-initargs ((class slot-class))
   (plist-value class 'direct-default-initargs))
@@ -329,11 +337,13 @@
 ;;; This table is shared between threads, so needs to be synchronized.
 ;;; (though insertions are only performed when holding the specializer-lock,
 ;;; so the preceding claim is probably overly paranoid.)
-(define-load-time-global *class-eq-specializer-methods*
-    (make-hash-table :test 'eq :synchronized t))
+(define-load-time-global *class-eq-specializer-methods* nil)
+(define-lazy-table class-eq-specializer-methods *class-eq-specializer-methods*
+  (!genesis-table '*class-eq-specializer-methods*
+                  (make-hash-table :test 'eq :synchronized t)))
 
 (defmethod specializer-method-table ((specializer class-eq-specializer))
-  *class-eq-specializer-methods*)
+  (class-eq-specializer-methods))
 
 (defmethod specializer-method-holder ((self specializer-with-object)
                                       &optional (create t))
@@ -357,7 +367,7 @@
   (maphash (lambda (object specl)
              (declare (ignore object))
              (funcall function specl))
-           *eql-specializer-table*)
+           (eql-specializer-table))
   nil)
 
 (defun map-all-generic-functions (function)
@@ -394,7 +404,7 @@
             'safe-p safe-p
             other))))
 
-(setf (fdefinition 'load-defclass) #'real-load-defclass)
+(!host-only (setf (fdefinition 'load-defclass) #'real-load-defclass))
 
 (defun ensure-class (name &rest args)
   (with-world-lock ()
@@ -802,7 +812,7 @@
        ;; which seems to have been the goal. We're also compiling:
        ;;  (LAMBDA () (SB-PCL::FAST-MAKE-INSTANCE #<STRUCTURE-CLASS THING>))
        ;; So maybe we can figure out how to bundle two lambdas together?
-       (lambda ()
+       (template-lambda (defstruct-allocation) (class) ()
          (let* ((dd (layout-dd (class-wrapper class)))
                 (f (%make-structure-instance-allocator dd nil nil)))
            (if (functionp f)
@@ -813,7 +823,10 @@
        ;; that are not GENERIC-FUNCTION subtypes, so why this branch?
        ;; We should pull this out, fixup PCL bootstrap, and not pretend
        ;; that this code is more general than it really is.
-       (%make-funcallable-structure-instance-allocator dd nil)))))
+       (template-lambda (funcallable-defstruct-allocation) (class) ()
+         (let ((f (%make-funcallable-structure-instance-allocator
+                   (layout-dd (class-wrapper class)) nil)))
+           (funcall (setf (slot-value class 'defstruct-constructor) f))))))))
 
 (defmethod shared-initialize :after
     ((class structure-class) slot-names &key
@@ -946,11 +959,13 @@
    class))
 
 
+;;; (host PCL has its own: src/cold/host-pcl.lisp)
+(!target-only
 (defun class-has-a-forward-referenced-superclass-p (class)
   (or (when (forward-referenced-class-p class)
         class)
       (some #'class-has-a-forward-referenced-superclass-p
-            (class-direct-superclasses class))))
+            (class-direct-superclasses class)))))
 
 (defun check-superclass-cycle (class new-superclasses)
   (loop for superclass in new-superclasses
@@ -1788,9 +1803,9 @@
 ;;; allocation (at least, for SBCL; maybe for others it can).
 ;;; Calling ALLOCATE-INSTANCE from CHANGE-CLASS doesn't seem to be mandatory.
 ;;; At least 4 other Lisp implementations I tested don't call it.
-(macrolet ((with-temporary-instance ((var) &body body)
-             `(dx-let ((,var (%make-instance (1+ sb-vm:instance-data-start))))
-                ,@body)))
+(defmacro with-temporary-instance ((var) &body body)
+  `(dx-let ((,var (%make-instance (1+ sb-vm:instance-data-start))))
+     ,@body))
 (defmethod change-class ((instance standard-object) (new-class standard-class)
                          &rest initargs)
   (check-new-class-not-metaobject new-class)
@@ -1809,7 +1824,7 @@
       (when (eq class (find-class 'class))
         (return nil)))
     (with-temporary-instance (temp)
-      (%change-class temp instance new-class initargs)))))
+      (%change-class temp instance new-class initargs))))
 
 (defmethod change-class ((instance t)
                          (new-class forward-referenced-class) &rest initargs)
@@ -1819,20 +1834,20 @@
    '((:amop :generic-function ensure-class-using-class)
      (:amop :initialization class))))
 
-(macrolet ((with-temporary-funinstance ((var) &body body)
-             `(dx-let ((,var (%make-funcallable-instance
-                              (+ sb-vm:instance-data-start 2))))
-                (dx-flet ((signal-error ()
-                            (declare (optimize (sb-c::verify-arg-count 0)))
-                            (error-no-implementation-function ,var)))
-                  (setf (%funcallable-instance-fun ,var) #'signal-error)
-                  ,@body))))
+(defmacro with-temporary-funinstance ((var) &body body)
+  `(dx-let ((,var (%make-funcallable-instance
+                   (+ sb-vm:instance-data-start 2))))
+     (dx-flet ((signal-error ()
+                 (declare (optimize (sb-c::verify-arg-count 0)))
+                 (error-no-implementation-function ,var)))
+       (setf (%funcallable-instance-fun ,var) #'signal-error)
+       ,@body)))
 (defmethod change-class ((instance funcallable-standard-object)
                          (new-class funcallable-standard-class)
                          &rest initargs)
   (check-new-class-not-metaobject new-class)
   (with-temporary-funinstance (temp)
-    (%change-class temp instance new-class initargs))))
+    (%change-class temp instance new-class initargs)))
 
 (defmethod change-class ((instance standard-object)
                          (new-class funcallable-standard-class)

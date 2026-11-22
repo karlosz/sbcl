@@ -24,6 +24,7 @@
 (in-package "SB-PCL")
 
 (define-load-time-global *!temporary-ensure-accessor-functions* nil)
+#+sb-xc-host ; host PCL's early version (the target's: fixup.lisp)
 (defun ensure-accessor (fun-name)
   (when (member fun-name *!temporary-ensure-accessor-functions* :test 'equal)
     (error "ENSURE-ACCESSOR ~S called more than once!?" fun-name))
@@ -55,7 +56,7 @@
 (defun make-structure-slot-value-function (slotd)
   (if (slot-definition-always-bound-p slotd)
       (slot-definition-internal-reader-function slotd)
-      (named-lambda checking-slot-value (object)
+      (template-lambda (structure-slot checking-slot-value) (slotd) (object)
         (let ((value (funcall (slot-definition-internal-reader-function slotd) object)))
           (if (unbound-marker-p value)
               (values (slot-unbound (class-of object) object (slot-definition-name slotd)))
@@ -63,18 +64,18 @@
 
 (defun make-structure-slot-boundp-function (slotd)
   (if (slot-definition-always-bound-p slotd)
-      (named-lambda always-bound (object)
+      (template-lambda (structure-slot always-bound) () (object)
         (declare (ignore object))
         t)
-      (named-lambda checking-slot-boundp (object)
+      (template-lambda (structure-slot checking-slot-boundp) (slotd) (object)
         (not (unbound-marker-p
               (funcall (slot-definition-internal-reader-function slotd) object))))))
 
 (defun make-structure-slot-makunbound-function (slotd)
   (if (slot-definition-always-bound-p slotd)
-      (named-lambda cannot-makunbound (object)
+      (template-lambda (structure-slot cannot-makunbound) (slotd) (object)
         (error "Cannot unbind slot ~S in structure ~S" (slot-definition-name slotd) object))
-      (named-lambda can-makunbound (object)
+      (template-lambda (structure-slot can-makunbound) (slotd) (object)
         (funcall (slot-definition-internal-writer-function slotd)
                  sb-pcl:+slot-unbound+ object)
         object)))
@@ -146,24 +147,24 @@
 (defun make-optimized-structure-slot-value-using-class-method-function
     (function)
   (declare (type function function))
-  (lambda (class object slotd)
+  (template-lambda (structure-svuc reader) (function) (class object slotd)
     (declare (ignore class slotd))
     (funcall function object)))
 
 (defun make-optimized-structure-setf-slot-value-using-class-method-function
     (function)
   (declare (type function function))
-  (lambda (nv class object slotd)
+  (template-lambda (structure-svuc writer) (function) (nv class object slotd)
     (declare (ignore class slotd))
     (funcall function nv object)))
 
 (defun make-optimized-structure-slot-boundp-using-class-method-function ()
-  (lambda (class object slotd)
+  (template-lambda (structure-svuc boundp) () (class object slotd)
     (declare (ignore class object slotd))
     t))
 
 (defun make-optimized-structure-slot-makunbound-using-class-method-function ()
-  (lambda (class object slotd)
+  (template-lambda (structure-svuc makunbound) () (class object slotd)
     (declare (ignore class object slotd))
     (error "Cannot make structure slots unbound")))
 
@@ -359,7 +360,7 @@
      `(,name ,(class-name class) ,(slot-definition-name slotd)))))
 
 (defun maybe-class (class-or-name)
-  (when (eq **boot-state** 'complete)
+  (when (pcl-ready-p)
     (if (typep class-or-name 'class)
         class-or-name
         (find-class class-or-name nil))))
@@ -385,13 +386,15 @@
                            (instance) (instance-slots))
                (instance-read-standard
                 .pv. instance-slots 0
-                (slot-value instance slot-name))))))
+                (slot-value instance slot-name))))
+           ((std-reader :standard) slot-name)))
          ((:custom :accessor)
           (make-method-function
            (lambda (instance)
              (pv-binding1 ((sb-impl::unreachable)
                            (instance) nil)
-               (instance-read-custom .pv. 0 instance)))))))))
+               (instance-read-custom .pv. 0 instance)))
+           ((std-reader :custom) slot-name)))))))
 
   (defun make-std-writer-method-function (class-or-name slot-name)
     (let ((class (maybe-class class-or-name)))
@@ -408,7 +411,8 @@
                               .pv. instance-slots 0 nv
                               (setf (slot-value instance slot-name)
                                     .good-new-value.)
-                              ,@(when safe '(nil t))))))))
+                              ,@(when safe '(nil t)))))
+           ((std-writer :standard ,(if safe :checked :unchecked)) slot-name))))
             (if (and class (safe-p class))
                 (writer-method-function t)
                 (writer-method-function nil))))
@@ -417,7 +421,8 @@
            (lambda (nv instance)
              (pv-binding1 ((sb-impl::unreachable)
                            (instance) nil)
-               (instance-write-custom .pv. 0 instance nv)))))))))
+               (instance-write-custom .pv. 0 instance nv)))
+           ((std-writer :custom) slot-name)))))))
 
   (defun make-std-boundp-method-function (class-or-name slot-name)
     (let ((class (maybe-class class-or-name)))
@@ -431,13 +436,15 @@
                            (instance) (instance-slots))
                (instance-boundp-standard
                 .pv. instance-slots 0
-                (slot-boundp instance slot-name))))))
+                (slot-boundp instance slot-name))))
+           ((std-boundp :standard) slot-name)))
          ((:custom :accessor)
           (make-method-function
            (lambda (instance)
              (pv-binding1 ((sb-impl::unreachable)
                            (instance) nil)
-               (instance-boundp-custom .pv. 0 instance)))))))))
+               (instance-boundp-custom .pv. 0 instance)))
+           ((std-boundp :custom) slot-name)))))))
 
   (defun make-std-makunbound-method-function (class-or-name slot-name)
     (let ((class (maybe-class class-or-name)))
@@ -451,38 +458,44 @@
                            (instance) (instance-slots))
                           (instance-makunbound-standard
                            .pv. instance-slots 0 instance
-                           (slot-makunbound instance slot-name))))))
+                           (slot-makunbound instance slot-name))))
+           ((std-makunbound :standard) slot-name)))
          ((:custom :accessor)
           (make-method-function
            (lambda (instance)
              (pv-binding1 ((sb-impl::unreachable)
                            (instance) nil)
-               (instance-makunbound-custom .pv. 0 instance)))))))))
+               (instance-makunbound-custom .pv. 0 instance)))
+           ((std-makunbound :custom) slot-name)))))))
 
   (defun make-fallback-reader-method-function (slot-name)
     (make-initargs
      slot-name :reader
      (make-method-function
       (lambda (instance)
-        (slot-value instance slot-name)))))
+        (slot-value instance slot-name))
+           ((fallback-reader) slot-name))))
 
   (defun make-fallback-writer-method-function (slot-name)
     (make-initargs
      slot-name :writer
      (make-method-function
       (lambda (nv instance)
-        (setf (slot-value instance slot-name) nv)))))
+        (setf (slot-value instance slot-name) nv))
+           ((fallback-writer) slot-name))))
 
   (defun make-fallback-boundp-method-function (slot-name)
     (make-initargs
      slot-name :boundp
      (make-method-function
       (lambda (instance)
-        (slot-boundp instance slot-name)))))
+        (slot-boundp instance slot-name))
+           ((fallback-boundp) slot-name))))
 
   (defun make-fallback-makunbound-method-function (slot-name)
     (make-initargs
      slot-name :makunbound
      (make-method-function
       (lambda (instance)
-        (slot-makunbound instance slot-name))))))
+        (slot-makunbound instance slot-name))
+           ((fallback-makunbound) slot-name)))))

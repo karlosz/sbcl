@@ -2036,7 +2036,6 @@ or they must be declared locally notinline at each call site.~@:>"
 (defun global-ftype (name &aux xform)
   (multiple-value-bind (type foundp) (info :function :type name)
     (cond
-     #-sb-xc-host ; PCL "doesn't exist" yet
      ((eq type :generic-function) (sb-pcl::compute-gf-ftype name))
      ((consp type) ; not parsed type
       ;; This case is used only for DEFKNOWN. It allows some out-of-order
@@ -2446,6 +2445,8 @@ or they must be declared locally notinline at each call site.~@:>"
         (let* ((layout (cdr pair))
                (dd (layout-info layout)))
           (cond
+            ;; PCL's classes (class-init.lisp's classoids)
+            ((typep (car pair) 'standard-classoid))
             (dd
              (let* ((*print-pretty* nil) ; output should be insensitive to host pprint
                     (*print-readably* t)
@@ -2477,6 +2478,11 @@ or they must be declared locally notinline at each call site.~@:>"
            (length (the simple-vector (sb-c::compiled-debug-info-rest instance))))
         basic)))
 (defun %instance-ref (instance index)
+  ;; a standard instance's slot vector, as low.lisp's STD-INSTANCE-SLOTS
+  ;; reads it (src/code/cross-pcl.lisp)
+  (when (sb-pcl::host-instance-p instance)
+    (aver (= index sb-vm:instance-data-start))
+    (return-from %instance-ref (sb-pcl::host-instance-slots instance)))
   (let* ((layout (%instance-layout instance))
          (map (layout-index->accessor-map layout)))
     (when (zerop (length map)) ; construct it on demand

@@ -77,9 +77,14 @@
     state))
 
 (defvar *random-state*)
+(declaim (global sb-pcl::*pcl-misc-random-state*)) ; cache.lisp's
 (defun !random-cold-init ()
   (/show0 "entering !RANDOM-COLD-INIT")
-  (setf *random-state* (%make-random-state (init-random-state)))
+  (setf *random-state* (%make-random-state (init-random-state))
+        ;; PCL's, which its code reads (LOAD-TIME-VALUE) before its
+        ;; toplevel forms run: PCL is bootstrapped on the host, which can't
+        ;; write a random state
+        sb-pcl::*pcl-misc-random-state* (%make-random-state (init-random-state)))
   (/show0 "returning from !RANDOM-COLD-INIT"))
 
 ;;; Q: Why is there both MAKE-RANDOM-STATE and SEED-RANDOM-STATE?

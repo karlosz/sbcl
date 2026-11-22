@@ -54,8 +54,13 @@
     (make-hashset 64 #'list-elts-eq #'sb-c::hash-list-of-symbols))
 
 ;;; Used for interning PV-TABLES, keyed by the SLOT-NAME-LISTS
-;;; used.
-(define-load-time-global *pv-tables* (make-hash-table :test 'equal))
+;;; used.  It starts with those that genesis wrote, with the class
+;;; hierarchy that the code it loaded refers to.
+(define-load-time-global *pv-tables* nil)
+(define-lazy-table pv-tables *pv-tables*
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (pv-table *!genesis-pv-tables* table)
+      (setf (gethash (pv-table-slot-name-lists pv-table) table) pv-table))))
 
 ;;; ...and one lock to rule them. Lock because for certain (rare)
 ;;; cases this lock might be grabbed in the course of method dispatch
@@ -72,14 +77,14 @@
                (hashset-insert-if-absent *slot-name-lists* slot-names #'identity)))
          (%intern-pv-table (snl)
            (ensure-gethash
-            snl *pv-tables*
+            snl (pv-tables)
             (make-pv-table :slot-name-lists snl
                            :pv-size (* 2 (reduce #'+ snl :key #'length))))))
     (with-system-mutex (*pv-lock*)
       (%intern-pv-table (mapcar #'intern-slot-names slot-name-lists)))))
 
 (defun use-standard-slot-access-p (class slot-name type)
-  (or (not (eq **boot-state** 'complete))
+  (or (not (pcl-ready-p))
       (and (std-class-p class)
            (let ((slotd (find-slot-definition class slot-name)))
              (and slotd
@@ -87,14 +92,14 @@
 
 (defun slot-missing-info (class slot-name)
   (make-slot-info
-   :reader (lambda (object)
+   :reader (template-lambda (slot-missing :reader) (class slot-name) (object)
              (values (slot-missing class object slot-name 'slot-value)))
-   :boundp (lambda (object)
+   :boundp (template-lambda (slot-missing :boundp) (class slot-name) (object)
              (and (slot-missing class object slot-name 'slot-boundp) t))
-   :writer (lambda (new-value object)
+   :writer (template-lambda (slot-missing :writer) (class slot-name) (new-value object)
              (slot-missing class object slot-name 'setf new-value)
              new-value)
-   :makunbound (lambda (object)
+   :makunbound (template-lambda (slot-missing :makunbound) (class slot-name) (object)
                  (slot-missing class object slot-name 'slot-makunbound)
                  object)))
 
@@ -170,7 +175,7 @@
                                                        parameter-or-nil
                                                        env)))
                    (class (find-class class-name nil)))
-              (cond ((or (not (eq **boot-state** 'complete))
+              (cond ((or (not (pcl-ready-p))
                          (forward-referenced-class-p class))
                      (setf class nil))
                     ((and class (not (class-finalized-p class)))
@@ -291,7 +296,7 @@
   (let ((class (if (consp sparameter) (cdr sparameter) *the-class-t*))
         (parameter (if (consp sparameter) (car sparameter) sparameter))
         slotd)
-    (if (and (eq **boot-state** 'complete)
+    (if (and (pcl-ready-p)
              (classp class)
              (typep (setq slotd (find-slot-definition class slot-name))
                     'structure-effective-slot-definition))
@@ -344,7 +349,7 @@
   (let ((class (and (constantp class-form) (constant-form-value class-form)))
         (slot-name (and (constantp slot-name-form)
                         (constant-form-value slot-name-form))))
-    (and (eq **boot-state** 'complete)
+    (and (pcl-ready-p)
          (standard-class-p class)
          (not (eq class *the-class-t*)) ; shouldn't happen, though.
          (let ((slotd (find-slot-definition class slot-name)))
@@ -360,7 +365,7 @@
   ;; This is needed because DEFCLASS generates accessor methods before possible
   ;; SLOT-VALUE-USING-CLASS methods are defined, which causes them to take
   ;; the slow path unless we make the conservative assumption here.
-  (if (eq **boot-state** 'complete)
+  (if (pcl-ready-p)
       (let (slotd)
         (cond ((or
                 ;; Conditions, and classes for which FIND-CLASS
@@ -797,10 +802,13 @@
                                       lambda-list))))
         `(list*
           :function
-          (let* ((fmf (,(if *method-name* 'named-lambda 'lambda)
-                        ,@(when *method-name*
+          (let* ((fmf (,@(cond (*method-function-template*
+                                `(template-lambda ,(car *method-function-template*)
+                                                  ,(cdr *method-function-template*)))
+                               (*method-name*
                                 ;; function name
-                                (list `(fast-method ,@*method-name*)))
+                                (list 'named-lambda `(fast-method ,@*method-name*)))
+                               (t '(lambda)))
                         ;; The lambda-list of the FMF
                         (.pv. .next-method-call. ,@fmf-lambda-list)
                         ;; body of the function
@@ -831,7 +839,7 @@
          (pv-table (when snl
                      (intern-pv-table :slot-name-lists snl))))
     (setq method-function
-          (lambda (method-args next-methods)
+          (template-lambda (method-function-from-fast-function) (pv-table fmf) (method-args next-methods)
             (let* ((pv (when pv-table
                          (get-pv method-args pv-table)))
                    (nm (car next-methods))

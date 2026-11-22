@@ -228,6 +228,24 @@
 ;;; dumping uses the table.
 (defvar *circularities-detected*)
 
+;;; What genesis needs of each cross-compiled DEFMETHOD's method, by the
+;;; name of its function, for FOP-MSET: (lambda-list namestring indices
+;;; initargs make-p).  INITARGS are its DEFMETHOD's, and MAKE-P says host
+;;; PCL makes the method from this: its body is the target's only (methods
+;;; of PCL proper are made by host PCL from their source).  MAKE-P is :EARLY
+;;; for the methods of files before PCL's boot.lisp, whose generic functions
+;;; cold init may call before PCL's toplevel forms.
+#+sb-xc-host
+(progn
+(defvar *method-info* (make-hash-table :test 'equal))
+(defun note-method-info (name lambda-list initargs make-p)
+  (let ((location (make-definition-source-location)))
+    (setf (gethash name *method-info*)
+          (list lambda-list
+                (definition-source-location-namestring location)
+                (definition-source-location-indices location)
+                initargs make-p)))))
+
 ;;;; utilities
 
 ;;; Write the byte B to the specified FASL-OUTPUT stream.
@@ -444,7 +462,7 @@
     (dump-fop 'fop-end-group fasl-output (fasl-output-table-free fasl-output)))
 
   ;; That's all, folks.
-  (close (fasl-output-stream fasl-output) :abort abort-p)
+  (cl:close (fasl-output-stream fasl-output) :abort abort-p)
   (values))
 
 ;;;; main entries to object dumping
@@ -1319,6 +1337,20 @@
   (values))
 
 ;;; Dump the code, constants, etc. for component.
+;;; The names of the variables in the closure slots of ENTRY, in the order
+;;; IR2-CONVERT-ENCLOSE stores them, or :NONE if it isn't a closure.
+#+sb-xc-host
+(defun template-closure-vars (component entry)
+  (let* ((xep (the clambda (find entry (component-lambdas component) :key #'leaf-info)))
+         (closure (environment-closure (get-lambda-environment xep))))
+    (if closure
+        (mapcar (lambda (what)
+                  (if (and (lambda-var-p what) (not (lambda-var-indirect what)))
+                      (leaf-source-name what)
+                      (bug "~S closes over ~S" (entry-info-name entry) what)))
+                closure)
+        :none)))
+
 (defun fasl-dump-component (component assembly file)
   (declare (type component component))
   (declare (type fasl-output file))
@@ -1358,8 +1390,16 @@
                    (dump-object method file)
                    (dump-object qualifiers file)
                    (dump-object specializers file)
+                   (dump-object (gethash name *method-info*) file)
                    (dump-push entry-handle file)
-                   (dump-fop 'fop-mset file)))))
+                   (dump-fop 'fop-mset file)))
+                ((typep name '(cons (eql sb-pcl::template)))
+                 ;; PCL's TEMPLATE-LAMBDA: genesis makes closures of it, so
+                 ;; it needs the variables in the closure's slots, in order
+                 (dump-object name file)
+                 (dump-object (template-closure-vars component entry) file)
+                 (dump-push entry-handle file)
+                 (dump-fop 'fop-template-closure file))))
         (setf (gethash entry (fasl-output-entry-table file)) entry-handle)
         (let ((old (gethash entry (fasl-output-patch-table file))))
           (when old
@@ -1472,7 +1512,7 @@
   (let ((circ (fasl-output-circularity-table file)))
     (dolist (slot-name slot-names)
       (if (slot-boundp object slot-name)
-          (let* ((value (slot-value object slot-name))
+          (let* ((value (cl:slot-value object slot-name))
                  (ref (gethash value circ)))
             (cond (ref
                    (push (make-circularity :type :slot-set
@@ -1487,7 +1527,7 @@
                    (sub-dump-object value file))))
           (dump-fop 'fop-misc-trap file))
       (sub-dump-object slot-name file)))
-  (sub-dump-object (class-name (class-of object)) file)
+  (sub-dump-object (cl:class-name (cl:class-of object)) file)
   (dump-fop 'fop-instance file (length slot-names)))
 
 ;;;; code coverage

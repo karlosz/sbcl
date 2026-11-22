@@ -110,7 +110,9 @@
 ;;; After the metabraid has been setup, and the protocol for defining
 ;;; classes has been defined, the real definition of LOAD-DEFCLASS is
 ;;; installed by the file std-class.lisp
-(sb-xc:defmacro defclass (&environment env name direct-superclasses direct-slots &rest options)
+(sb-xc:defmacro defclass (&whole form &environment env name direct-superclasses direct-slots
+                          &rest options)
+  (!definition (:class form)
   (check-class-name name nil)
   (let ((expansion-state (make-array 4 :initial-element nil)))
     ;; FIXME: It would be nice to collect all errors from the
@@ -126,7 +128,7 @@
             ;; DEFSTRUCT-P should be true if the class is defined
             ;; with a metaclass STRUCTURE-CLASS, so that a DEFSTRUCT
             ;; is compiled for the class.
-            (defstruct-p (and (eq **boot-state** 'complete)
+            (defstruct-p (and (pcl-ready-p)
                               (let ((mclass (find-class metaclass nil)))
                                 (and mclass
                                      (*subtypep
@@ -190,7 +192,7 @@
                     ',*readers-for-this-defclass*
                     ',*writers-for-this-defclass*
                     ',*slot-names-for-this-defclass*))
-                 ,defclass-form)))))))
+                 ,defclass-form))))))))
 
 (defun canonize-defclass-options (expansion-state class-name options)
   (declare (type (simple-vector 4) expansion-state))
@@ -368,3 +370,13 @@
                                   ,initform))))
              (push entry *initfunctions-for-this-defclass*))
            (cadr entry)))))
+
+;;; PCL's DEFCLASSes that the cross-compiler itself loads (defs.lisp) make
+;;; the early class definitions which PCL's macros consult, as the target's
+;;; do.
+#+sb-xc-host
+(setf (cl:macro-function 'defclass)
+      (lambda (form env)
+        (declare (ignore env))
+        (let ((sb-c::*policy* (or sb-c::**baseline-policy** (sb-c::make-policy 0 0))))
+          (funcall (macro-function 'defclass) form nil))))

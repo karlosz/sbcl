@@ -125,6 +125,7 @@
 ;;;
 
 ;;; Type is either CTOR, for MAKE-INSTANCE, or ALLOCATOR, for ALLOCATE-INSTANCE
+#-sb-xc-host ; the target's
 (!defstruct-with-alternate-metaclass ctor
   :slot-names (type class-or-name class initargs state safe-p)
   :constructor %make-ctor
@@ -134,9 +135,9 @@
   :dd-type funcallable-structure)
 
 ;;; All defined ctors.
-(defglobal *all-ctors* (make-hash-table :test #'equal
-                                        :weakness :value))
-(declaim (hash-table *all-ctors*))
+(defglobal *all-ctors* nil)
+(declaim (type (or null hash-table) *all-ctors*))
+(define-lazy-table all-ctors *all-ctors* (make-hash-table :test #'equal :weakness :value))
 
 (defun make-ctor-parameter-list (ctor)
   (plist-values (ctor-initargs ctor) :test (complement #'constantp)))
@@ -221,25 +222,25 @@
 ;;; Keep this a separate function for testing.
 (defun ensure-ctor (function-name class-name initargs safe-code-p)
   (with-world-lock ()
-    (or (gethash function-name *all-ctors*)
+    (or (gethash function-name (all-ctors))
         (make-ctor function-name class-name initargs safe-code-p))))
 
 ;;; Keep this a separate function for testing.
 (defun make-ctor (function-name class-name initargs safe-p)
   (let ((ctor (%make-ctor 'ctor class-name nil initargs nil safe-p)))
     (install-initial-constructor ctor t)
-    (setf (gethash function-name *all-ctors*) ctor)
+    (setf (gethash function-name (all-ctors)) ctor)
     ctor))
 
 (defun ensure-allocator (function-name class-name)
   (with-world-lock ()
-    (or (gethash function-name *all-ctors*)
+    (or (gethash function-name (all-ctors))
         (make-allocator function-name class-name))))
 
 (defun make-allocator (function-name class-name)
   (let ((ctor (%make-ctor 'allocator class-name nil nil nil nil)))
     (install-initial-constructor ctor t)
-    (setf (gethash function-name *all-ctors*) ctor)
+    (setf (gethash function-name (all-ctors)) ctor)
     ctor))
 
 ;;; *****************
@@ -281,7 +282,7 @@
         (t
          (bug "Something strange where symbol or class expected."))))
 
-(export '(+ctor-list-max-size+ +ctor-table-max-size+)) ; for a test
+(!target-only (export '(+ctor-list-max-size+ +ctor-table-max-size+))) ; for a test
 ;;; Max number of CTORs kept in an inline list cache. Once this is
 ;;; exceeded we switch to a table.
 (defconstant +ctor-list-max-size+ 12)
@@ -429,7 +430,7 @@
            (let ((function-name (list 'ctor 'allocator class)))
              (declare (dynamic-extent function-name))
              (with-world-lock ()
-               (or (gethash function-name *all-ctors*)
+               (or (gethash function-name (all-ctors))
                    (make-allocator (copy-list function-name) class))))
            ;; Invalid first argument: let ALLOCATE-INSTANCE worry about it.
            (return-from ensure-cached-allocator
@@ -449,6 +450,7 @@
 ;;; This used to be a compiler macro but compiler macros are invoked
 ;;; before FOP compilation, while source transforms aren't, there's no
 ;;; reason to optimize make-instance for top-level forms
+#-sb-xc-host ; the target compiler's
 (sb-c:define-source-transform make-instance (&whole form &rest args &environment env)
   ;; Compiling an optimized constructor for a non-standard class means
   ;; compiling a lambda with (MAKE-INSTANCE #<SOME-CLASS X> ...) in it
@@ -458,6 +460,7 @@
         (make-instance->constructor-call form (safe-code-p env)))
       (values nil t)))
 
+#-sb-xc-host ; the target compiler's
 (sb-c:define-source-transform allocate-instance (class &rest initargs)
   (if (or *compiling-optimized-constructor*
           initargs)
@@ -738,9 +741,7 @@
     (methods &optional standard-method)
   (loop with primary-checked-p = nil
         for method in methods
-        as qualifiers = (if (consp method)
-                            (early-method-qualifiers method)
-                            (safe-method-qualifiers method))
+        as qualifiers = (safe-method-qualifiers method)
         when (or (eq :around (car qualifiers))
                  (and (null qualifiers)
                       (not primary-checked-p)
@@ -754,9 +755,7 @@
     (methods &optional standard-method)
   (loop with primary-checked-p = nil
         for method in methods
-        as qualifiers = (if (consp method)
-                            (early-method-qualifiers method)
-                            (safe-method-qualifiers method))
+        as qualifiers = (safe-method-qualifiers method)
         when (or (and (eq :around (car qualifiers))
                       (not (simple-next-method-call-p method)))
                  (and (null qualifiers)
@@ -938,9 +937,7 @@
 ;;; must be called.
 (defun standard-sort-methods (applicable-methods)
   (loop for method in applicable-methods
-        as qualifiers = (if (consp method)
-                            (early-method-qualifiers method)
-                            (safe-method-qualifiers method))
+        as qualifiers = (safe-method-qualifiers method)
         if (null qualifiers)
           collect method into primary
         else if (eq :around (car qualifiers))
@@ -1182,7 +1179,7 @@
        (reset class t))
       ;; NAME must have been specified.
       (setf-find-class
-       (loop for ctor being the hash-values of *all-ctors*
+       (loop for ctor being the hash-values of (all-ctors)
              when (eq (ctor-class-or-name ctor) name)
              do
              (when (ctor-class ctor)
@@ -1216,7 +1213,7 @@
                 (reset (find-class 'standard-object))))))))))
 
 (defun precompile-ctors ()
-  (loop for ctor being the hash-values of *all-ctors*
+  (loop for ctor being the hash-values of (all-ctors)
         unless (ctor-class ctor)
         do
         (let ((class (find-class (ctor-class-or-name ctor) nil)))
@@ -1250,6 +1247,11 @@
 
 ;;; FIXME: CHECK-FOO-INITARGS share most of their bodies.
 (defun check-mi-initargs (class initargs)
+  ;; (host PCL makes the methods of SHARED-INITIALIZE etc. after the forms
+  ;; that make instances, RUN-PASS-2's MAKE-EARLY-METHODS, so the check
+  ;; would reject what PCL's own source passes; the target computes what
+  ;; the checks cache when first needed)
+  #+sb-xc-host (return-from check-mi-initargs nil)
   (let* ((class-proto (class-prototype class))
          (keys (plist-keys initargs))
          (cache (plist-value class 'mi-initargs))
@@ -1273,6 +1275,7 @@
       (initarg-error class invalid-keys))))
 
 (defun check-ri-initargs (instance initargs)
+  #+sb-xc-host (return-from check-ri-initargs nil) ; (CHECK-MI-INITARGS)
   (let* ((class (class-of instance))
          (keys (plist-keys initargs))
          (cache (plist-value class 'ri-initargs))

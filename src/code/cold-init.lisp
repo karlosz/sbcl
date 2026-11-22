@@ -127,9 +127,9 @@
   (/show0 "entering !COLD-INIT")
   #+sb-show (setq */show* t)
   (setq sb-vm::*immobile-codeblob-tree* nil
-        sb-vm::*dynspace-codeblob-tree* nil)
-  (setq sb-kernel::*defstruct-hooks* '(sb-kernel::!bootstrap-defstruct-hook)
-        sb-kernel::*struct-access-fragments-delayed* nil)
+        sb-vm::*dynspace-codeblob-tree* nil
+        ;; read by DEFSTRUCTs before target-defstruct.lisp's toplevel forms
+        sb-kernel::*defstruct-hooks* nil)
   (let ((stream (!make-cold-stderr-stream)))
     (setq *error-output* stream
           *standard-output* stream
@@ -228,7 +228,6 @@
   (unless (!c-runtime-noinform-p)
     (write `("Length(TLFs)=" ,(length *!cold-toplevels*)) :escape nil))
 
-  (setq sb-pcl::*!docstrings* nil) ; needed before any documentation is set
   (setq sb-c::*queued-proclaims* nil) ; needed before any proclaims are run
   (setq *code-coverage-info* ; needed to note / record code coverage
         (cons (make-hash-table :test 'equal :synchronized t)
@@ -349,6 +348,9 @@
   (/show0 "enabling GC")
   (setq *gc-inhibit* nil)
   #+sb-thread (finalizer-thread-start)
+
+  ;; what genesis could not write of the class hierarchy
+  (sb-pcl::!finish-genesis-braid)
 
   ;; The show is on.
   (/show0 "going into toplevel loop")

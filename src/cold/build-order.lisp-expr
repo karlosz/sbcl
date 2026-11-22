@@ -90,6 +90,7 @@
 
  ("src/code/cross-byte"  :c-headers :not-target)
  ("src/code/cross-misc"  :c-headers :not-target)
+ ("src/code/cross-pcl"   :not-target)
  ("src/code/cross-char"  :c-headers :not-target)
  ("src/code/cross-io"    :not-target)
  ("src/code/cross-condition" :not-target)
@@ -595,13 +596,14 @@
  ;;; bootstrap things like classes at the same time as the rest of the
  ;;; type system.
  ("src/pcl/walk")
- ("src/pcl/low" :not-host)
- ("src/pcl/macros" :not-host)
- ("src/pcl/ecd" :not-host)
- ("src/pcl/compiler-support" :not-host)
- ("src/pcl/defs" :not-host)
- ("src/pcl/wrapper" :not-host)
- ("src/pcl/class-init" :not-host)
+ ("src/pcl/low" :host-definitions)
+ ("src/pcl/macros" :host-definitions)
+ ("src/pcl/defclass")
+ ("src/pcl/ecd" :host-definitions :not-target) ; host PCL's, for the meta-braid
+ ("src/pcl/compiler-support" :host-definitions)
+ ("src/pcl/defs" :host-definitions)
+ ("src/pcl/wrapper" :host-definitions)
+ ("src/pcl/class-init" :host-definitions)
 
  ("src/code/cold-init" :not-host) ; needs (SETF EXTERN-ALIEN) macroexpansion
 
@@ -611,8 +613,6 @@
  ("src/code/setf")
  ("src/code/macros")
  ("src/code/loop")
- ("src/pcl/defclass")
- ("src/code/early-defmethod")
 
  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
  ;; other target-code-building stuff which can't be processed until
@@ -621,7 +621,38 @@
  ("src/code/format") ; needs SB-XC:DEFMACRO
  ("src/code/target-format" :not-host)
 
- ("src/code/late-globaldb" :not-host))
+ ("src/code/late-globaldb" :not-host)
+
+ ;;; PCL proper, cross-compiled.  Its toplevel forms run late in cold init.
+ ("src/pcl/fngen" :host-definitions)
+ ("src/pcl/cache" :host-definitions)
+ ("src/pcl/dlisp" :host-definitions)
+ ("src/pcl/dlisp2" :host-definitions)
+ ("src/pcl/boot" :host-definitions)
+ ("src/pcl/vector" :host-definitions)
+ ("src/pcl/slots-boot" :host-definitions)
+ ("src/pcl/combin" :host-definitions)
+ ("src/pcl/dfun" :host-definitions)
+ ("src/pcl/ctor" :host-definitions)
+ ("src/pcl/braid" :host-definitions :pcl-proper)
+ ("src/pcl/dlisp3" :host-definitions :pcl-proper)
+ ("src/pcl/generic-functions" :host-definitions :pcl-proper)
+ ("src/pcl/slots" :host-definitions :pcl-proper)
+ ("src/pcl/init" :host-definitions :pcl-proper)
+ ("src/pcl/std-class" :host-definitions :pcl-proper)
+ ("src/pcl/cpl" :host-definitions :pcl-proper)
+ ("src/pcl/fsc" :host-definitions :pcl-proper)
+ ("src/pcl/methods" :host-definitions :pcl-proper)
+ ("src/pcl/fixup" :host-definitions :pcl-proper)
+ ("src/pcl/defcombin" :host-definitions :pcl-proper)
+ ;; definitions the rest of the system calls from the start
+ ("src/pcl/call-next-method" :not-host :pcl-target-only)
+ ("src/pcl/env" :not-host :pcl-target-only)
+ ("src/pcl/documentation" :not-host :pcl-target-only)
+ ("src/pcl/print-object" :not-host :pcl-target-only)
+ ("src/pcl/gray-streams-class" :not-host :pcl-target-only)
+ ("src/pcl/gray-streams" :not-host :pcl-target-only)
+ ("src/pcl/sequence" :not-host :pcl-target-only))
 
 ;;; make-target-2 build steps
 (("src/code/room" ; for MAP-ALLOCATED-OBJECTS
@@ -665,40 +696,8 @@
  #+sb-devel
  ("src/code/cold-init-helper-macros")
 
- ;; CLOS, derived from the PCL reference implementation
- ;;
- ;; This PCL build order is based on a particular
- ;; (arbitrary) linearization of the declared build
- ;; order dependencies from the old PCL defsys.lisp
- ;; dependency database.
- ("src/pcl/fngen"
-  "src/pcl/cache"
-  "src/pcl/dlisp"
-  "src/pcl/dlisp2"
-  "src/pcl/boot"
-  "src/pcl/vector"
-  "src/pcl/slots-boot"
-  "src/pcl/combin"
-  "src/pcl/dfun"
-  "src/pcl/ctor"
-  "src/pcl/braid"
-  "src/pcl/dlisp3"
-  "src/pcl/generic-functions"
-  "src/pcl/slots"
-  "src/pcl/init"
-  "src/pcl/std-class"
-  "src/pcl/cpl"
-  "src/pcl/fsc"
-  "src/pcl/methods"
-  "src/pcl/fixup"
-  "src/pcl/call-next-method"
-  "src/pcl/defcombin"
-  "src/pcl/env"
-  "src/pcl/documentation"
-  "src/pcl/print-object"
-  "src/pcl/precom1"
-  "src/pcl/precom2"
-  "src/code/ntrace")
+ ;; (CLOS is cold: PCL is bootstrapped on the host, src/cold/host-pcl.lisp)
+ ("src/code/ntrace")
 
   #+sb-eval ("src/code/full-eval")
 
@@ -706,14 +705,10 @@
   ;; miscellaneous functionality which depends on CLOS
   "src/code/late-condition"
 
-  ;; CLOS-level support for the Gray OO streams
-  ;; extension (which is also supported by various
-  ;; lower-level hooks elsewhere in the code)
-  "src/pcl/gray-streams-class"
-  "src/pcl/gray-streams"
+  ;; (CLOS-level support for the Gray OO streams extension is cold:
+  ;; src/pcl/gray-streams-class and gray-streams)
 
-  ;; CLOS-level support for User-extensible sequences.
-  "src/pcl/sequence"
+  ;; (and for user-extensible sequences: src/pcl/sequence)
 
   ;; other functionality not needed for cold init, moved
   ;; to warm init to reduce peak memory requirement in

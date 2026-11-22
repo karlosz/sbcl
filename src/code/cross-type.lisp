@@ -281,7 +281,7 @@
 (defun ctype-of (x)
   (typecase x
     (function
-     (if (typep x 'generic-function)
+     (if (typep x 'cl:generic-function)
          ;; Since at cross-compile time we build a CLOS-free bootstrap
          ;; version of SBCL, it's unclear how to explain to it what a
          ;; generic function is.

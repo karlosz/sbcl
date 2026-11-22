@@ -176,8 +176,9 @@
   (declare (ignore slot-names method-cell))
   (initialize-method-function initargs method))
 
+(!capturing
 (define-load-time-global *the-class-standard-generic-function*
-  (find-class 'standard-generic-function))
+  (find-class 'standard-generic-function)))
 
 (defmethod shared-initialize :before
            ((generic-function standard-generic-function)
@@ -230,7 +231,7 @@
       (errorp (error "No generic function named ~S." name))
       (t nil))))
 
-(defun real-add-named-method (generic-function-name qualifiers
+(defun add-named-method (generic-function-name qualifiers
                               specializers lambda-list &rest other-initargs)
   (let* ((existing-gf (find-generic-function generic-function-name nil))
          (generic-function
@@ -368,7 +369,6 @@
 
 (defmethod generic-function-argument-precedence-order
     ((gf standard-generic-function))
-  (aver (eq **boot-state** 'complete))
   (loop with arg-info = (gf-arg-info gf)
         with lambda-list = (arg-info-lambda-list arg-info)
         for argument-position in (arg-info-precedence arg-info)
@@ -404,7 +404,7 @@
                       :argument-precedence-order argument-precedence-order)
         (set-arg-info gf))
     (let ((mc (generic-function-method-combination gf)))
-      (add-to-weak-hashset gf (method-combination-%generic-functions mc)))
+      (add-to-weak-hashset gf (method-combination-gf-set mc)))
     (when (arg-info-valid-p (slot-value gf 'arg-info))
       (update-dfun gf))))
 
@@ -415,12 +415,12 @@
          (mc (getf args :method-combination old-mc))
          (keys (arg-info-keys (gf-arg-info gf))))
     (unless (eq mc old-mc)
-      (aver (weak-hashset-memberp gf (method-combination-%generic-functions old-mc)))
-      (aver (not (weak-hashset-memberp gf (method-combination-%generic-functions mc)))))
+      (aver (weak-hashset-memberp gf (method-combination-gf-set old-mc)))
+      (aver (not (weak-hashset-memberp gf (method-combination-gf-set mc)))))
     (prog1 (call-next-method)
       (unless (eq mc old-mc)
-        (remove-from-weak-hashset gf (method-combination-%generic-functions old-mc))
-        (add-to-weak-hashset gf (method-combination-%generic-functions mc)))
+        (remove-from-weak-hashset gf (method-combination-gf-set old-mc))
+        (add-to-weak-hashset gf (method-combination-gf-set mc)))
       (sb-thread::with-recursive-system-lock ((gf-lock gf))
         (cond
           ((and lambda-list-p apo-p)
@@ -696,6 +696,7 @@
         (when (memq ic cpl2)
           (return-from superclasses-compatible-p nil))))))
 
+(!after-classes
 (mapc
  #'!proclaim-incompatible-superclasses
  '(;; superclass class
@@ -714,7 +715,7 @@
    (list vector)                        ; direct subclasses of sequence
    (cons null)                          ; direct subclasses of list
    (string bit-vector)                  ; direct subclasses of vector
-   ))
+   )))
 
 (defmethod same-specializer-p ((specl1 specializer) (specl2 specializer))
   (eql specl1 specl2))
@@ -793,7 +794,7 @@
     (method-plist-value (car methods) :constant-value)))
 
 (defun default-secondary-dispatch-function (generic-function)
-  (lambda (&rest args)
+  (template-lambda (default-secondary-dispatch) (generic-function) (&rest args)
     (let ((methods (compute-applicable-methods generic-function args)))
       (if methods
           (let ((emf (get-effective-method-function generic-function
@@ -804,7 +805,10 @@
 (define-load-time-global *std-cam-methods* nil)
 
 (defun compute-applicable-methods-emf (generic-function)
-  (if (eq **boot-state** 'complete)
+  ;; Without methods (yet), COMPUTE-APPLICABLE-METHODS can only be the
+  ;; standard one.
+  (if (and (pcl-ready-p)
+           (generic-function-methods (fdefinition 'compute-applicable-methods)))
       (let* ((cam (fdefinition 'compute-applicable-methods))
              (cam-methods (compute-applicable-methods-using-types
                            cam (list `(eql ,generic-function) t))))
@@ -851,12 +855,11 @@
   (update-gf-simple-accessor-type gf))
 
 (defun update-c-a-m-gf-info (gf)
-  (unless (early-gf-p gf)
-    (multiple-value-bind (c-a-m-emf std-p)
-        (compute-applicable-methods-emf gf)
-      (let ((arg-info (gf-arg-info gf)))
-        (setf (gf-info-static-c-a-m-emf arg-info) c-a-m-emf)
-        (setf (gf-info-c-a-m-emf-std-p arg-info) std-p)))))
+  (multiple-value-bind (c-a-m-emf std-p)
+      (compute-applicable-methods-emf gf)
+    (let ((arg-info (gf-arg-info gf)))
+      (setf (gf-info-static-c-a-m-emf arg-info) c-a-m-emf)
+      (setf (gf-info-c-a-m-emf-std-p arg-info) std-p))))
 
 (defun update-gf-simple-accessor-type (gf)
   (let ((arg-info (gf-arg-info gf)))
@@ -1581,6 +1584,7 @@
 
 ;;; this is the normal function for computing the discriminating
 ;;; function of a standard-generic-function
+(!capturing
 (let (initial-print-object-cache)
   (defun standard-compute-discriminating-function (gf)
     (declare (notinline slot-value))
@@ -1624,13 +1628,6 @@
                          (multiple-value-bind (dfun cache info)
                              (make-caching-dfun gf (copy-cache initial-print-object-cache))
                            (set-dfun gf dfun cache info)))
-                        ;; the relevant PRINT-OBJECT methods get defined
-                        ;; late, by delayed DEFMETHOD.  We mustn't cache
-                        ;; the effective method for our classes earlier
-                        ;; than the relevant PRINT-OBJECT methods are
-                        ;; defined...
-                        ((boundp '*!delayed-defmethod-args*)
-                         (make-initial-dfun gf))
                         (t (multiple-value-bind (dfun cache info)
                                (make-final-dfun-internal
                                 gf
@@ -1640,14 +1637,16 @@
                                           sb-kernel::alien-stack-exhausted
                                           sb-kernel::heap-exhausted-error
                                           restart)))
+                             ;; (a final dfun with few methods may have no
+                             ;; cache: one without is not remembered)
                              (setq initial-print-object-cache cache)
-                             (set-dfun gf dfun (copy-cache cache) info))))))
+                             (set-dfun gf dfun (and cache (copy-cache cache)) info))))))
                ((gf-precompute-dfun-and-emf-p (slot-value gf 'arg-info))
                 (make-final-dfun gf))
                (t
                 (make-initial-dfun gf))))
         (function dfun-state)
-        (cons (car dfun-state))))))
+        (cons (car dfun-state)))))))
 
 ;;; in general we need to support SBCL's encapsulation for generic
 ;;; functions: the default implementation of encapsulation changes the
@@ -1693,9 +1692,7 @@
 
 (defmethod function-keywords ((method standard-method))
   (multiple-value-bind (llks nreq nopt keywords)
-      (analyze-lambda-list (if (consp method)
-                               (early-method-lambda-list method)
-                               (method-lambda-list method)))
+      (analyze-lambda-list (method-lambda-list method))
     (declare (ignore nreq nopt))
     (values keywords (ll-kwds-allowp llks))))
 
@@ -1777,3 +1774,28 @@
                    (process value)))
                 (make-lambda-list llks nil required optional rest (keys))))
             (make-lambda-list llks nil required optional))))))
+
+;;; A method made from its fast method function FMF: host PCL makes those of
+;;; the files before boot.lisp and of files whose methods' bodies are the
+;;; target's only, from what genesis has of them (FOP-MSET).
+(defun !install-cold-method (gf-name qualifiers specializers fmf lambda-list source-loc
+                            &optional initargs)
+  (let* ((nreq (nth-value 1 (analyze-lambda-list lambda-list)))
+         (initargs (or initargs ; its DEFMETHOD's, unless it has none
+                       `(plist (:arg-info (,nreq . ,(/= nreq (length lambda-list))))
+                         simple-next-method-call t))))
+    (load-defmethod
+     'standard-method gf-name
+     qualifiers (mapcar (lambda (x)
+                          (if (typep x '(cons (eql eql) (cons t null)))
+                              (intern-eql-specializer (constant-form-value (second x)))
+                              (find-class x)))
+                        specializers)
+     lambda-list
+     (list* :function
+            (let ((mf (%make-method-function fmf)))
+              (setf (%funcallable-instance-fun mf)
+                    (method-function-from-fast-function fmf (getf initargs 'plist)))
+              mf)
+            initargs)
+     source-loc)))

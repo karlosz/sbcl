@@ -80,9 +80,14 @@
 ;;; However, for cross-compiling, it's OK to forgo randomizing, because
 ;;; we don't have many (if any) STRING= symbols that would benefit from
 ;;; having distinct hashes.
+;;; The target's, which genesis knows, while the host's PCL builds the
+;;; target's slot tables and caches (src/cold/genesis-2.lisp)
+(defvar *symbol-hash-hook* nil)
 (defun symbol-hash (symbol)
-  (let ((name (symbol-name symbol)))
-    (calc-symbol-name-hash name (length name))))
+  (if *symbol-hash-hook*
+      (funcall *symbol-hash-hook* symbol)
+      (let ((name (symbol-name symbol)))
+        (calc-symbol-name-hash name (length name)))))
 
 ;;; This is also theoretically a slot-reader which for 32-bit is identical
 ;;; to symbol-hash, or 64-bit is a zero-extending 4-byte load that grabs

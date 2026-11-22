@@ -28,8 +28,61 @@
 
 (in-package "SB-PCL")
 
-(declaim (type (member nil early braid complete) **boot-state**))
-(define-load-time-global **boot-state** nil)
+;;; Whether PCL's classes and generic functions work: always in the target,
+;;; whose PCL genesis wrote.  On the host, once host PCL's pass 2 begins
+;;; (RUN-PASS-2 in src/cold/host-pcl-dispatch.lisp): not while the
+;;; cross-compiler expands PCL's macros as it compiles PCL, so their code
+;;; does not count on classes.
+#+sb-xc-host (defvar *host-pcl-ready* nil)
+(defmacro pcl-ready-p () #+sb-xc-host '*host-pcl-ready* #-sb-xc-host t)
+
+;;; Toplevel forms of PCL's files that host PCL, which builds the classes
+;;; and generic functions genesis writes (src/cold/host-pcl.lisp), doesn't
+;;; run: the target's only, where they are, or once PCL's bootstrap is over
+;;; (when the braid genesis wrote is linked: !FINISH-GENESIS-BRAID)
+;;; Cross-compiled, the markers below tell host PCL what to run when: their
+;;; forms are recorded (src/cold/host-pcl-defs.lisp, whose functions these are).
+;;; Loaded into the host from PCL proper (:PCL-PROPER), they are nothing, as
+;;; host PCL runs what was recorded.
+#+sb-xc-host (declaim (ftype function !xc-record !xc-definition))
+(defmacro !cross-compiling-p () '(member :sb-xc sb-xc:*features*))
+(defmacro !loading-pcl-proper-p () #+sb-xc-host '*loading-pcl-proper* #-sb-xc-host nil)
+(defmacro !target-only (&body forms) (unless (!loading-pcl-proper-p) `(progn ,@forms)))
+(defmacro !after-pcl-bootstrap (&body forms)
+  (unless (!loading-pcl-proper-p) `(!target-form (lambda () ,@forms))))
+;;; ... that the target runs as well (code PCL precomputes), and that host PCL
+;;; runs once PCL's generic functions are made (LOAD-TIME-VALUE of one)
+(defmacro !precompute (&whole form &body forms)
+  (cond ((!cross-compiling-p) (!xc-record :pass-2 form `(progn ,@forms)))
+        ((!loading-pcl-proper-p) nil)
+        (t `(progn ,@forms))))
+(defmacro !capturing (&whole form &body forms)
+  (cond ((!cross-compiling-p) (!xc-record :capturing form `(progn ,@forms)))
+        ((!loading-pcl-proper-p) nil)
+        (t `(progn ,@forms))))
+;;; ... that host PCL runs once PCL's classes and generic functions are made
+;;; (the toplevel effects of PCL proper's files: the rest are definitions)
+(defmacro !after-classes (&whole form &body forms)
+  (cond ((!cross-compiling-p) (!xc-record :pass-2 form nil))
+        ((!loading-pcl-proper-p) nil)
+        (t `(progn ,@forms))))
+;;; ... and that the target never runs, which host PCL runs where it is (the
+;;; cross-compiler's copy of PCL's files), or in PCL proper where it runs
+;;; !CAPTURING's (braid.lisp's links of classoids to their classes, which
+;;; initializing PCL's generic functions needs, the real LOAD-DEFCLASS ...)
+(defmacro !host-only (&whole form &body forms)
+  (cond ((!cross-compiling-p) (!xc-record :capturing form nil))
+        ((!loading-pcl-proper-p) nil)
+        (t `(progn ,@forms))))
+;;; DEFCLASS, DEFGENERIC, DEFMETHOD and DEFINE-METHOD-COMBINATION: genesis
+;;; writes the classes, generic functions, methods and method combinations
+;;; that host PCL makes, and cross-compiled each is recorded for host PCL
+;;; and has only its compile-time effects (src/cold/host-pcl-defs.lisp)
+(defmacro !definition ((kind form) &body body)
+  `(let ((expansion (progn ,@body)))
+     (cond ((!cross-compiling-p) (!xc-definition ,kind ,form expansion))
+           ((!loading-pcl-proper-p) nil)
+           (t expansion))))
 
 ;;; method function stuff.
 ;;;
@@ -75,10 +128,8 @@
   :dd-type funcallable-structure)
 )
 
-;;; Set up fake standard-classes.
-;;; This is enough to fool the compiler into optimizing TYPEP into
-;;; %INSTANCE-TYPEP.
-;;; I'll bet that at least half of these we don't need at all.
+;;; The predicates of some of PCL's classes, below
+(eval-when (:compile-toplevel :load-toplevel :execute)
 (defparameter *!early-class-predicates*
   '((specializer specializerp)
     (standard-specializer standard-specializer-p)
@@ -107,7 +158,7 @@
     (standard-generic-function standard-generic-function-p)
     (method-combination method-combination-p)
     (long-method-combination long-method-combination-p)
-    (short-method-combination short-method-combination-p)))
+    (short-method-combination short-method-combination-p))))
 
 #+sb-xc-host
 (progn
@@ -130,33 +181,6 @@
   (setf (classoid-layout classoid) layout
         (info :type :classoid-cell name) cell
         (info :type :kind name) :instance))
-
-;;; Create classoids that correspond with some CLOS classes
-(flet ((create-fake-classoid (name fun-p)
-         (let* ((classoid (make-standard-classoid :name name))
-                (cell (sb-kernel::make-classoid-cell name classoid))
-                (layout
-                  (make-layout (hash-layout-name name)
-                               classoid
-                               :depthoid -1
-                               :inherits (map 'vector #'find-layout
-                                              (cons t (if fun-p '(function))))
-                               :length 0 ; don't care
-                               :invalid nil)))
-           (setf (classoid-layout classoid) layout
-                 (info :type :classoid-cell name) cell
-                 (info :type :kind name) :instance))))
-  ;; Because we don't wire into %INSTANCE-TYPEP any assumptions about
-  ;; the superclass/subclass relationships, these can all trivially be faked.
-  (dolist (x *!early-class-predicates*)
-    (let ((name (car x)))
-      ;; GENERIC-FUNCTION and STANDARD-GENERIC-FUNCTION must contain
-      ;; FUNCTION in their layouts so that their type predicates
-      ;; optimize into FUNCALLABLE-INSTANCE-P (followed by a layout check),
-      ;; rather than testing both that and INSTANCEP.
-      (create-fake-classoid name
-                            (memq name '(standard-generic-function
-                                         generic-function))))))
 ) ; end PROGN
 
 ;;; BIG FAT WARNING: These predicates can't in general be called prior to the
@@ -167,14 +191,17 @@
 ;;; and CLASSP on a STRING, but you can't call CLASSP on anything that is either
 ;;; a FUNCALLABLE-INSTANCE or INSTANCE.
 ;;; With that caveat in mind, these are nifty things to have ASAP.
-#-sb-xc-host
+;;; (On the host, of the host's PCL's objects: src/code/cross-pcl.lisp.)
 (macrolet ((define-class-predicates ()
              `(progn
                 ,@(mapcar (lambda (x)
                            (destructuring-bind (class-name predicate) x
-                             `(defun ,predicate (x) (typep x ',class-name))))
+                             `(defun ,predicate (x)
+                                #+sb-xc-host (host-pcl-typep x ',class-name)
+                                #-sb-xc-host (typep x ',class-name))))
                          *!early-class-predicates*))))
   (define-class-predicates))
 
 (defun safe-code-p (&optional env)
+  #+sb-xc-host (when (sb-c::host-environment-p env) (return-from safe-code-p nil))
   (sb-c::policy (or env (sb-c::make-null-lexenv)) (eql safety 3)))

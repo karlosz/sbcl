@@ -152,3 +152,12 @@
    `(lambda (x)
       (find-class x))
    (('(t)) (condition 'sb-kernel::illegal-class-name-error))))
+
+;;; The prototypes PCL gives the system classes (T has none)
+(with-test (:name :system-class-prototypes)
+  (assert (not (slot-boundp (find-class 't) 'sb-pcl::prototype)))
+  (assert (typep (sb-mop:class-prototype (find-class 'sequence)) 'sequence))
+  (dolist (c (sb-vm:list-allocated-objects :all
+                                           :test (lambda (x) (typep x 'sb-pcl::system-class))))
+    (when (slot-boundp c 'sb-pcl::prototype)
+      (assert (typep (slot-value c 'sb-pcl::prototype) c)))))

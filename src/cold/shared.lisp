@@ -462,6 +462,23 @@
     ;; SBCL. ("not target code" -- but still presumably host code,
     ;; used to support the cross-compilation process)
     :not-target
+    ;; meaning: This file's classes, generic functions and methods are
+    ;; made by PCL on the host (src/cold/host-pcl.lisp), the methods'
+    ;; bodies being the target's only; the rest of it is ordinary target
+    ;; code.
+    :pcl-target-only
+    ;; meaning: This file's definitions are the cross-compiler's (PCL's
+    ;; macros and the functions they call as they expand), but the rest
+    ;; of it is target code: when building the cross-compiler, its
+    ;; diagnostics about undefined target functions, unknown optimization
+    ;; qualities and the like are not ours, nor are the functions the host
+    ;; can't compile.
+    :host-definitions
+    ;; meaning: This file is PCL proper, whose classes, generic functions
+    ;; and methods host PCL makes from what the cross-compiler records of
+    ;; them (src/cold/host-pcl-defs.lisp).  Loaded into the host, they are
+    ;; nothing.
+    :pcl-proper
     ;; meaning: The #'COMPILE-STEM argument :TRACE-FILE should be T.
     ;; When the compiler is SBCL's COMPILE-FILE or something like it,
     ;; compiling "foo.lisp" will generate "foo.trace" which contains lots
@@ -730,7 +747,9 @@
            (declare (ignore warnings-p))
            (cond ((not output-truename)
                   (error "couldn't compile ~S" src))
-                 (failure-p
+                 ;; (definitions the host can't compile are the target's only)
+                 ((and failure-p
+                       (not (and (eq mode :host-compile) (find :host-definitions flags))))
                   (unwind-protect
                        (restart-case
                            (error "FAILURE-P was set when creating ~S."
@@ -801,7 +820,11 @@
      (stop-on-warnings
        (let ((compiled-filename (in-host-compilation-mode
                                  (lambda ()
-                                   (compile-stem stem flags :host-compile)))))
+                                   (if (find :host-definitions flags)
+                                       (handler-bind ((warning #'muffle-warning))
+                                         (with-compilation-unit (:override t)
+                                           (compile-stem stem flags :host-compile)))
+                                       (compile-stem stem flags :host-compile))))))
          (return
            (load compiled-filename)))))))
 (compile 'host-cload-stem)
@@ -837,10 +860,12 @@
              (search "src/code/type-class" stem)
              (search "src/code/class" stem)
              (search "src/code/debug" stem) ; also matches debug-{info,int,var-io}
-             (search "src/code/early-defmethod" stem)
              (search "src/code/final" stem)
              (search "src/code/format" stem)
              (search "src/code/solist" stem))))
+    ;; PCL's macros need PCL's functions on the host (src/cold/host-pcl-defs.lisp)
+    (when (fboundp 'host-pcl-before-target-compile)
+      (funcall 'host-pcl-before-target-compile stem))
     (funcall *in-target-compilation-mode-fn*
            (lambda ()
              (progv (list (intern "*SOURCE-NAMESTRING*" "SB-C")

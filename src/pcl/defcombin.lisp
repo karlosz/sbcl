@@ -29,6 +29,7 @@
 ;;;
 (defmacro define-method-combination (&whole form name . args)
   (declare (ignore args))
+  (!definition (:method-combination form)
   (check-designator name 'define-method-combination)
   `(progn
      (with-single-package-locked-error
@@ -45,31 +46,39 @@
                               :documentation 'define-method-combination))
             `(load-short-defcombin ',type-name ',operator ',ioa
                                    ,(unless (unbound-marker-p doc) doc)
-                                   (sb-c:source-location))))))
+                                   (sb-c:source-location)))))))
 
 (defstruct method-combination-info
   (lambda-list nil :type list)
   (constructor (error "missing arg") :type function)
   (cache nil :type list)
   (source-location nil :type (or null sb-c:definition-source-location)))
-(defglobal **method-combinations** (make-hash-table :test 'eql))
+(define-load-time-global **method-combinations** nil)
+;;; The method combination types, by name: host PCL defines the built-in
+;;; ones, and genesis writes the table's entries (!GENESIS-TABLE)
+(define-lazy-table method-combinations **method-combinations**
+  (!genesis-table '**method-combinations** (make-hash-table :test 'eql)))
 
 (defmethod find-method-combination ((generic-function generic-function)
                                     name options)
-  (let ((info (gethash name **method-combinations**)))
+  (let ((info (gethash name (method-combinations))))
     (when info
       (or (cdr (assoc options (method-combination-info-cache info) :test #'equal))
           (cdar (push (cons options (funcall (method-combination-info-constructor info) options))
                       (method-combination-info-cache info)))))))
 
 ;;;; standard method combination
-(setf (gethash 'standard **method-combinations**)
+;;; (a function, so its template is the target's)
+(defun standard-method-combination-constructor ()
+  (template-lambda (standard-method-combination-constructor) () (options)
+    (when options
+      (method-combination-error "STANDARD method combination accepts no options."))
+    *standard-method-combination*))
+(!after-classes
+(setf (gethash 'standard (method-combinations))
       (make-method-combination-info
-       :constructor (lambda (options)
-                      (when options
-                        (method-combination-error "STANDARD method combination accepts no options."))
-                      *standard-method-combination*)
-       :cache (list (cons nil *standard-method-combination*))))
+       :constructor (standard-method-combination-constructor)
+       :cache (list (cons nil *standard-method-combination*)))))
 
 (defmethod compute-primary-methods ((gf generic-function)
                                     (combin (eql *standard-method-combination*))
@@ -78,7 +87,7 @@
 
 (defun update-mcs (name new old frobmc)
   (declare (function frobmc))
-  (setf (gethash name **method-combinations**) new)
+  (setf (gethash name (method-combinations)) new)
   ;; for correctness' sake we should probably lock
   ;; **METHOD-COMBINATIONS** while we're updating things, to defend
   ;; against defining gfs in one thread while redefining the method
@@ -88,13 +97,22 @@
     (setf (method-combination-info-cache old) nil)
     (dolist (entry (method-combination-info-cache new))
       (let* ((mc (cdr entry))
-             (gfs (method-combination-%generic-functions mc)))
+             (gfs (method-combination-gf-set mc)))
         (funcall frobmc mc)
         (flet ((flush (gf)
                  (flush-effective-method-cache gf)
                  (reinitialize-instance gf)))
           (map-hashset #'flush gfs))))))
 
+;;; The method combinations' sets of generic functions, which genesis writes
+;;; as lists (METHOD-COMBINATION-GF-SET), at the end of cold init
+(defun !make-method-combination-gf-sets ()
+  (maphash (lambda (name info)
+             (declare (ignore name))
+             (dolist (entry (method-combination-info-cache info))
+               (method-combination-gf-set (cdr entry))))
+           (method-combinations)))
+
 ;;;; short method combinations
 ;;;;
 ;;;; Short method combinations all follow the same rule for computing the
@@ -120,9 +138,10 @@
   (let ((info (make-method-combination-info
                :lambda-list '(&optional (order :most-specific-first))
                :source-location source-location
-               :constructor (lambda (options)
+               :constructor (template-lambda (short-method-combination-constructor)
+                                (type-name operator ioa source-location doc) (options)
                               (short-combine-methods type-name options operator ioa source-location doc))))
-        (old-info (gethash type-name **method-combinations**)))
+        (old-info (gethash type-name (method-combinations))))
     (flet ((frobber (mc)
              (change-class mc 'short-method-combination
                            :operator operator :identity-with-one-argument ioa
@@ -222,7 +241,7 @@
                                              'source source-location
                                              :documentation doc))
                :source-location source-location))
-        (old-info (gethash type-name **method-combinations**)))
+        (old-info (gethash type-name (method-combinations))))
     (flet ((frobber (mc)
              (change-class mc 'long-method-combination
                            :type-name type-name :args-lambda-list args-lambda-list
@@ -559,10 +578,12 @@
 
 ;;; we made OR (:MOST-SPECIFIC-FIRST) earlier in the build; hook it in
 (define-method-combination or     :identity-with-one-argument t)
-(let ((info (gethash 'or **method-combinations**)))
+(!after-classes
+(let ((info (gethash 'or (method-combinations))))
   (aver info)
   (aver (null (method-combination-info-cache info)))
   (setf (method-combination-info-cache info)
-        (list (cons '(:most-specific-first) *or-method-combination*))))
+        (list (cons '(:most-specific-first) *or-method-combination*)))))
+(!after-classes
 (add-to-weak-hashset #'make-specializer-form-using-class
-                     (method-combination-%generic-functions *or-method-combination*))
+                     (method-combination-gf-set *or-method-combination*)))

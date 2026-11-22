@@ -55,7 +55,7 @@
 (declaim (freeze-type transform))
 
 (defun transform-note (transform)
-  (or #+sb-xc-host (documentation (transform-function transform) 'function)
+  (or #+sb-xc-host (cl:documentation (transform-function transform) 'function)
       #-sb-xc-host (and (fboundp 'sb-pcl::fun-doc)
                         (funcall 'sb-pcl::fun-doc (transform-function transform)))
       "optimize"))

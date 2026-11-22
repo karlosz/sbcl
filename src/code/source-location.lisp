@@ -21,7 +21,7 @@
   ;; This is null if the definition was not compiled from a file.
   (namestring nil :type (or string null) :read-only t)
   (indices 0 :type integer :read-only t))
-(!set-load-form-method definition-source-location  (:xc :target))
+(!set-load-form-method definition-source-location (:host :xc :target))
 (def!struct (definition-source-location+plist
              (:include definition-source-location)
              (:constructor %make-full-definition-source-location

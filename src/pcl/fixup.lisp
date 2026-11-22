@@ -23,10 +23,112 @@
 
 (in-package "SB-PCL")
 
-(!fix-early-generic-functions)
+;;; The methods that are PCL's own functions (*!GENERIC-FUNCTION-FIXUPS*)
+(macrolet ((def (name qualifiers lambda-list function)
+             (let ((rest (member '&rest lambda-list))
+                   (vars (mapcar (lambda (x) (if (consp x) (car x) x))
+                                 (ldiff lambda-list (member-if (lambda (x) (member x '(&rest &key)))
+                                                               lambda-list)))))
+               `(defmethod ,name ,@qualifiers ,lambda-list
+                  ,(if rest
+                       `(apply #',function ,@(remove '&optional vars) ,(second rest))
+                       `(,function ,@(remove '&optional vars)))))))
+  (def add-method () ((generic-function standard-generic-function) (method method))
+    real-add-method)
+  (def remove-method () ((generic-function standard-generic-function) (method method))
+    real-remove-method)
+  (def get-method () ((generic-function standard-generic-function) qualifiers specializers
+                      &optional (errorp t))
+    real-get-method)
+  (def ensure-generic-function-using-class ()
+      ((generic-function generic-function) fun-name &rest options &key &allow-other-keys)
+    real-ensure-gf-using-class--generic-function)
+  (def ensure-generic-function-using-class ()
+      ((generic-function null) fun-name &rest options &key &allow-other-keys)
+    real-ensure-gf-using-class--null)
+  (def make-method-lambda ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       lambda-expression environment)
+    real-make-method-lambda)
+  (def make-method-lambda-using-specializers ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       qualifiers specializers lambda-expression environment)
+    real-make-method-lambda-using-specializers)
+  (def make-method-specializers-form ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       specializer-names environment)
+    real-make-method-specializers-form)
+  (def make-specializer-form-using-class (or)
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       specializer-name environment)
+    real-make-specializer-form-using-class/t)
+  (def make-specializer-form-using-class (or)
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer-name specializer) environment)
+    real-make-specializer-form-using-class/specializer)
+  (def make-specializer-form-using-class (or)
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer-name symbol) environment)
+    real-make-specializer-form-using-class/symbol)
+  (def make-specializer-form-using-class (or)
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer-name cons) environment)
+    real-make-specializer-form-using-class/cons)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer specializer))
+    real-specializer-type-specifier/specializer)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer symbol))
+    real-specializer-type-specifier/symbol)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       specializer)
+    real-specializer-type-specifier/t)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer class-eq-specializer))
+    real-specializer-type-specifier/class-eq-specializer)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer eql-specializer))
+    real-specializer-type-specifier/eql-specializer)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer structure-class))
+    real-specializer-type-specifier/structure-class)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer system-class))
+    real-specializer-type-specifier/system-class)
+  (def specializer-type-specifier ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       (specializer class))
+    real-specializer-type-specifier/class)
+  (def parse-specializer-using-class ()
+      ((generic-function standard-generic-function) specializer)
+    real-parse-specializer-using-class)
+  (def unparse-specializer-using-class ()
+      ((generic-function standard-generic-function) specializer)
+    real-unparse-specializer-using-class)
+  (def make-method-initargs-form ()
+      ((proto-generic-function standard-generic-function) (proto-method standard-method)
+       lambda-expression lambda-list environment)
+    real-make-method-initargs-form)
+  (def compute-effective-method ()
+      ((generic-function generic-function) (combin standard-method-combination)
+       applicable-methods)
+    standard-compute-effective-method)
+  (def compute-effective-method ()
+      ((generic-function generic-function) (combin short-method-combination)
+       applicable-methods)
+    short-compute-effective-method))
 
-(fmakunbound 'ensure-accessor)
-(defun ensure-accessor (fun-name) ; Make FUN-NAME exist as a GF if it doesn't
+;;; Replaces the early definition in slots-boot.lisp (by name, as genesis
+;;; installs every DEFUN up front).
+(!capturing
+(defun real-ensure-accessor (fun-name) ; Make FUN-NAME exist as a GF if it doesn't
   (destructuring-bind (slot-name method) (cddr fun-name)
     (let ((reader-specializers (load-time-value (list (find-class 'slot-object)) t))
           (writer-specializers (load-time-value (list (find-class 't)
@@ -70,34 +172,52 @@
                                         fallback-initargs doc :slot-name slot-name))
           (add-method gf (make-a-method method-class ()
                                         lambda-list specializers
-                                        initargs doc :slot-name slot-name)))))))
+                                        initargs doc :slot-name slot-name))))))))
+(!host-only (setf (fdefinition 'ensure-accessor) #'real-ensure-accessor))
 
+(!after-classes
 (dolist (gf-name *!temporary-ensure-accessor-functions*)
   ; (format t "~&Genericizing ~S~%" gf-name)
   (fmakunbound gf-name)
-  (ensure-accessor gf-name))
+  (ensure-accessor gf-name)))
 
-(setq sb-kernel::*defstruct-hooks* '(ensure-defstruct-class))
-(compute-standard-slot-locations)
+(!after-pcl-bootstrap (setq sb-kernel::*defstruct-hooks* '(ensure-defstruct-class)))
+(!after-classes (compute-standard-slot-locations))
+(!after-pcl-bootstrap
 (dolist (s '(condition function structure-object))
   (sb-kernel::do-subclassoids ((k v) (find-classoid s))
     (declare (ignore v))
-    (find-class (classoid-name k))))
-(setq **boot-state** 'complete)
+    (if (and (condition-classoid-p k) (classoid-pcl-class k))
+        ;; Genesis wrote the class, but a condition's slots are only known
+        ;; once its DEFINE-CONDITION has run in cold init. Not
+        ;; REINITIALIZE-INSTANCE: its :AFTER method would make reader
+        ;; methods before late-condition.lisp can.
+        (let ((class (classoid-pcl-class k)))
+          (shared-initialize class nil
+                             :direct-superclasses (class-direct-superclasses class)
+                             :direct-slots (condition-class-direct-slot-initargs k)))
+        (let ((class (find-class (classoid-name k))))
+          ;; Genesis wrote a structure's class with the plain vector mapper;
+          ;; big ones get their lazily compiled one now, as when PCL made them.
+          (when (structure-class-p class)
+            (sb-kernel::install-struct-slot-mapper (classoid-layout k))))))))
 
 ;;; CLASS-PROTOTYPE for FUNCTION should not use ALLOCATE-INSTANCE.
 ;;;
+(!after-classes
 (let ((class (find-class 'function)))
-  (setf (slot-value class 'prototype) #'identity))
+  (setf (slot-value class 'prototype) #'identity)))
 
 ;;; consistency check: all our standard SLOT-VALUE-USING-CLASS methods are available
 ;;; and distinct from each other.
+(!after-classes
 (let (set)
   (dolist (type '(reader writer boundp makunbound))
     (dolist (fun '(standard-svuc-method structure-svuc-method condition-svuc-method))
       (pushnew (funcall fun type) set)))
-  (assert (= (length set) 12)))
+  (assert (= (length set) 12))))
 
+(!target-only
 (dolist (symbol '(add-method allocate-instance class-name compute-applicable-methods
                   ensure-generic-function make-instance method-qualifiers
                   remove-method add-dependent add-direct-method add-direct-subclass
@@ -139,15 +259,16 @@
                   standard-reader-method standard-slot-definition
                   standard-writer-method update-dependent validate-superclass
                   writer-method-class))
-  (sb-impl::deprecate-export *package* symbol :late "2.0.7"))
+  (sb-impl::deprecate-export *package* symbol :late "2.0.7")))
 
 (in-package "SB-KERNEL")
 (defun slot-object-p (x) (typep x '(or structure-object standard-object condition)))
 
+(sb-pcl::!target-only
 (flet ((set-predicate (classoid-name pred)
          (let ((c (find-classoid classoid-name)))
            (%instance-set c (get-dsd-index built-in-classoid predicate)
                  pred))))
   (set-predicate 't #'constantly-t)
   (set-predicate 'random-class #'constantly-nil)
-  (set-predicate 'sb-pcl::slot-object #'slot-object-p))
+  (set-predicate 'sb-pcl::slot-object #'slot-object-p)))

@@ -171,4 +171,39 @@
  (sb-lockless:make-so-map/addr
   sb-c::apply-core-fixups
   sb-c::pack-xref-data
-  sb-sys:reinit-internal-real-time))
+  sb-sys:reinit-internal-real-time)
+ ;; Called by cross-compiled PCL proper.  Non-toplevel definitions in PCL
+ ;; and error.lisp, or defined in warm load.
+ (sb-pcl::accessor-set-slot-value
+  sb-pcl::accessor-slot-value
+  sb-kernel:condition-slot-boundp
+  sb-kernel:condition-slot-makunbound
+  sb-kernel:condition-slot-value
+  sb-kernel:set-condition-slot-value
+  sb-pcl::install-optimized-constructor
+  sb-vm:list-allocated-objects
+  sb-pcl::make-fallback-boundp-method-function
+  sb-pcl::make-fallback-makunbound-method-function
+  sb-pcl::make-fallback-reader-method-function
+  sb-pcl::make-fallback-writer-method-function
+  sb-pcl::make-std-boundp-method-function
+  sb-pcl::make-std-makunbound-method-function
+  sb-pcl::make-std-reader-method-function
+  sb-pcl::make-std-writer-method-function
+  sb-pcl::real-specializer-type-specifier/symbol
+  sb-pcl::real-specializer-type-specifier/t
+  ;; defined inside LABELS (boot.lisp), called by fixup.lisp's methods
+  sb-pcl::real-ensure-gf-using-class--generic-function
+  sb-pcl::real-ensure-gf-using-class--null
+  sb-pcl::real-specializer-type-specifier/class
+  sb-pcl::real-specializer-type-specifier/class-eq-specializer
+  sb-pcl::real-specializer-type-specifier/eql-specializer
+  sb-pcl::real-specializer-type-specifier/structure-class
+  sb-pcl::real-specializer-type-specifier/system-class
+  sb-pcl::standard-compute-discriminating-function
+  ;; the cross-compiler's only (src/cold/host-pcl-defs.lisp)
+  sb-pcl::!xc-record
+  sb-pcl::!xc-definition
+  ;; their early versions are host PCL's only; genesis installs these
+  sb-pcl::ensure-accessor
+  sb-pcl::load-defclass))

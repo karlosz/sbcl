@@ -27,46 +27,7 @@
 
 ;;;; MAKE-LOAD-FORM
 
-;; Overwrite the old bootstrap non-generic MAKE-LOAD-FORM function with a
-;; shiny new generic function.
-(fmakunbound 'make-load-form)
 (defgeneric make-load-form (object &optional environment))
-
-(defun !install-cross-compiled-methods (gf-name &key except)
-  (assert (generic-function-p (fdefinition gf-name)))
-  (dolist (method (cdr (assoc gf-name *!deferred-methods* :test #'equal)))
-    (destructuring-bind (qualifiers specializers fmf lambda-list source-loc)
-        method
-      (unless (member (first specializers) except)
-        (let ((arg-info
-                (if (equal gf-name '(setf documentation))
-                    '(:arg-info (3))
-                    (case gf-name
-                      (print-object
-                       '(:arg-info (2)))
-                      ((make-load-form close)
-                       '(:arg-info (1 . t)))
-                      ((documentation)
-                       '(:arg-info (2)))
-                      (t
-                       '(:arg-info (1)))))))
-          (load-defmethod
-           'standard-method gf-name
-           qualifiers (mapcar (lambda (x)
-                                (if (typep x '(cons (eql eql) (cons t null)))
-                                    (intern-eql-specializer (constant-form-value (second x)))
-                                    (find-class x)))
-                              specializers)
-           lambda-list
-           `(:function
-             ,(let ((mf (%make-method-function fmf)))
-                (setf (%funcallable-instance-fun mf)
-                      (method-function-from-fast-function fmf arg-info))
-                mf)
-             plist ,arg-info simple-next-method-call t)
-           source-loc))))))
-(!install-cross-compiled-methods 'make-load-form
-                                 :except '(layout sb-alien-internals:alien-type))
 
 (defmethod make-load-form ((class class) &optional env)
   ;; FIXME: should we not instead pass ENV to FIND-CLASS?  Probably

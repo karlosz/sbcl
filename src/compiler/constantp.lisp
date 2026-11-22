@@ -14,6 +14,9 @@
 (defvar *special-constant-variables* nil)
 
 (defun %constantp (form environment envp)
+  #+sb-xc-host
+  (when (host-environment-p environment)
+    (return-from %constantp (cl:constantp form environment)))
   ;; Pick off quasiquote prior to macroexpansion.
   (when (typep form '(cons (eql quasiquote) (cons t null)))
     (return-from %constantp

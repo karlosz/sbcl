@@ -38,7 +38,7 @@
     (when class-default-initargs
       (setf initargs (default-initargs initargs class-default-initargs)))
     (when initargs
-      (when (eq **boot-state** 'complete)
+      (when (pcl-ready-p)
         (check-mi-initargs class initargs)))
     (let ((instance (apply #'allocate-instance class initargs)))
       (apply #'initialize-instance instance initargs)
@@ -61,7 +61,9 @@
   (apply #'shared-initialize instance nil initargs)
   instance)
 
-(defglobal **typecheck-cache** (make-hash-table :test #'equal :synchronized t))
+(define-load-time-global **typecheck-cache** nil)
+(define-lazy-table typecheck-cache **typecheck-cache**
+  (make-hash-table :test #'equal :synchronized t))
 
 (defun generate-slotd-typecheck (slotd info)
   (let* ((type (slot-definition-type slotd))
@@ -71,7 +73,7 @@
     (when (and (neq t type) (safe-p class))
       (or
        ;; Have one already!
-       (awhen (gethash type **typecheck-cache**)
+       (awhen (gethash type (typecheck-cache))
          (setf (slot-info-typecheck info) it))
        ;; It is possible for compilation of a typecheck to trigger class
        ;; finalization, which in turn may trigger compilation of a
@@ -97,7 +99,7 @@
                                              (sb-c:verify-arg-count 0)))
                           (the* (,type :restart t) value))
                        :safe)))
-             (setf (gethash type **typecheck-cache**) fun
+             (setf (gethash type (typecheck-cache)) fun
                    (slot-info-typecheck info) fun))))))))
 
 (define-condition slotd-initialization-error (reference-condition error)
@@ -294,9 +296,7 @@
     ;; just quit.
     (dolist (method methods)
       (multiple-value-bind (llks nreq nopt keys)
-          (analyze-lambda-list (if (consp method)
-                                   (early-method-lambda-list method)
-                                   (method-lambda-list method)))
+          (analyze-lambda-list (method-lambda-list method))
         (declare (ignore nreq nopt))
         (when (ll-kwds-allowp llks)
           (return-from check-initargs-values (values nil t)))

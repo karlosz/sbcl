@@ -307,7 +307,7 @@
         (system    *the-class-system-class*)
         (frc       *the-class-forward-referenced-class*))
     (flet ((specializer->metatype (x)
-             (let* ((specializer-class (if (eq **boot-state** 'complete)
+             (let* ((specializer-class (if (pcl-ready-p)
                                            (specializer-class-or-nil x)
                                            x))
                     (meta-specializer (class-of specializer-class)))

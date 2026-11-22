@@ -103,6 +103,40 @@
 
 #+ccl (declaim (ftype function warn-when-cl-snapshot-diff)) ; silly compiler
 
+;;; SB-PCL's names that PCL's own files (:HOST-DEFINITIONS) define in the
+;;; cross-compiler, which the host's PCL (src/cold/host-pcl.lisp) defines
+;;; again
+(defvar *pcl-host-definitions* (make-hash-table :test 'eq))
+;;; while loading a file of PCL proper (:PCL-PROPER), whose definitions are
+;;; nothing (pre-warm.lisp)
+(defvar sb-pcl::*loading-pcl-proper* nil)
+(defun pcl-symbol-defined-p (s)
+  (or (fboundp s) (fboundp `(setf ,s)) (boundp s)))
+(defun call-noting-pcl-host-definitions (fn)
+  (let ((before (make-hash-table :test 'eq)))
+    (do-symbols (s "SB-PCL")
+      (setf (gethash s before) (pcl-symbol-defined-p s)))
+    (prog1 (funcall fn)
+      (do-symbols (s "SB-PCL")
+        (when (and (not (gethash s before)) (pcl-symbol-defined-p s))
+          (setf (gethash s *pcl-host-definitions*) t)
+          ;; its macros are the cross-compiler's from now on, not only
+          ;; once it compiles their file for the target
+          (when (and (eq (symbol-package s) (find-package "SB-PCL"))
+                     (macro-function s)
+                     (not (sb-xc:macro-function s)))
+            (let ((expander (macro-function s)))
+              (funcall (fdefinition '(setf sb-xc:macro-function))
+                       (lambda (form env) (funcall expander form env))
+                       s)))))
+      ;; ... and its macros of CLOS's names (WITH-SLOTS ...) the host's, as
+      ;; the host compiles PCL proper
+      (dolist (string *pcl-shadows*)
+        (let* ((s (find-symbol string "SB-XC"))
+               (expander (funcall 'sb-xc:macro-function s)))
+          (when (and expander (not (macro-function s)))
+            (setf (macro-function s) (lambda (form env) (funcall expander form env)))))))))
+
 ;;; Either load or compile-then-load the cross-compiler into the
 ;;; cross-compilation host Common Lisp.
 (defun load-or-cload-xcompiler (load-or-cload-stem)
@@ -145,7 +179,11 @@
          (unless (find :not-host flags)
            ;; Enforce naming convention: target-* files are not for make-host-1
            (assert (not (search "code/target-" stem)))
-           (funcall load-or-cload-stem stem flags)
+           (let ((sb-pcl::*loading-pcl-proper* (find :pcl-proper flags)))
+             (if (find :host-definitions flags)
+                 (call-noting-pcl-host-definitions
+                  (lambda () (funcall load-or-cload-stem stem flags)))
+                 (funcall load-or-cload-stem stem flags)))
            (when (member :sb-show sb-xc:*features*)
              (funcall 'warn-when-cl-snapshot-diff *cl-snapshot*))))))
 

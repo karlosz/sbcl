@@ -21,6 +21,33 @@
 
 (declaim (declaration explicit-check always-bound))
 
+;;; PCL's names, shadowed (set-up-cold-packages.lisp's *PCL-SHADOWS*): to
+;;; the host, the methods of the cross-compiler's own (PRINT-OBJECT methods
+;;; of its structures, ...) are the host's CLOS's, but MAKE-LOAD-FORM's,
+;;; which the cross-compiler's dumper calls (the host's own are
+;;; CL:MAKE-LOAD-FORM's: !SET-LOAD-FORM-METHOD)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+(defun uncross-pcl-name (name)
+  (cond ((eq name 'sb-xc:make-load-form) 'sb-c::xc-make-load-form)
+        ((and (symbolp name) (eq (cl:symbol-package name) (find-package "SB-XC"))
+              (or (member (symbol-name name) sb-cold::*pcl-shadows* :test #'string=)
+                  (member (symbol-name name) sb-cold::*pcl-class-shadows* :test #'string=)))
+         (find-symbol (symbol-name name) "CL"))
+        ((consp name) (mapcar #'uncross-pcl-name name))
+        (t name))))
+(defmacro sb-xc:defmethod (name &rest rest)
+  (when sb-pcl::*loading-pcl-proper* ; (pre-warm.lisp)
+    (return-from sb-xc:defmethod nil))
+  (let* ((qualifiers (loop while (and rest (atom (car rest))) collect (pop rest)))
+         (lambda-list (pop rest)))
+    `(cl:defmethod ,(uncross-pcl-name name) ,@qualifiers
+       ,(let ((rest (member-if (lambda (p) (member p cl:lambda-list-keywords)) lambda-list)))
+          (append (mapcar (lambda (p)
+                            (if (consp p) (list (first p) (uncross-pcl-name (second p))) p))
+                          (ldiff lambda-list rest))
+                  rest))
+       ,@rest)))
+
 ;;; CMUCL warns about NIL not being an integer
 #+host-quirks-cmu
 (declaim (notinline position position-if position-if-not))
@@ -42,11 +69,15 @@
 
 (defmacro define-load-time-global (&rest args) `(defvar ,@args))
 
+;;; (PCL proper's: nothing, pre-warm.lisp's !DEFINITION)
+(defmacro sb-xc:defgeneric (&rest args) (declare (ignore args)) nil)
+
 (defmacro sb-xc:defconstant (&rest args)
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (cl:defconstant ,@args)))
 
-(defgeneric sb-xc:make-load-form (obj &optional env))
+(cl:defgeneric sb-c::xc-make-load-form (obj &optional env))
+
 
 ;;; Restore normalcy of MOD and RATIONAL as type specifiers.
 (deftype mod (n) `(integer 0 ,(1- n)))

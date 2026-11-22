@@ -2418,6 +2418,7 @@ is a good idea, but see SB-SYS re. blurring of boundaries.")
 (defpackage "SB-SEQUENCE"
   (:documentation "semi-public: implements something which might eventually
 be submitted as a \\CDR")
+  (:nicknames "SEQUENCE")
   (:use)
   (:export "PROTOCOL-UNIMPLEMENTED"
            "PROTOCOL-UNIMPLEMENTED-OPERATION"

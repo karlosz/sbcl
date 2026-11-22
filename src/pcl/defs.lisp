@@ -28,15 +28,6 @@
 ;;; build, of course, but they might happen if someone is experimenting
 ;;; and debugging, and it's probably worth complaining if they do,
 ;;; so we've left 'em in.)
-(when (eq **boot-state** 'complete)
-  (error "Trying to load (or compile) PCL in an environment in which it~%~
-          has already been loaded. This doesn't work, you will have to~%~
-          get a fresh lisp (reboot) and then load PCL."))
-(when **boot-state**
-  (cerror "Try loading (or compiling) PCL anyways."
-          "Trying to load (or compile) PCL in an environment in which it~%~
-           has already been partially loaded. This may not work, you may~%~
-           need to get a fresh lisp (reboot) and then load PCL."))
 
 ;;;; type specifier hackery
 
@@ -59,7 +50,7 @@
            (when (symbolp specl)
              ;;maybe (or (find-class specl nil) (ensure-class specl)) instead?
              (setq specl (find-class specl)))
-           (or (not (eq **boot-state** 'complete))
+           (or (not (pcl-ready-p))
                (specializerp specl)))
          (specializer-type specl))
         (t
@@ -97,7 +88,7 @@
                (let ((type (specializer-type class)))
                  (ensure-list type))
                `(,type))))
-        ((or (not (eq **boot-state** 'complete))
+        ((or (not (pcl-ready-p))
              (specializerp type))
          (specializer-type type))
         (t
@@ -127,8 +118,7 @@
 (defun *subtypep (type1 type2)
   (if (equal type1 type2)
       (values t t)
-      (if (eq **boot-state** 'early)
-          (values (eq type1 type2) t)
+      (progn
           (let ((*in-*subtypep* t))
             (setq type1 (*normalize-type type1))
             (setq type2 (*normalize-type type2))
@@ -201,7 +191,10 @@
                                          ',(mapcar #'classoid-name (direct-subs class))
                                          ',(map 'list #'layout-classoid-name
                                                 (reverse (layout-inherits (classoid-layout class))))
-                                         ,(getf (cdr kernel-bic-entry) :prototype-form))))
+                                         ;; target code (INT-SAP ...), not the host's
+                                         ,(let ((form (getf (cdr kernel-bic-entry) :prototype-form)))
+                                            #+sb-xc-host `',form
+                                            #-sb-xc-host form))))
                               (remove-if (lambda (kernel-bic-entry)
                                            (member (first kernel-bic-entry)
                                                    ;; remove special classes (T and our
@@ -213,6 +206,7 @@
                                          sb-kernel::*builtin-classoids*))))))
       (frob)))
 (/noshow "done setting up SB-PCL::*BUILT-IN-CLASSES*")
+(push '("SB-PCL" *built-in-classes*) *!removable-symbols*)
 
 ;;;; the classes that define the kernel of the metabraid
 
@@ -355,6 +349,18 @@
   (make-hashset 64 #'eq #'fsc-instance-hash
                    :weakness t
                    :synchronized t))
+
+;;; Genesis writes a method combination's generic functions as a list
+;;; (src/cold/host-pcl-dump.lisp), made into the set when first needed.  The
+;;; check is only for that bootstrap.
+(declaim (ftype function method-combination-%generic-functions))
+(defun method-combination-gf-set (mc)
+  (let ((set (method-combination-%generic-functions mc)))
+    (if (listp set)
+        (let ((new (make-gf-hashset)))
+          (dolist (gf set) (add-to-weak-hashset gf new))
+          (setf (slot-value mc '%generic-functions) new))
+        set)))
 
 (defclass standard-method-combination (definition-source-mixin
                                        method-combination)
@@ -563,15 +569,15 @@
 ;; nothing needs it, even if OBJECT persists. You might think that calling
 ;; gethash on a live key should get the identical specializer, but since
 ;; nothing referenced the old specializer, consing a new one is fine.
-(define-load-time-global *eql-specializer-table*
-  (sb-impl::make-system-hash-table :test 'eql :weakness :value :synchronized nil))
+;;; *EQL-SPECIALIZER-TABLE* is in low.lisp, after DEFINE-LAZY-TABLE.
 
 (defun intern-eql-specializer (object)
   ;; Avoid style-warning about compiler-macro being unavailable.
   (declare (notinline make-instance))
-  (with-system-mutex ((hash-table-lock *eql-specializer-table*))
-    (ensure-gethash object *eql-specializer-table*
-                    (make-instance 'eql-specializer :object object))))
+  (let ((table (eql-specializer-table)))
+    (with-system-mutex ((hash-table-lock table))
+      (ensure-gethash object table
+                      (make-instance 'eql-specializer :object object)))))
 
 (defclass class (dependent-update-mixin
                  definition-source-mixin

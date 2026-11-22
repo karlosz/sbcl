@@ -744,6 +744,14 @@ with that condition (or with no condition) will be returned."
       ;; Maybe kill docstring, but only under the cross-compiler.
       #+(and (not sb-doc) sb-xc-host) (setq documentation nil)
       `(progn
+         ;; Cross-compiling, the host gets the condition too, straight away
+         ;; (unless it has one), as host code may signal it.  (It replaces
+         ;; cross-condition.lisp's placeholder types.)
+         ,@(when (member :sb-xc sb-xc:*features*)
+             `((eval-when (:compile-toplevel)
+                 (unless (cl:find-class ',name nil)
+                   (handler-bind ((warning #'muffle-warning))
+                     (cl:define-condition ,name ,parent-types ()))))))
          ,@(when *top-level-form-p*
              ;; Avoid dumping uninitialized layouts, for sb-fasl::dump-layout
              `((eval-when (:compile-toplevel)

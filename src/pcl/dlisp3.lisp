@@ -26,6 +26,7 @@
 ;;; Rather than compiling the constructors here, just tickle the range
 ;;; of shapes defined above, leaving the generation of the
 ;;; constructors to precompile-dfun-constructors.
+(!precompute
 (let ((checking-or-caching-list
         '((t nil (class) nil)
           (t nil (class class) nil)
@@ -69,4 +70,4 @@
              (if return-value-p
                  (values (list metatypes) 'emit-in-checking-p)
                  (values (list metatypes applyp) 'emit-checking)))
-       (apply #'get-dfun-constructor generator args)))))
+       (apply #'get-dfun-constructor generator args))))))

@@ -220,6 +220,10 @@ of condition handling occurring."
   (declare (explicit-check datum)) ;; CONDITION-CLASS not yet defined
   (when (and (stringp datum) (plusp (mismatch "defining setf macro" datum)))
     (return-from warn nil))
+  ;; Cold init redefines what genesis already installed, as warm.lisp does.
+  (when (member datum '(redefinition-with-defun redefinition-with-defgeneric
+                        redefinition-with-defmacro))
+    (return-from warn nil))
   (let ((action (cond ((boundp '*!cold-warn-action*) *!cold-warn-action*)
                       ((not (member datum
                                     '(asterisks-around-constant-variable-name

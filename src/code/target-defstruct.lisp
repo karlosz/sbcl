@@ -304,16 +304,6 @@
 ;;; into a CLOS class) without having to figure out some means of stashing
 ;;; functions in the DD or DD for the structure.
 (defvar *struct-access-fragments* nil)
-(define-load-time-global *struct-access-fragments-delayed* nil)
-
-(defun !bootstrap-defstruct-hook (classoid)
-  ;; I hate this, but do whatever it takes...
-  ;; A better approach might be to write the correct data
-  ;; into the LAYOUT-SLOT-TABLE now.
-  ;; (I think that's where the code fragments end up)
-  (unless (member (classoid-name classoid) '(pathname condition)) ; KLUDGE
-    (push (cons (classoid-name classoid) *struct-access-fragments*)
-          *struct-access-fragments-delayed*)))
 
 (defun %target-defstruct (dd equalp &rest accessors)
   (declare (type defstruct-description dd))

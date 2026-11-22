@@ -27,6 +27,33 @@
 
 (in-package "SB-PCL")
 
+;;; The classoids of the meta-braid's classes, as the cross-compiler sees
+;;; them once defs.lisp has made their early definitions: their names are
+;;; types it knows, with their superclasses, for TYPEP and type inference.
+;;; Host PCL gives them their classes and layouts (src/cold/host-pcl.lisp).
+#+sb-xc-host
+(labels ((layout-named (name)
+           (let ((classoid (find-classoid name nil)))
+             (if classoid
+                 (classoid-layout classoid)
+                 (let* ((supers (mapcar #'layout-named
+                                        (ecd-superclass-names (!early-class-definition name))))
+                        (inherits (remove-duplicates
+                                   (loop for super in supers
+                                         append (coerce (layout-inherits super) 'list)
+                                         collect super)
+                                   :from-end t))
+                        (classoid (make-standard-classoid :name name))
+                        (layout (make-layout (hash-layout-name name) classoid
+                                             :depthoid -1 :length 0 :invalid nil
+                                             :inherits (coerce inherits 'simple-vector))))
+                   (register-layout layout :invalidate nil) ; (its subclassoids)
+                   (setf (classoid-cell-classoid (find-classoid-cell name :create t)) classoid
+                         (info :type :kind name) :instance)
+                   layout)))))
+  (dolist (ecd *!early-class-definitions*)
+    (layout-named (ecd-class-name ecd))))
+
 (declaim (list **standard-method-classes**))
 (define-load-time-global **standard-method-classes** nil)
 
@@ -38,12 +65,6 @@
     global-makunbound-method)
   #'equal)
 
-(define-load-time-global *sgf-wrapper*
-  (!boot-make-wrapper (!early-class-size 'standard-generic-function)
-                      'standard-generic-function
-                      sb-kernel::funinstance-layout-bitmap))
-
-
 (defun allocate-standard-instance (wrapper)
   (let* ((instance (%new-instance wrapper (1+ sb-vm:instance-data-start)))
          (slots (make-array (layout-length wrapper) :initial-element +slot-unbound+)))
@@ -111,9 +132,7 @@
             custom-slots)))
 
 
-;;;; BOOTSTRAP-META-BRAID
-;;;;
-;;;; This function builds the base metabraid from the early class definitions.
+;;;; wrappers' slot lists
 
 (defmacro wrapper-info (x) `(sb-kernel::layout-%info ,x))
 (declaim (inline wrapper-slot-list))
@@ -126,6 +145,9 @@
   (aver (listp (wrapper-info wrapper)))
   (setf (wrapper-info wrapper) newval))
 
+;;; The meta-braid: host PCL's (src/cold/host-pcl.lisp), whose classes
+;;; genesis writes
+(!host-only
 (macrolet
     ((with-initial-classes-and-wrappers ((&rest classes) &body body)
        `(let* ((*create-classes-from-internal-structure-definitions-p* nil)
@@ -351,7 +373,7 @@
                                        name class-eq-wrapper nil
                                        supers subs
                                        (cons name cpl)
-                                       wrapper prototype))))))
+                                       wrapper prototype)))))))
 
 ;;; I have no idea why we care so much about being able to create an instance
 ;;; of STRUCTURE-OBJECT, when (almost) no other structure class in the system
@@ -365,6 +387,7 @@
    #.(sb-kernel:find-defstruct-description 'structure-object)
    nil))
 
+(!host-only
 ;;; Initialize a class metaobject.
 (defun !bootstrap-initialize-class
        (metaclass-name class name
@@ -448,7 +471,7 @@
          (set-slot 'prototype (funcall constructor-sym))))
       (condition-class
        (aver (not proto-p))
-       (set-slot 'prototype (make-condition name)))
+       (set-slot 'prototype (host-make-condition name)))
       (t
        (aver proto-p)
        (unless (eq name 't) (set-slot 'prototype proto))))
@@ -504,7 +527,8 @@
                  (eq slot-name 'slots) effective-p)
         (setq *the-eslotd-funcallable-standard-class-slots* slotd))
       slotd)))
-
+)
+
 ;;;; from slots-boot.lisp
 
 (defun make-optimized-std-reader-method-function
@@ -513,7 +537,7 @@
    (etypecase location
      (fixnum
       (if fsc-p
-          (lambda (instance)
+          (template-lambda (reader :fsc) (location slot-name) (instance)
             (check-obsolete-instance instance)
             (let ((value (clos-slots-ref (fsc-instance-slots instance)
                                          location)))
@@ -521,7 +545,7 @@
                   (values
                    (slot-unbound (class-of instance) instance slot-name))
                   value)))
-          (lambda (instance)
+          (template-lambda (reader :std) (location slot-name) (instance)
             (check-obsolete-instance instance)
             (let ((value (clos-slots-ref (std-instance-slots instance)
                                          location)))
@@ -530,14 +554,14 @@
                    (slot-unbound (class-of instance) instance slot-name))
                   value)))))
      (cons
-      (lambda (instance)
+      (template-lambda (reader :cell) (location slot-name) (instance)
         (check-obsolete-instance instance)
         (let ((value (cdr location)))
           (if (unbound-marker-p value)
               (values (slot-unbound (class-of instance) instance slot-name))
               value))))
      (null
-      (lambda (instance)
+      (template-lambda (reader :none) (slotd) (instance)
         (declare (ignore instance))
         (instance-structure-protocol-error slotd 'slot-value-using-class))))
    `(reader ,slot-name)))
@@ -553,41 +577,41 @@
                        (fixnum
                         (if fsc-p
                             (if safe-p
-                                (lambda (nv instance)
+                                (template-lambda (writer :fsc-checked) (location) (nv instance)
                                   (setf (clos-slots-ref (fsc-instance-slots instance)
                                                         location)
                                         nv))
-                                (lambda (nv instance)
+                                (template-lambda (writer :fsc) (location) (nv instance)
                                   (check-obsolete-instance instance)
                                   (setf (clos-slots-ref (fsc-instance-slots instance)
                                                         location)
                                         nv)))
                             (if safe-p
-                                (lambda (nv instance)
+                                (template-lambda (writer :std-checked) (location) (nv instance)
                                   (setf (clos-slots-ref (std-instance-slots instance)
                                                         location)
                                         nv))
-                                (lambda (nv instance)
+                                (template-lambda (writer :std) (location) (nv instance)
                                   (check-obsolete-instance instance)
                                   (setf (clos-slots-ref (std-instance-slots instance)
                                                         location)
                                         nv)))))
                        (cons
                         (if safe-p
-                            (lambda (nv instance)
+                            (template-lambda (writer :cell-checked) (location) (nv instance)
                               (declare (ignore instance))
                               (setf (cdr location) nv))
-                            (lambda (nv instance)
+                            (template-lambda (writer :cell) (location) (nv instance)
                               (check-obsolete-instance instance)
                               (setf (cdr location) nv))))
                        (null
-                        (lambda (nv instance)
+                        (template-lambda (writer :none) (slotd) (nv instance)
                           (declare (ignore nv instance))
                           (instance-structure-protocol-error
                            slotd
                            '(setf slot-value-using-class))))))
          (checking-fun (when safe-p
-                         (lambda (new-value instance)
+                         (template-lambda (writer :checking) (orig-wrapper info slot-name writer-fun) (new-value instance)
                            ;; If we have a TYPE-CHECK-FUNCTION, call it.
                            (let* (;; Note that the class of INSTANCE here is not
                                   ;; neccessarily the SLOT-DEFINITION-CLASS of
@@ -617,19 +641,19 @@
   (set-fun-name
    (etypecase location
      (fixnum (if fsc-p
-                 (lambda (instance)
+                 (template-lambda (boundp :fsc) (location) (instance)
                    (check-obsolete-instance instance)
                    (not (unbound-marker-p (clos-slots-ref (fsc-instance-slots instance)
                                                           location))))
-                 (lambda (instance)
+                 (template-lambda (boundp :std) (location) (instance)
                    (check-obsolete-instance instance)
                    (not (unbound-marker-p (clos-slots-ref (std-instance-slots instance)
                                                           location))))))
-     (cons (lambda (instance)
+     (cons (template-lambda (boundp :cell) (location) (instance)
              (check-obsolete-instance instance)
              (not (unbound-marker-p (cdr location)))))
      (null
-      (lambda (instance)
+      (template-lambda (boundp :none) (slotd) (instance)
         (declare (ignore instance))
         (instance-structure-protocol-error slotd 'slot-boundp-using-class))))
    `(boundp ,slot-name)))
@@ -639,22 +663,22 @@
   (set-fun-name
    (etypecase location
      (fixnum (if fsc-p
-                 (lambda (instance)
+                 (template-lambda (makunbound :fsc) (location) (instance)
                    (check-obsolete-instance instance)
                    (setf (clos-slots-ref (fsc-instance-slots instance) location)
                          +slot-unbound+)
                    instance)
-                 (lambda (instance)
+                 (template-lambda (makunbound :std) (location) (instance)
                    (check-obsolete-instance instance)
                    (setf (clos-slots-ref (std-instance-slots instance) location)
                          +slot-unbound+)
                    instance)))
-     (cons (lambda (instance)
+     (cons (template-lambda (makunbound :cell) (location) (instance)
              (check-obsolete-instance instance)
              (setf (cdr location) +slot-unbound+)
              instance))
      (null
-      (lambda (instance)
+      (template-lambda (makunbound :none) (slotd) (instance)
         (declare (ignore instance))
         (instance-structure-protocol-error slotd 'slot-makunbound-using-class))))
    `(makunbound ,slot-name)))
@@ -762,7 +786,7 @@
                                         (early-slot-definition-info slot)
                                         (slot-definition-info slot))))
                             (svref vector index))))))
-      (if (eq 'complete **boot-state**)
+      (if (pcl-ready-p)
           (dolist (slot slots)
             (add-to-vector (slot-definition-name slot) slot))
           (dolist (slot slots)
@@ -802,5 +826,59 @@
 
 ;;;; initialize the initial class hierarchy
 
-(!bootstrap-meta-braid)
-(!bootstrap-built-in-classes)
+;;; Genesis writes what PCL built on the host (src/cold/host-pcl.lisp).
+(define-load-time-global *!braid-dumped* nil) ; genesis sets this
+;;; the permutation vector tables that genesis wrote (*PV-TABLES*)
+(define-load-time-global *!genesis-pv-tables* nil)
+;;; the function generators that genesis wrote, (test . fgen) (*FGENS*)
+(define-load-time-global *!genesis-fgens* nil)
+;;; the entries of hash tables that genesis wrote: (NAME (KEY VALUE ...) ...)
+(define-load-time-global *!genesis-table-entries* nil)
+;;; TABLE with the entries genesis wrote of the table named NAME
+(defun !genesis-table (name table)
+  (loop for (key value) on (getf *!genesis-table-entries* name) by #'cddr
+        do (setf (gethash key table) value))
+  table)
+;;; Toplevel forms of PCL proper, as compiled for a dumped braid
+;;; (src/cold/host-pcl-defs.lisp): the host ran this one; this one runs at
+;;; the end of PCL's bootstrap (!FINISH-GENESIS-BRAID).
+(defun !host-form (function) (declare (ignore function)))
+(define-load-time-global *!target-forms* nil)
+(defun !target-form (function) (push (cons *package* function) *!target-forms*))
+
+;;; The function of a funcallable instance before it has one of its own (the
+;;; host calls this; genesis writes the closure)
+(defun !unset-funcallable-instance-function (fin)
+  (template-lambda (unset-funcallable-instance-function) (fin) (&rest args)
+    (declare (ignore args))
+    ;; in cold init, before generic functions dispatch, naming one is all
+    ;; that can be done for it
+    (when (standard-generic-function-p fin)
+      (write-string "; generic function not set up yet: ")
+      ;; (+SGF-NAME-INDEX+ is boot.lisp's)
+      (write (clos-slots-ref (fsc-instance-slots fin) (symbol-value '+sgf-name-index+)))
+      (terpri))
+    (error-no-implementation-function fin)))
+;;; The bootstrap is over: the lazily made tables (DEFINE-LAZY-TABLE) are made,
+;;; and their accessors no longer check.
+(defun !settle-lazy-tables ()
+  (macrolet ((settle (&rest names)
+               `(progn
+                  ,@(mapcar (lambda (name)
+                              `(progn (,name)
+                                      (setf (fdefinition ',name)
+                                            (fdefinition ',(symbolicate name "/SETTLED")))))
+                            names))))
+    (settle fgens all-ctors typecheck-cache standard-slot-locations pv-tables
+            eql-specializer-table class-eq-specializer-methods method-combinations)))
+
+;;; Cold init, after PCL's toplevel forms: the forms that hook PCL into the
+;;; system, then the end of the lazy tables' bootstrap.
+(defun !finish-genesis-braid ()
+  (when *!braid-dumped*
+    (setq *!braid-dumped* nil)
+    (dolist (form (nreverse (shiftf *!target-forms* nil)))
+      (let ((*package* (car form)))
+        (funcall (cdr form))))
+    (!settle-lazy-tables)
+    (funcall '!make-method-combination-gf-sets))) ; defcombin.lisp's

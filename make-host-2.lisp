@@ -11,6 +11,7 @@
 (load "src/cold/set-up-cold-packages.lisp")
 (load "src/cold/defun-load-or-cload-xcompiler.lisp")
 (load-or-cload-xcompiler #'host-load-stem)
+(load "src/cold/host-pcl-defs.lisp")
 
 ;; Supress function/macro redefinition warnings under clisp.
 #+clisp (setf custom:*suppress-check-redefinition* t)
@@ -74,7 +75,8 @@
 
 #-clisp ; DO-ALL-SYMBOLS seems to kill CLISP at random
 (do-all-symbols (s)
-  (when (and (sb-int:info :function :inlinep s)
+  ;; NOTINLINE for a function defined later (e.g. as a generic function) is fine
+  (when (and (member (sb-int:info :function :inlinep s) '(inline sb-ext:maybe-inline))
              (eq (sb-int:info :function :where-from s) :assumed))
       (error "INLINE declaration for an undefined function: ~S?" s)))
 
@@ -182,6 +184,10 @@ Sample output
 ;;; to spend a long time wandering around confused trying to debug
 ;;; cold init if it wasn't.)
 (load "tests/type.after-xc.lisp")
+
+;;; The second genesis is done here, where the cross-compiler can compile
+;;; what PCL compiles while it builds the class hierarchy on the host.
+(load "src/cold/genesis-2.lisp")
 
 ;;; If you're experimenting with the system under a cross-compilation
 ;;; host which supports CMU-CL-style SAVE-LISP, this can be a good

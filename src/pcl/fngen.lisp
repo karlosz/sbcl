@@ -132,10 +132,16 @@
 ;;; table by hand, use GET-FUN-GENERATOR and ENSURE-FGEN.
 ;;; We use explicit locking for properly scoped R/M/W operation without
 ;;; recursion on the mutex. So the table is not specified as :SYNCHRONIZED.
-(define-load-time-global *fgens* (make-hash-table :test #'equal))
+(define-load-time-global *fgens* nil)
+(define-lazy-table fgens *fgens*
+  ;; starting with those that genesis wrote, cross-compiled
+  (let ((table (make-hash-table :test #'equal)))
+    (loop for (test . fgen) in *!genesis-fgens*
+          do (setf (gethash test table) fgen))
+    table))
 
 (defun ensure-fgen (test gensyms generator generator-lambda system)
-  (let ((table *fgens*))
+  (let ((table (fgens)))
     (with-system-mutex ((hash-table-lock table))
       (let ((old (gethash test table)))
         (cond (old
@@ -154,7 +160,7 @@
 
 (defun get-fun-generator (lambda test-converter code-converter)
   (let* ((test (compute-test lambda test-converter))
-         (table *fgens*)
+         (table (fgens))
          (fgen (with-system-mutex ((hash-table-lock table))
                  (gethash test table))))
     (if fgen
@@ -163,10 +169,11 @@
 
 (defun get-new-fun-generator (lambda test code-converter)
   (multiple-value-bind (code gensyms) (compute-code lambda code-converter)
+    ;; (CODE is a LAMBDA or NAMED-LAMBDA form, which make the function)
     (let ((generator-lambda `(lambda ,gensyms
                                (declare (optimize (sb-c:store-source-form 0)
                                                   (sb-c::store-xref-data 0)))
-                               (function ,code))))
+                               ,code)))
       (let ((generator (pcl-compile generator-lambda :safe)))
         (ensure-fgen test gensyms generator generator-lambda nil)
         generator))))
@@ -228,7 +235,7 @@
                            ',(fgen-generator-lambda fgen)
                            ',system)
                          collect)))
-               *fgens*)
+               (fgens))
     `(progn ,@collect)))
 
 (defstruct (codegen-parms (:conc-name nil)

@@ -1394,7 +1394,8 @@ necessary, since type inference may take arbitrarily long to converge.")
           (throw constant t))
         (throw 'pending-init circular-ref)))
     (multiple-value-bind (creation-form init-form)
-        (handler-case (make-load-form constant (make-null-lexenv))
+        (handler-case (#+sb-xc-host xc-make-load-form #-sb-xc-host make-load-form
+                       constant (make-null-lexenv))
           (error (condition) (sb-c:compiler-error condition)))
       (cond
         ;; Used mainly as an optimization to avoid dumping internal
@@ -1756,7 +1757,7 @@ necessary, since type inference may take arbitrarily long to converge.")
 (defun close-source-info (info)
   (declare (type source-info info))
   (let ((stream (source-info-stream info)))
-    (when stream (close stream)))
+    (when stream (cl:close stream)))
   (setf (source-info-stream info) nil)
   (values))
 
@@ -2011,7 +2012,7 @@ returning its filename.
         (when cfasl-output (close-fasl-output cfasl-output abort-p))
         ;; Don't nuke stdout if you use :trace-file *standard-output*
         (when (and trace-file (not (streamp trace-file)))
-          (close *compiler-trace-output*))
+          (cl:close *compiler-trace-output*))
         (when (and *compile-verbose* abort-p)
           (print-compile-end-note)))
 
@@ -2068,7 +2069,7 @@ returning its filename.
                (*compile-object* fasl-output))
            (setf (values abort-p warnings-p failure-p) (sub-compile-file source-info nil)))
       (when abort-p (sb-unix:unix-fclose stdio-file))
-      (awhen (source-info-stream source-info) (close it))
+      (awhen (source-info-stream source-info) (cl:close it))
       (close-fasl-output fasl-output abort-p))
     (values (unless abort-p stdio-file) warnings-p failure-p)))
 
@@ -2115,7 +2116,7 @@ returning its filename.
       (when fasl-output
         (close-fasl-output fasl-output abort-p))
       (when (and trace-file (not (streamp trace-file)))
-        (close *compiler-trace-output*)))
+        (cl:close *compiler-trace-output*)))
     (values (unless abort-p result) warnings-p failure-p)))
 
 (declaim (end-block))

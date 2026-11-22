@@ -31,70 +31,26 @@
 
 (in-package "SB-PCL")
 
-(defun !bootstrap-accessor-definitions (early-p)
-  (let ((*early-p* early-p))
-    (dolist (definition *!early-class-definitions*)
-      (let ((name (ecd-class-name definition))
-            (meta (ecd-metaclass definition)))
-        (unless (or (eq meta 'built-in-class) (eq meta 'system-class))
-          (let ((direct-slots  (ecd-canonical-slots definition)))
-            (dolist (slotd direct-slots)
-              (let ((slot-name (getf slotd :name))
-                    (readers (getf slotd :readers))
-                    (writers (getf slotd :writers)))
-                (!bootstrap-accessor-definitions1
-                 name slot-name readers writers
-                 (ecd-source-location definition))))))))))
-
-(defun !bootstrap-accessor-definition (class-name accessor-name slot-name type source-location)
-  (multiple-value-bind (accessor-class make-method-function arglist specls doc)
-      (ecase type
-        (reader (values 'standard-reader-method
-                        #'make-std-reader-method-function
-                        (list class-name)
-                        (list class-name)
-                        "automatically generated reader method"))
-        (writer (values 'standard-writer-method
-                        #'make-std-writer-method-function
-                        (list 'new-value class-name)
-                        (list t class-name)
-                        "automatically generated writer method")))
-    (let ((gf (ensure-generic-function accessor-name :lambda-list arglist)))
-      (if (find specls (early-gf-methods gf)
-                :key #'early-method-specializers
-                :test 'equal)
-          (unless (assoc accessor-name *!generic-function-fixups*
-                         :test #'equal)
-            (update-dfun gf))
-          (add-method gf
-                      (make-a-method accessor-class
-                                     ()
-                                     arglist specls
-                                     (funcall make-method-function
-                                              class-name slot-name)
-                                     doc
-                                     :slot-name slot-name
-                                     :object-class class-name
-                                     :method-class-function (constantly (find-class accessor-class))
-                                     'source source-location))))))
-
-(defun !bootstrap-accessor-definitions1
-    (class-name slot-name readers writers source-location)
-  (flet ((do-reader-definition (reader)
-           (!bootstrap-accessor-definition class-name reader slot-name
-                                           'reader source-location))
-         (do-writer-definition (writer)
-           (!bootstrap-accessor-definition class-name writer slot-name
-                                           'writer source-location)))
-    (dolist (reader readers) (do-reader-definition reader))
-    (dolist (writer writers) (do-writer-definition writer))))
-
 (defun class-of (x)
   (declare (explicit-check))
   (wrapper-class (layout-of x)))
 
 (defun eval-form (form)
-  (lambda () (eval form)))
+  (template-lambda (eval-form) (form) () (eval form)))
+
+(defun condition-class-direct-slot-initargs (classoid)
+  (mapcar (lambda (slot)
+            `(:name ,(condition-slot-name slot)
+              :initargs ,(condition-slot-initargs slot)
+              :readers ,(condition-slot-readers slot)
+              :writers ,(condition-slot-writers slot)
+              ,@(when (condition-slot-initform-p slot)
+                  (let ((initform (condition-slot-initform slot))
+                        (initfun (condition-slot-initfunction slot)))
+                    `(:initform ',initform :initfunction ,initfun)))
+              :allocation ,(condition-slot-allocation slot)
+              :documentation ,(condition-slot-documentation slot)))
+          (condition-classoid-slots classoid)))
 
 (defun ensure-non-standard-class (name classoid &optional existing-class extra-data)
   (labels
@@ -117,26 +73,23 @@
              ;; yet we EVAL in the null environment.
              :initfunction ,(eval-form (dsd-default slotd)))))
        (accessor-closures (dsd dd)
+         ;; The slot's accessors from its primitives, for a structure whose
+         ;; DEFSTRUCT gave none (*STRUCT-ACCESS-FRAGMENTS*): one known only at
+         ;; compile time, or one whose class genesis writes.
          (multiple-value-bind (reader-fn writer-fn) (dsd-primitives dsd dd)
-           ;; This is for a structure class that exists only in its compile-time representation.
-           ;; I don't see how these would get called, since you can't make an instance
-           ;; of the structure.
-           (list (lambda (newval object) (funcall writer-fn newval object) newval)
-                 (lambda (object) (funcall reader-fn object)))))
+           (let ((index (dsd-index dsd)))
+             (list (template-lambda (structure-slot-writer) (writer-fn index) (newval object)
+                     (funcall writer-fn object index newval)
+                     newval)
+                   (template-lambda (structure-slot-reader) (reader-fn index) (object)
+                     (funcall reader-fn object index))))))
        (structure-type-slot-description-list (type)
          (let* ((dd (find-defstruct-description type))
                 (include (dd-include dd))
                 (all-slots (dd-slots dd)))
            (unless extra-data
-             (acond ((assoc (dd-name dd) sb-kernel::*struct-access-fragments-delayed*)
-                     (let ((fragments (cdr it)))
-                       (dolist (dsd (dd-slots dd))
-                         (push (list dsd (pop fragments) (pop fragments)) extra-data)))
-                     (setq sb-kernel::*struct-access-fragments-delayed*
-                           (delete it sb-kernel::*struct-access-fragments-delayed*)))
-                    (t
-                     (dolist (dsd (dd-slots dd))
-                       (push (cons dsd (accessor-closures dsd dd)) extra-data)))))
+             (dolist (dsd (dd-slots dd))
+               (push (cons dsd (accessor-closures dsd dd)) extra-data)))
            (multiple-value-bind (super slot-overrides)
                (if (consp include)
                    (values (car include) (mapcar #'car (cdr include)))
@@ -153,24 +106,12 @@
                   when (or (not included-slot)
                            (member (dsd-name included-slot) slot-overrides :test #'eq))
                   collect (apply #'slot-initargs-from-structure-slotd
-                                 (assoc slot extra-data)))))))
-       (slot-initargs-from-condition-slot (slot)
-         `(:name ,(condition-slot-name slot)
-           :initargs ,(condition-slot-initargs slot)
-           :readers ,(condition-slot-readers slot)
-           :writers ,(condition-slot-writers slot)
-           ,@(when (condition-slot-initform-p slot)
-               (let ((initform (condition-slot-initform slot))
-                     (initfun (condition-slot-initfunction slot)))
-                 `(:initform ',initform :initfunction ,initfun)))
-           :allocation ,(condition-slot-allocation slot)
-           :documentation ,(condition-slot-documentation slot))))
+                                 (assoc slot extra-data))))))))
     (cond ((structure-type-p name)
            (ensure 'structure-class (structure-type-slot-description-list name)))
           ((condition-type-p name)
            (ensure 'condition-class
-                   (mapcar #'slot-initargs-from-condition-slot
-                           (condition-classoid-slots classoid))))
+                   (condition-class-direct-slot-initargs classoid)))
           (t
            (error "~@<~S is not the name of a class.~@:>" name)))))
 
@@ -178,7 +119,7 @@
   (let ((class (classoid-pcl-class classoid)))
     (cond (class
            (ensure-non-standard-class (class-name class) classoid class accessors))
-          ((eq 'complete **boot-state**)
+          ((pcl-ready-p)
            (ensure-non-standard-class (classoid-name classoid) classoid nil accessors)))))
 
 (defun ensure-defstruct-class (classoid)
@@ -198,39 +139,8 @@
 ;;; actually create classes, we can't switch over.  So we refrain
 ;;; from installing the DEFSTRUCT-HOOK until there are no more
 ;;; defstruct forms to execute within PCL itself.
-(pushnew 'ensure-deffoo-class sb-kernel::*define-condition-hooks*)
+(!after-pcl-bootstrap (pushnew 'ensure-deffoo-class sb-kernel::*define-condition-hooks*))
 
-(defun !make-class-predicate (class name source-location)
-  (let* ((gf (ensure-generic-function name :lambda-list '(object)
-                                      'source source-location))
-         (mlist (if (eq **boot-state** 'complete)
-                    (early-gf-methods gf)
-                    (generic-function-methods gf))))
-    (unless mlist
-      (unless (eq class *the-class-t*)
-        (let* ((default-method-function #'constantly-nil)
-               (default-method-initargs (list :function default-method-function
-                                              'plist '(:constant-value nil)))
-               (default-method (make-a-method
-                                'standard-method
-                                ()
-                                (list 'object)
-                                (list *the-class-t*)
-                                default-method-initargs
-                                "class predicate default method")))
-          (add-method gf default-method)))
-      (let* ((class-method-function #'constantly-t)
-             (class-method-initargs (list :function class-method-function
-                                          'plist '(:constant-value t)))
-             (class-method (make-a-method 'standard-method
-                                          ()
-                                          (list 'object)
-                                          (list class)
-                                          class-method-initargs
-                                          "class predicate class method")))
-        (add-method gf class-method)))
-    gf))
-
 (define-load-time-global *simple-stream-root-classoid* :unknown)
 
 (defun set-bitmap-and-flags (layout &aux (inherits (layout-inherits layout))
@@ -283,9 +193,7 @@
         (when (and name (symbolp name) (eq name (classoid-name classoid)))
           (setf (find-classoid name) classoid))))))
 
-(!bootstrap-accessor-definitions t)
-(!bootstrap-accessor-definitions nil)
-
+(!host-only
 (loop for (name . x)
       in (let (classoid-cells)
            (do-all-symbols (s classoid-cells)
@@ -308,9 +216,8 @@
       (cond (olclass
              (aver (eq lclass olclass)))
             (t
-             (setf (find-classoid name) lclass))))))
+             (setf (find-classoid name) lclass)))))))
 
-(setq **boot-state** 'braid)
 
 (define-condition effective-method-condition (reference-condition)
   ((generic-function :initarg :generic-function

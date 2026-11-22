@@ -38,6 +38,10 @@
           ;; This declaration may also be used within PCL to pass
           ;; information around, I'm not sure. -- WHN 2000-12-30
           %variable-rebinding))
+;;; ... which the cross-compiler needs before it compiles this file, for the
+;;; DEFMETHODs of the files before it
+#+sb-xc-host
+(sb-xc:proclaim '(declaration %class %parameter %variable-rebinding))
 
 (defun get-declaration (name declarations &optional default)
   (dolist (d declarations default)
@@ -76,6 +80,7 @@
         (when errorp
           (error 'class-not-found-error :name symbol)))))
 
+#-sb-xc-host ; the cross-compiler's is the host's (cross-misc.lisp)
 (defun find-class (symbol &optional (errorp t) environment)
   (declare (ignore environment) (explicit-check))
   (find-class-from-cell symbol
@@ -89,7 +94,7 @@
   (if (and (constantp symbol)
            (legal-class-name-p (setf symbol (constant-form-value symbol)))
            (constantp errorp)
-           (member **boot-state** '(braid complete)))
+           (pcl-ready-p))
       (let ((errorp (not (null (constant-form-value errorp))))
             (cell (make-symbol "CLASSOID-CELL")))
         `(let ((,cell ,(find-classoid-cell symbol :create t)))
@@ -101,6 +106,7 @@
       form))
 
 (declaim (ftype function update-ctors))
+#-sb-xc-host ; the cross-compiler's is the host's (cross-misc.lisp)
 (defun (setf find-class) (new-value name &optional errorp environment)
   (declare (ignore errorp environment))
   (check-class-name name)
@@ -111,13 +117,12 @@
     (let ((cell (find-classoid-cell name :create new-value)))
       (cond (new-value
              (setf (classoid-cell-pcl-class cell) new-value)
-             (when (eq **boot-state** 'complete)
+             (when (pcl-ready-p)
                (let ((classoid (class-classoid new-value)))
                  (setf (find-classoid name) classoid))))
             (cell
              (%clear-classoid name cell)))
-      (when (or (eq **boot-state** 'complete)
-                (eq **boot-state** 'braid))
+      (when (pcl-ready-p)
         (update-ctors 'setf-find-class :class new-value :name name))
       new-value)))
 

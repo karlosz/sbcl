@@ -78,6 +78,8 @@
   ;; It's not worth bothering to teach the compiler to efficiently transform
   ;; a type test involving FUNCALLABLE-STANDARD-OBJECT, not the least
   ;; of the problems being that the type isn't known during make-host-2.
+  ;; (On the host, FIN is host PCL's: src/code/cross-pcl.lisp.)
+  #-sb-xc-host
   (unless (and (function-with-layout-p fin)
                (logtest (layout-flags (%fun-layout fin))
                         +pcl-object-layout-flag+))
@@ -119,6 +121,36 @@
 (defun std-instance-p (x)
   (%instancep x))
 
+;;; A closure that genesis can make for the objects of the class
+;;; hierarchy it writes: its function is named (TEMPLATE . NAME), and VARS
+;;; are the variables it may close over (see src/cold/host-pcl-dump.lisp).
+(defmacro template-lambda ((&rest name) (&rest vars) lambda-list &body body)
+  #-sb-xc-host (declare (ignore vars))
+  #+sb-xc-host ; the host's PCL notes what genesis makes it of
+  `(funcall 'host-template '(template ,@name)
+            (list ,@(mapcar (lambda (var) `(cons ',var ,var)) vars))
+            (lambda ,lambda-list ,@body))
+  #-sb-xc-host
+  `(named-lambda (template ,@name) ,lambda-list ,@body))
+
+;;; A global table that genesis leaves NIL, made when first needed by its
+;;; accessor NAME.  Genesis writes the class hierarchy into the cold core, so
+;;; CLOS can run from the start of cold init, before the toplevel form that
+;;; would make the table.  The check is only for that bootstrap: once the
+;;; system is up, !SETTLE-LAZY-TABLES (class-init.lisp) makes the tables and
+;;; redefines each accessor as NAME/SETTLED, which just reads the variable.
+(defmacro define-lazy-table (name var form)
+  `(progn
+     (declaim (notinline ,name))
+     (defun ,name () (or ,var (progn (sb-ext:cas ,var nil ,form) ,var)))
+     (defun ,(symbolicate name "/SETTLED") () ,var)))
+
+;;; EQL specializers by object (INTERN-EQL-SPECIALIZER, defs.lisp)
+(define-load-time-global *eql-specializer-table* nil)
+(define-lazy-table eql-specializer-table *eql-specializer-table*
+  (!genesis-table '*eql-specializer-table*
+                  (sb-impl::make-system-hash-table :test 'eql :weakness :value :synchronized nil)))
+
 ;;; When given a funcallable instance, SET-FUN-NAME *must* side-effect
 ;;; that FIN to give it the name. When given any other kind of
 ;;; function SET-FUN-NAME is allowed to return a new function which is

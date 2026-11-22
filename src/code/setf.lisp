@@ -46,12 +46,15 @@
 ;;; form and that produces five values: a list of temporary variables, a list
 ;;; of value forms, a list of the single store-value form, a storing function,
 ;;; and an accessing function.
-(declaim (ftype (function (t &optional lexenv-designator))
+(declaim (ftype (function (t &optional #+sb-xc-host t #-sb-xc-host lexenv-designator))
                 get-setf-expansion))
 (defun get-setf-expansion (form &optional environment)
   "Return five values needed by the SETF machinery: a list of temporary
    variables, a list of values with which to fill them, a list of temporaries
    for the new values, the setting function, and the accessing function."
+  #+sb-xc-host
+  (when (sb-c::host-environment-p environment)
+    (return-from get-setf-expansion (cl:get-setf-expansion form environment)))
   (named-let retry ((form form))
     (labels ((newvals (count)
                (make-gensym-list count "NEW"))

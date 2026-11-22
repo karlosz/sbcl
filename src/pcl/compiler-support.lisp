@@ -34,6 +34,7 @@
 ;;;; very low-level representation of instances with meta-class
 ;;;; STANDARD-CLASS
 
+#-sb-xc-host ; the target compiler's
 (deftransform sb-pcl::pcl-instance-p ((object))
   ;; We declare SPECIFIER-TYPE notinline here because otherwise the
   ;; literal classoid reflection/dumping machinery will instantiate
@@ -53,6 +54,10 @@
      (define-function-name-syntax ,name (,var) ,@body)
      (pushnew ',name sb-pcl::*internal-pcl-generalized-fun-name-symbols*)))
 
+;;; These names are the target's: to the cross-compiler, which compiles
+;;; PCL's method functions and slot accessors as anonymous functions, they
+;;; are not function names.
+#-sb-xc-host
 (define-internal-pcl-function-name-syntax sb-pcl::slot-accessor (list)
   (when (= (length list) 4)
     (destructuring-bind (class slot rwb) (cdr list)
@@ -62,12 +67,15 @@
                  (symbolp class))
         (values t slot)))))
 
+#-sb-xc-host
 (define-internal-pcl-function-name-syntax sb-pcl::fast-method (list)
   (valid-function-name-p (cadr list)))
 
+#-sb-xc-host
 (define-internal-pcl-function-name-syntax sb-pcl::slow-method (list)
   (valid-function-name-p (cadr list)))
 
+#-sb-xc-host ; the target compiler's
 (flet ((union-of-known-slot-p (slot-name objtype)
          ;; handle an either-or of two structure classoids
          ;; (This could accept N types in the union but it's tricky)

@@ -14,6 +14,8 @@
 
 ;;;; Arenas
 (defmacro thread-current-arena ()
+  #+sb-xc-host 0 ; none, to the host's PCL
+  #-sb-xc-host
   `(sap-ref-lispobj (current-thread-offset-sap thread-this-slot)
                     (ash thread-arena-slot word-shift)))
 #-sb-xc-host

@@ -138,10 +138,20 @@
 ;;; to be taken as a null lexical environment.
 ;;; Of course this is a mostly pointless "idiom" because NIL *is*
 ;;; an environment, as far as most environment inquiry functions care.
+;;; An environment of the host's, whose macros and declarations are the
+;;; host's: PCL's code that the host's PCL runs is given those
+;;; (src/cold/host-pcl.lisp).  The cross-compiler's operators on
+;;; environments (MACROEXPAND, CONSTANTP, the code walker, ...) do the host's.
+#+sb-xc-host
+(progn
+  (defun host-environment-p (env) (and env (not (typep env 'lexenv))))
+  (defun host-constant-form-value (form env) (cl:eval (cl:macroexpand form env))))
+
 (defun coerce-to-lexenv (x)
   (etypecase x
     (null (make-null-lexenv))
     (lexenv x)
+    #+sb-xc-host ((satisfies host-environment-p) x)
     #+(and sb-fasteval (not sb-xc-host))
     (sb-interpreter:basic-env (sb-interpreter:lexenv-from-env x))))
 

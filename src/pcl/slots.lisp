@@ -25,7 +25,7 @@
 
 ;;;; ANSI CL condition for unbound slots
 
-(define-condition unbound-slot (cell-error)
+(sb-xc:define-condition unbound-slot (cell-error)
   ((instance :reader unbound-slot-instance :initarg :instance))
   (:report (lambda (condition stream)
              (handler-case
@@ -55,12 +55,14 @@
 
 ;;;; STANDARD-INSTANCE-ACCESS
 
+;;; ((CAS ...) functions are the target's only)
+(!target-only
 (declaim (inline standard-instance-access
                  (setf standard-instance-access)
                  (cas stadard-instance-access)
                  funcallable-standard-instance-access
                  (setf funcallable-standard-instance-access)
-                 (cas funcallable-standard-instance-access)))
+                 (cas funcallable-standard-instance-access))))
 
 (defun standard-instance-access (instance location)
   (clos-slots-ref (std-instance-slots instance) location))
@@ -68,9 +70,10 @@
 (defun (setf standard-instance-access) (new-value instance location)
   (setf (clos-slots-ref (std-instance-slots instance) location) new-value))
 
+(!target-only
 (defun (cas standard-instance-access) (old-value new-value instance location)
   ;; FIXME: Maybe get rid of CLOS-SLOTS-REF entirely?
-  (cas (svref (std-instance-slots instance) location) old-value new-value))
+  (cas (svref (std-instance-slots instance) location) old-value new-value)))
 
 (defun funcallable-standard-instance-access (instance location)
   (clos-slots-ref (fsc-instance-slots instance) location))
@@ -78,9 +81,10 @@
 (defun (setf funcallable-standard-instance-access) (new-value instance location)
   (setf (clos-slots-ref (fsc-instance-slots instance) location) new-value))
 
+(!target-only
 (defun (cas funcallable-standard-instance-access) (old-value new-value instance location)
   ;; FIXME: Maybe get rid of CLOS-SLOTS-REF entirely?
-  (cas (svref (fsc-instance-slots instance) location) old-value new-value))
+  (cas (svref (fsc-instance-slots instance) location) old-value new-value)))
 
 ;;;; SLOT-VALUE, (SETF SLOT-VALUE), SLOT-BOUNDP, SLOT-MAKUNBOUND
 
@@ -180,6 +184,7 @@
 (defun safe-set-slot-value (object slot-name new-value)
   (set-slot-value object slot-name new-value))
 
+(!target-only
 (defun (cas slot-value) (old-value new-value object slot-name)
   (let* ((wrapper (valid-wrapper-of object))
          (cell (or (find-slot-cell wrapper slot-name)
@@ -205,7 +210,7 @@
                       (bug "Bogus slot-cell in (CAS SLOT-VALUE): ~S" cell)))))
       (if (and (unbound-marker-p old) (neq old old-value))
           (slot-unbound (wrapper-class wrapper) object slot-name)
-          old))))
+          old)))))
 
 (defun slot-boundp (object slot-name)
   (let* ((wrapper (valid-wrapper-of object))

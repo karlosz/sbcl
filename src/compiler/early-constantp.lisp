@@ -28,4 +28,7 @@ If ENVIRONMENT is provided, the FORM is first macroexpanded in it."
   "Returns the value of the constant FORM in ENVIRONMENT. Behaviour
 is undefined unless CONSTANTP has been first used to determine the
 constantness of the FORM in ENVIRONMENT."
+  #+sb-xc-host
+  (when (host-environment-p environment)
+    (return-from constant-form-value (host-constant-form-value form environment)))
   (%constant-form-value form environment envp))

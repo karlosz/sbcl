@@ -304,6 +304,11 @@
                         sb-pcl::%variable-rebinding special))))
 
 (defun %var-declaration (declaration var env)
+  ;; the host's walk (HOST-WALK-FORM): every SETQ'd variable counts as a
+  ;; parameter that may be modified
+  #+sb-xc-host
+  (when (sb-c::host-environment-p env)
+    (return-from %var-declaration (eq declaration '%parameter)))
   (let ((id (or (var-lexical-p var env) var)))
     (if (eq 'special declaration)
         (dolist (decl (env-declarations env))
@@ -331,6 +336,7 @@
       form))
 
 (defun var-special-p (var env)
+  #+sb-xc-host (when (sb-c::host-environment-p env) (return-from var-special-p nil))
   (and (or (var-declaration 'special var env)
            (var-globally-special-p var))
        t))
@@ -453,6 +459,7 @@
 ;;; NAMED-LAMBDA now expands into (FUNCTION (NAMED-LAMBDA ...))?
 (define-walker-template named-lambda walk-named-lambda)
 (define-walker-template sb-c::jump-table (nil eval repeat (quote repeat eval)))
+(define-walker-template sb-c::%primitive (nil quote repeat (eval)))
 #|
 ;;; To find templateized symbols that aren't special operators:
 (do-all-symbols (s)
@@ -575,6 +582,10 @@ instead of
   #+sb-fasteval
   (when (typep environment 'sb-interpreter:basic-env)
     (setq environment (sb-interpreter:lexenv-from-env environment)))
+  ;; host code, which the host's PCL walks its own way (src/cold/host-pcl.lisp)
+  #+sb-xc-host
+  (when (sb-c::host-environment-p environment)
+    (return-from walk-form (funcall 'sb-pcl::host-walk-form form environment walk-function)))
   (walker-environment-bind (new-env environment :walk-function walk-function)
     (walk-form-internal form :eval new-env)))
 

@@ -387,7 +387,10 @@
                      :old (type-specifier old-type)
                      :new type-specifier)))))
        (:defined
-        (when (and #+sb-xc-host (not (sb-cold::make-host-2-parallelism)))
+        ;; (Not where make-host-2's files are compiled for effect only, as
+        ;; in a parallel build: their definitions' types aren't derived.)
+        (when (and #+sb-xc-host (not (or (sb-cold::make-host-2-parallelism)
+                                         sb-cold::*compile-for-effect-only*)))
           (let* ((old-type (global-ftype name))
                  (type (if (ctype-p type-oid)
                            type-oid

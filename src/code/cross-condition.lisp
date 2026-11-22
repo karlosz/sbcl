@@ -11,6 +11,14 @@
 
 (in-package "SB-KERNEL")
 
+;;; DEFINE-CONDITION for the target and the host alike: the host's, but for
+;;; CL's conditions, which the host has.  (Cross-compiling, target-error.lisp's
+;;; DEFINE-CONDITION is SB-XC:DEFINE-CONDITION, which gives the host the
+;;; condition as well.)
+(defmacro sb-xc:define-condition (name parent-types slot-specs &rest options)
+  (unless (eq (cl:symbol-package name) (find-package "CL"))
+    `(cl:define-condition ,name ,parent-types ,slot-specs ,@options)))
+
 (define-condition simple-style-warning (simple-condition style-warning) ())
 (defun style-warn (datum &rest arguments)
   ;; Cross-compiler needs a special-case for DATUM being a string,

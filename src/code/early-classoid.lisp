@@ -298,7 +298,9 @@
 ;;;   * ID-WORDn are optimizations for TYPEP.
 ;;; So none of those really make sense on the host.
 ;;; Also, we eschew the packed representation of length+depthoid+flags.
-;;; FLAGS are computed on demand, and not stored.
+;;; FLAGS are computed on demand, and not stored, except those of the
+;;; layouts of PCL's classes, which host PCL makes (src/cold/host-pcl.lisp),
+;;; as are their bitmaps, slot tables and PCL's information (LAYOUT-%INFO).
 #+sb-xc-host
 (progn
   (defstruct (layout (:constructor host-make-layout
@@ -318,7 +320,10 @@
     (inherits #() :type simple-vector)
     (depthoid -1 :type layout-depthoid)
     (length 0 :type layout-length)
-    (%info nil :type (or null defstruct-description)))
+    (%info nil)
+    (%flags 0 :type word)
+    (%bitmap nil :type (or null integer))
+    (slot-table nil :type (or null simple-vector)))
   (defun make-temporary-layout (clos-hash classoid inherits)
     (host-make-layout nil clos-hash classoid :inherits inherits :invalid nil))
   (defun layout-flags (layout)
@@ -331,11 +336,11 @@
                      (string-stream     ,+string-stream-layout-flag+)
                      (stream            ,+stream-layout-flag+)
                      (sequence          ,+sequence-layout-flag+)))
-          (flags 0))
+          (flags (layout-%flags layout)))
       (dolist (x (cons layout (coerce (layout-inherits layout) 'list)))
         (let ((cell (assoc (layout-classoid-name x) mapping)))
           (when cell (setq flags (logior flags (second cell))))))
-      (let ((dd (layout-%info layout)))
+      (let ((dd (layout-info layout)))
         (when (or (logtest flags (logior +pathname-layout-flag+ +condition-layout-flag+))
                   (and (logtest flags +structure-layout-flag+)
                        dd
@@ -349,8 +354,11 @@
                     '(sb-pcl::ctor sb-pcl::%method-function))
         (setf flags (logior flags +strictly-boxed-flag+)))
       flags))
+  (defun (setf layout-flags) (new-value layout)
+    (setf (layout-%flags layout) new-value))
   (defun layout-bitmap (layout)
-    (acond ((layout-%info layout) (dd-bitmap it))
+    (acond ((layout-%bitmap layout))
+           ((layout-info layout) (dd-bitmap it))
            ;; Give T a 0 bitmap. It's arbitrary, but when we need some layout
            ;; that has this bitmap we can use the layout of T.
            ((eq layout (find-layout t)) 0)

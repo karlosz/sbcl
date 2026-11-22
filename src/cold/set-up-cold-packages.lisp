@@ -254,7 +254,6 @@
     "LISP-IMPLEMENTATION-TYPE" "LISP-IMPLEMENTATION-VERSION"
     "MACRO-FUNCTION"
     "MACROEXPAND" "MACROEXPAND-1" "*MACROEXPAND-HOOK*"
-    "MAKE-LOAD-FORM"
     "MAKE-LOAD-FORM-SAVING-SLOTS"
     "PROCLAIM"
     "SPECIAL-OPERATOR-P"
@@ -265,6 +264,44 @@
 
     ;; Add eval-when to it
     "DEFCONSTANT"))
+
+;;; PCL's, whose definitions are the cross-compiler's (to expand PCL's
+;;; macros) apart from the host's CLOS, which the cross-compiler itself uses:
+;;; code meaning the host's says CL:.  (Host PCL, src/cold/host-pcl.lisp,
+;;; reads them as their CL namesakes.)
+(defparameter *pcl-shadows*
+  '("DEFCLASS"
+    "FIND-CLASS"
+    "CLASS-OF"
+    "DEFGENERIC"
+    "ENSURE-GENERIC-FUNCTION"
+    "ADD-METHOD"
+    "REMOVE-METHOD"
+    "CALL-METHOD"
+    "INVALID-METHOD-ERROR"
+    "METHOD-COMBINATION-ERROR"
+    "CLASS-NAME"
+    "METHOD-QUALIFIERS"
+    "SLOT-VALUE"
+    "DEFMETHOD" "WITH-ACCESSORS" "WITH-SLOTS" "DEFINE-METHOD-COMBINATION"
+    ;; generic functions of CL's names that PCL's files define (Gray
+    ;; streams', DOCUMENTATION, MAKE-LOAD-FORM): to the cross-compiler on the
+    ;; host they are the host's CL ones (cross-misc.lisp)
+    "CLOSE" "INPUT-STREAM-P" "OUTPUT-STREAM-P" "OPEN-STREAM-P" "INTERACTIVE-STREAM-P"
+    "STREAM-ELEMENT-TYPE" "DOCUMENTATION" "MAKE-LOAD-FORM"
+    "ALLOCATE-INSTANCE" "CHANGE-CLASS" "COMPUTE-APPLICABLE-METHODS"
+    "DESCRIBE-OBJECT" "FIND-METHOD" "FUNCTION-KEYWORDS" "INITIALIZE-INSTANCE"
+    "MAKE-INSTANCE" "MAKE-INSTANCES-OBSOLETE" "NO-APPLICABLE-METHOD"
+    "NO-NEXT-METHOD" "PRINT-OBJECT" "REINITIALIZE-INSTANCE" "SHARED-INITIALIZE"
+    "SLOT-BOUNDP" "SLOT-EXISTS-P" "SLOT-MAKUNBOUND" "SLOT-MISSING" "SLOT-UNBOUND"
+    "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS" "UPDATE-INSTANCE-FOR-REDEFINED-CLASS"))
+;;; ... and PCL's classes that CL names, which are types the host's PCL
+;;; defines (src/code/cross-pcl.lisp)
+(defparameter *pcl-class-shadows*
+  '("STANDARD-OBJECT" "GENERIC-FUNCTION" "STANDARD-GENERIC-FUNCTION" "METHOD"
+    "STANDARD-METHOD" "METHOD-COMBINATION" "CLASS" "BUILT-IN-CLASS" "STANDARD-CLASS"
+    "STRUCTURE-CLASS"))
+(setq *shadows* (append *shadows* *pcl-shadows* *pcl-class-shadows*))
 
 ;;; A symbol in the "dual personality" list refers to the symbol in CL unless
 ;;; package-prefixed with SB-XC:.  The main reason for not putting these
@@ -316,7 +353,7 @@
     ;; removing that to add to the externals, each time shrinking the hashset
     ;; of internals back to nothing. Is there way to not do that?
     (export (intern name package-name) package-name))
-  (dolist (name '("DEFMACRO" "DEFSTRUCT" "DEFTYPE"
+  (dolist (name '("DEFMACRO" "DEFSTRUCT" "DEFTYPE" "DEFINE-CONDITION"
                   "MAKE-ARRAY"
                   "SIMPLE-VECTOR"
                   "TYPEP"
