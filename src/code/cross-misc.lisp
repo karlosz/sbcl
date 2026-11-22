@@ -94,15 +94,10 @@
 ;;; host objects get dumped into something that when loaded would be a
 ;;; target INSTANCE.
 (deftype instance ()
-  '(or (and structure-object (not target-num))
+  '(or (and structure-object (not funcallable-instance) (not target-num))
        package))
 (defun %instancep (x)
   (typep x 'instance))
-
-(deftype funcallable-instance ()
-  (error "not clear how to represent FUNCALLABLE-INSTANCE type"))
-(defun funcallable-instance-p (x)
-  (error "Called FUNCALLABLE-INSTANCE-P ~s" x))
 
 (defun simple-fun-p (x)
   (if (symbolp x) nil (error "Called SIMPLE-FUN-P on ~S" x)))
@@ -299,9 +294,115 @@
 ;;   - DEBUG-SOURCE, COMPILED-DEBUG-INFO, COMPILED-DEBUG-FUN-{something}
 ;;   - HEAP-ALIEN-INFO and ALIEN-{something}-TYPE
 ;;   - COMMA
+
+;;; This is used to emulate PCL instances for bootstrap.
+(defstruct xc-instance
+  data)
+
+(defun %make-instance (x)
+  (make-xc-instance :data (make-array x)))
+
+(defun %instance-set (instance index new-value)
+  (declare (type xc-instance instance))
+  (setf (svref (xc-instance-data instance)
+               index)
+        new-value))
+
+(defstruct funcallable-instance
+  fun
+  layout
+  info)
+
+(defun %funcallable-instance-info (fin index)
+  (declare (type funcallable-instance fin))
+  (aref (funcallable-instance-info fin) index))
+
 (defun %instance-layout (instance)
   (declare (notinline classoid-layout))
-  (classoid-layout (find-classoid (type-of instance))))
+  (cond ((xc-instance-p instance)
+         (svref (xc-instance-data instance) 0))
+        ((funcallable-instance-p instance)
+         (funcallable-instance-layout instance))
+        (t
+         (classoid-layout (find-classoid (type-of instance))))))
+
+(defun %set-instance-layout (instance new-value)
+  (declare (type xc-instance instance))
+  (if (funcallable-instance-p instance)
+      (setf (funcallable-instance-layout instance) layout)
+      (setf (svref (xc-instance-data instance) 0) new-value)))
+
+(defun %funcallable-instance-fun (fin)
+  (declare (type funcallable-instance fin))
+  (funcallable-instance-fun fin))
+
+(defun (setf %funcallable-instance-fun) (new-value fin)
+  (declare (type funcallable-instance fin))
+  (setf (funcallable-instance-fun fin) new-value))
+
+(defun %fun-layout (fin)
+  (declare (type funcallable-instance fin))
+  (funcallable-instance-layout fin))
+
+(defun %set-fun-layout (new-value fin)
+  (declare (type funcallable-instance fin))
+  (setf (funcallable-instance-layout fin) new-value))
+
+(defun (setf %fun-layout) (new-value fin)
+  (declare (type funcallable-instance fin))
+  (setf (funcallable-instance-layout fin) new-value))
+
+(defun layout-of (x)
+  (cond ((%instancep x) (%instance-layout x))
+        ((funcallable-instance-p x) (%fun-layout x))
+        ((null x) (find-layout 'null))
+        ((consp x) (find-layout 'cons))
+        (t
+         (error "????"))))
+
+(defun function-with-layout-p (x)
+  (funcallable-instance-p x))
+
+(defun %pcl-instance-p (x)
+  (layout-for-pcl-obj-p (layout-of x)))
+
+(defun %make-structure-instance (dd slot-specs &rest slot-values)
+  ;; ASSUME NO RAW SLOTS
+  (let ((instance (let ((len (dd-length dd))) ; # of words excluding the header
+                    (%make-instance len))))
+    (%set-instance-layout instance (dd-layout-or-lose dd))
+    (dolist (spec slot-specs instance)
+      (destructuring-bind (kind raw-type . index) spec
+        (if (eq kind :unbound)
+            (%instance-set instance index (make-unbound-marker))
+            (error "???")
+            #+nil                       ; TODO
+            (macrolet ((make-case ()
+                         `(ecase raw-type
+                            ((t) (%instance-set instance index value))
+                            ,@(map 'list
+                               (lambda (rsd)
+                                 `(,(raw-slot-data-raw-type rsd)
+                                   (,(raw-slot-data-writer-name rsd)
+                                    instance index value)))
+                               *raw-slot-data*))))
+              (let ((value (fast-&rest-nth value-index slot-values)))
+                (incf value-index)
+                (make-case))))))))
+
+(defstruct xc-sap
+  value)
+
+(defun int-sap (value)
+  (make-xc-sap :value value))
+
+(defstruct xc-weak-pointer
+  value)
+
+(defun make-weak-pointer (value)
+  (make-xc-weak-pointer :value value))
+
+;;;;
 
 (defun %find-position (item seq from-end start end key test)
   (let ((position (position item seq :from-end from-end
@@ -458,3 +559,22 @@
 
 (defun unbound-marker-p (x)
   (eq x *unbound-marker*))
+
+(defmacro with-source-form (source-form &body body)
+  `(progn
+     ,@body))
+
+(defmacro sb-thread::with-recursive-system-lock ((lock) &body body)
+  (declare (ignore lock))
+  `(progn ,@body))
+
+;;; Ignore atomic semantics...
+(defmacro compare-and-swap (place old new)
+  (let ((n-place (gensym)))
+    `(let ((,n-place ,place))
+       (when (eq ,old ,n-place)
+         (setf ,place ,new))
+       ,n-place)))
+
+(defmacro without-arena (&body body)
+  `(progn ,@body))

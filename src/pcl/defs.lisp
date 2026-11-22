@@ -37,13 +37,34 @@
           "Trying to load (or compile) PCL in an environment in which it~%~
            has already been partially loaded. This may not work, you may~%~
            need to get a fresh lisp (reboot) and then load PCL."))
+
+#+sb-xc-host
+(defvar *gdefinitions* (make-hash-table :test #'equal))
+
+#+sb-xc-host
+(defun gdefinition (spec)
+  (or (gethash spec *gdefinitions*)
+      (fdefinition spec)))
+
+#+sb-xc-host
+(defun (setf gdefinition) (new-value spec)
+  (setf (gethash spec *gdefinitions*) new-value)
+  (setf (fdefinition spec)
+        (if (functionp new-value)
+            new-value
+            (lambda (&rest args)
+              (apply (%funcallable-instance-fun new-value) args)))))
+
 
+#-sb-xc-host
 (declaim (inline gdefinition))
+#-sb-xc-host
 (defun gdefinition (spec)
   ;; This is null layer right now, but once FDEFINITION stops bypasssing
   ;; fwrappers/encapsulations we can do that here.
   (fdefinition spec))
 
+#-sb-xc-host
 (defun (setf gdefinition) (new-value spec)
   ;; This is almost a null layer right now, but once (SETF
   ;; FDEFINITION) stops bypasssing fwrappers/encapsulations we can do
@@ -215,7 +236,7 @@
                                          ',(mapcar #'classoid-name (direct-subs class))
                                          ',(map 'list #'layout-classoid-name
                                                 (reverse (layout-inherits (classoid-layout class))))
-                                         ,(getf (cdr kernel-bic-entry) :prototype-form))))
+                                         ',(getf (cdr kernel-bic-entry) :prototype-form))))
                               (remove-if (lambda (kernel-bic-entry)
                                            (member (first kernel-bic-entry)
                                                    ;; remove special classes (T and our

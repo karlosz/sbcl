@@ -283,16 +283,16 @@
 ;;;   * BITMAP - obtainable via (DD-BITMAP (LAYOUT-INFO layout)).
 ;;;     GC wants it in the layout to avoid double indirection.
 ;;;   * EQUALP-TESTS - needed only for the target's implementation of EQUALP.
-;;;   * SLOT-TABLE, and SLOT-LIST - used only by the CLOS implementation.
 ;;;   * ID-WORDn are optimizations for TYPEP.
 ;;; So none of those really make sense on the host.
 ;;; Also, we eschew the packed representation of length+depthoid+flags.
-;;; FLAGS are computed on demand, and not stored.
 #+sb-xc-host
 (progn
   (defstruct (layout (:constructor host-make-layout
                          (id clos-hash classoid
-                          &key ((:info %info)) depthoid inherits length invalid)))
+                          &key ((:info %info)) depthoid inherits length invalid
+
+                               ((:flags %flags)))))
     (id nil :type (or null fixnum))
     ;; Cross-compiler-only translation from slot index to symbol naming
     ;; the accessor to call. (Since access by position is not a thing)
@@ -303,11 +303,15 @@
     ;; But there's no harm in storing it.
     (clos-hash nil :type (and sb-xc:fixnum unsigned-byte))
     (classoid nil :type classoid)
+    (%flags 0 :type word)
     (invalid :uninitialized :type (or cons (member nil t :uninitialized)))
     (inherits #() :type simple-vector)
     (depthoid -1 :type layout-depthoid)
     (length 0 :type layout-length)
-    (%info nil :type (or null defstruct-description)))
+    (%info nil :type (or list defstruct-description))
+    (slot-mapper nil :type (or (sfunction (symbol) (or index null))
+                               simple-vector null))
+    (slot-table #(1 nil) :type simple-vector))
   (defun make-temporary-layout (clos-hash classoid inherits)
     (host-make-layout nil clos-hash classoid :inherits inherits :invalid nil))
   (defun layout-flags (layout)
@@ -320,7 +324,7 @@
                      (string-stream     ,+string-stream-layout-flag+)
                      (stream            ,+stream-layout-flag+)
                      (sequence          ,+sequence-layout-flag+)))
-          (flags 0))
+          (flags (layout-%flags layout)))
       (dolist (x (cons layout (coerce (layout-inherits layout) 'list)))
         (let ((cell (assoc (layout-classoid-name x) mapping)))
           (when cell (setq flags (logior flags (second cell))))))
@@ -338,8 +342,10 @@
                     '(sb-pcl::ctor sb-pcl::%method-function))
         (setf flags (logior flags +strictly-boxed-flag+)))
       flags))
+  (defun (setf layout-flags) (new-value layout)
+    (setf (layout-%flags layout) new-value))
   (defun layout-bitmap (layout)
-    (acond ((layout-%info layout) (dd-bitmap it))
+    (acond ((layout-info layout) (dd-bitmap it))
            ;; Give T a 0 bitmap. It's arbitrary, but when we need some layout
            ;; that has this bitmap we can use the layout of T.
            ((eq layout (find-layout t)) 0)

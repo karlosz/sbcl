@@ -264,7 +264,22 @@
     "WITH-COMPILATION-UNIT"
 
     ;; Add eval-when to it
-    "DEFCONSTANT"))
+    "DEFCONSTANT"
+
+    ;; PCL stuff
+    "DEFCLASS"
+    "FIND-CLASS"
+    "CLASS-OF"
+    "DEFGENERIC"
+    "ENSURE-GENERIC-FUNCTION"
+    "ADD-METHOD"
+    "REMOVE-METHOD"
+    "CALL-METHOD"
+    "INVALID-METHOD-ERROR"
+    "METHOD-COMBINATION-ERROR"
+    "CLASS-NAME"
+    "METHOD-QUALIFIERS"
+    "SLOT-VALUE"))
 
 ;;; A symbol in the "dual personality" list refers to the symbol in CL unless
 ;;; package-prefixed with SB-XC:.  The main reason for not putting these
@@ -320,6 +335,7 @@
                   "MAKE-ARRAY"
                   "SIMPLE-VECTOR"
                   "TYPEP"
+                  "DEFMETHOD"
                   ))
     (export (intern name package-name) package-name)))
 

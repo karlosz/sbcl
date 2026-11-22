@@ -75,39 +75,77 @@
   :dd-type funcallable-structure)
 )
 
+#+sb-xc-host
+(defstruct (%method-function
+            (:include funcallable-instance)))
+
+#+sb-xc-host
+(defun %make-method-function (fast-function)
+  (let ((info (make-array 1)))
+    (setf (aref info 0) fast-function)
+    (make-%method-function :info info)))
+
+#+sb-xc-host
+(defun %method-function-fast-function (%method-function)
+  (aref (%method-function-info %method-function) 0))
+
+#+sb-xc-host
+(defstruct (standard-funcallable-instance
+            (:include funcallable-instance)))
+
+#+sb-xc-host
+(defun %make-standard-funcallable-instance (clos-slots hash-code)
+  (let ((info (make-array 2)))
+    (setf (aref info 0) clos-slots)
+    (setf (aref info 1) hash-code)
+    (make-standard-funcallable-instance :info info)))
+
+#+sb-xc-host
+(defun standard-funcallable-instance-clos-slots (standard-funcallable-instance)
+  (aref (standard-funcallable-instance-info standard-funcallable-instance) 0))
+
+#+sb-xc-host
+(defun standard-funcallable-instance-hash-code (standard-funcallable-instance)
+  (aref (standard-funcallable-instance-info standard-funcallable-instance) 1))
+
+#+sb-xc-host
+(defun sb-kernel::fsc-instance-hash (fin)
+  (standard-funcallable-instance-hash-code fin))
+
 ;;; Set up fake standard-classes.
 ;;; This is enough to fool the compiler into optimizing TYPEP into
 ;;; %INSTANCE-TYPEP.
 ;;; I'll bet that at least half of these we don't need at all.
-(defparameter *!early-class-predicates*
-  '((specializer specializerp)
-    (standard-specializer standard-specializer-p)
-    (exact-class-specializer exact-class-specializer-p)
-    (class-eq-specializer class-eq-specializer-p)
-    (eql-specializer eql-specializer-p)
-    (class classp)
-    (slot-class slot-class-p)
-    (std-class std-class-p)
-    (standard-class standard-class-p)
-    (funcallable-standard-class funcallable-standard-class-p)
-    (condition-class condition-class-p)
-    (structure-class structure-class-p)
-    (forward-referenced-class forward-referenced-class-p)
-    (method method-p) ; shouldn't this be spelled METHODP? (like CLASSP)
-    (standard-method standard-method-p)
-    (accessor-method accessor-method-p)
-    (standard-accessor-method standard-accessor-method-p)
-    (standard-reader-method standard-reader-method-p)
-    (standard-writer-method standard-writer-method-p)
-    (global-reader-method global-reader-method-p)
-    (global-writer-method global-writer-method-p)
-    (global-boundp-method global-boundp-method-p)
-    (global-makunbound-method global-makunbound-method-p)
-    (generic-function generic-function-p)
-    (standard-generic-function standard-generic-function-p)
-    (method-combination method-combination-p)
-    (long-method-combination long-method-combination-p)
-    (short-method-combination short-method-combination-p)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defparameter *!early-class-predicates*
+    '((specializer specializerp)
+      (standard-specializer standard-specializer-p)
+      (exact-class-specializer exact-class-specializer-p)
+      (class-eq-specializer class-eq-specializer-p)
+      (eql-specializer eql-specializer-p)
+      (class classp)
+      (slot-class slot-class-p)
+      (std-class std-class-p)
+      (standard-class standard-class-p)
+      (funcallable-standard-class funcallable-standard-class-p)
+      (condition-class condition-class-p)
+      (structure-class structure-class-p)
+      (forward-referenced-class forward-referenced-class-p)
+      (method method-p) ; shouldn't this be spelled METHODP? (like CLASSP)
+      (standard-method standard-method-p)
+      (accessor-method accessor-method-p)
+      (standard-accessor-method standard-accessor-method-p)
+      (standard-reader-method standard-reader-method-p)
+      (standard-writer-method standard-writer-method-p)
+      (global-reader-method global-reader-method-p)
+      (global-writer-method global-writer-method-p)
+      (global-boundp-method global-boundp-method-p)
+      (global-makunbound-method global-makunbound-method-p)
+      (generic-function generic-function-p)
+      (standard-generic-function standard-generic-function-p)
+      (method-combination method-combination-p)
+      (long-method-combination long-method-combination-p)
+      (short-method-combination short-method-combination-p))))
 
 #+sb-xc-host
 (progn
@@ -130,33 +168,6 @@
   (setf (classoid-layout classoid) layout
         (info :type :classoid-cell name) cell
         (info :type :kind name) :instance))
-
-;;; Create classoids that correspond with some CLOS classes
-(flet ((create-fake-classoid (name fun-p)
-         (let* ((classoid (make-standard-classoid :name name))
-                (cell (sb-kernel::make-classoid-cell name classoid))
-                (layout
-                  (make-layout (hash-layout-name name)
-                               classoid
-                               :depthoid -1
-                               :inherits (map 'vector #'find-layout
-                                              (cons t (if fun-p '(function))))
-                               :length 0 ; don't care
-                               :invalid nil)))
-           (setf (classoid-layout classoid) layout
-                 (info :type :classoid-cell name) cell
-                 (info :type :kind name) :instance))))
-  ;; Because we don't wire into %INSTANCE-TYPEP any assumptions about
-  ;; the superclass/subclass relationships, these can all trivially be faked.
-  (dolist (x *!early-class-predicates*)
-    (let ((name (car x)))
-      ;; GENERIC-FUNCTION and STANDARD-GENERIC-FUNCTION must contain
-      ;; FUNCTION in their layouts so that their type predicates
-      ;; optimize into FUNCALLABLE-INSTANCE-P (followed by a layout check),
-      ;; rather than testing both that and INSTANCEP.
-      (create-fake-classoid name
-                            (memq name '(standard-generic-function
-                                         generic-function))))))
 ) ; end PROGN
 
 ;;; BIG FAT WARNING: These predicates can't in general be called prior to the
@@ -167,7 +178,6 @@
 ;;; and CLASSP on a STRING, but you can't call CLASSP on anything that is either
 ;;; a FUNCALLABLE-INSTANCE or INSTANCE.
 ;;; With that caveat in mind, these are nifty things to have ASAP.
-#-sb-xc-host
 (macrolet ((define-class-predicates ()
              `(progn
                 ,@(mapcar (lambda (x)

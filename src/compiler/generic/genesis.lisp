@@ -855,6 +855,31 @@
 (defun struct-size (thing)
   ;; ASSUMPTION: all slots consume 1 storage word
   (+ sb-vm:instance-data-start (length (type-dd-slots-or-lose thing))))
+
+#+nil
+(defun allocate-funcallable-instance (nwords type &optional (gspace *dynamic*))
+  ;; Add +1 for the header word when allocating.
+  (let* ((object (allocate-object gspace (1+ nwords) sb-vm:fun-pointer-lowtag))
+         (layout
+           (if (symbolp type)
+               (let ((layout (gethash type *cold-layouts*)))
+                 (cond (layout
+                        (cold-layout-descriptor layout))
+                       (t
+                        (push object (gethash type *layout-deferred-instances*))
+                        (make-fixnum-descriptor 0))))
+               type)))
+    ;; Length as stored in the header is the exact number of useful words
+    ;; that follow, as is customary. A padding word, if any is not "useful"
+    (write-header-word
+     object
+     (logior #+compact-instance-header (ash (descriptor-bits layout) 32)
+             (ash nwords sb-vm:funcallable-instance-info-offset)
+             sb-vm:funcallable-instance-widetag))
+    #-compact-instance-header
+    (write-wordindexed object (1+ sb-vm:funcallable-instance-trampoline-offset) layout)
+    object))
+
 (defun allocate-struct-of-type (type &optional (gspace *dynamic*))
   (allocate-struct (struct-size type)
                    (cold-layout-descriptor (gethash type *cold-layouts*))
@@ -1431,7 +1456,9 @@ core and return a descriptor to it."
                  ((eq type-name 'stream) 'streamp)
                  ((eq type-name 'pathname) 'pathnamep)
                  ((eq type-name 't) 'constantly-t)
-                 (t (error "No predicate for builtin: ~S" type-name)))))))))
+                 (t (error "No predicate for builtin: ~S" type-name))))))
+      (standard-classoid
+       (second (assoc type-name sb-pcl::*!early-class-predicates*))))))
 
 ;;; Map from host object to target object
 (defvar *host->cold-ctype*)
@@ -1483,22 +1510,18 @@ core and return a descriptor to it."
             ;; trivially dumpable constant in lieu of whatever complicated
             ;; substructure it currently holds.
             (overrides
-             (typecase obj
-               (classoid
-                (let ((slots-to-omit
-                       `(;; :predicate will be patched in during cold init.
-                         (,(dsd-index-cached 'built-in-classoid 'sb-kernel::predicate) .
-                          ,(make-random-descriptor sb-vm:unbound-marker-widetag))
-                         (,(dsd-index-cached 'classoid 'sb-kernel::subclasses) . nil)
-                         ;; Even though (gethash (classoid-name obj) *cold-layouts*) may exist,
-                         ;; we nonetheless must set LAYOUT to NIL or else warm build fails
-                         ;; in the twisty maze of class initializations.
-                         (,(dsd-index-cached 'classoid 'layout) . nil))))
-                  (if (typep obj 'built-in-classoid)
-                      slots-to-omit
-                      ;; :predicate is not a slot. Don't mess up the object
-                      ;; by omitting a slot at the same index as it.
-                      (cdr slots-to-omit))))))
+              (typecase obj
+                (classoid
+                 (let ((slots-to-omit
+                         `(;; :predicate will be patched in during cold init.
+                           (,(dsd-index-cached 'built-in-classoid 'sb-kernel::predicate) .
+                            ,(make-random-descriptor sb-vm:unbound-marker-widetag))
+                           (,(dsd-index-cached 'classoid 'sb-kernel::subclasses) . nil))))
+                   (if (typep obj 'built-in-classoid)
+                       slots-to-omit
+                       ;; :predicate is not a slot. Don't mess up the object
+                       ;; by omitting a slot at the same index as it.
+                       (cdr slots-to-omit))))))
             (dd-slots (type-dd-slots-or-lose host-type))
             ;; ASSUMPTION: all slots consume 1 storage word
             (dd-len (+ sb-vm:instance-data-start (length dd-slots)))
@@ -1526,23 +1549,36 @@ core and return a descriptor to it."
              ((word sb-vm:signed-word)
               (write-wordindexed/raw result (+ sb-vm:instance-slots-offset index)
                                      (or (cdr override) (funcall reader obj)))))))
-       (cond ((classoid-p obj) ; Place classoid into its classoid-cell.
+       (cond ((classoid-p obj)
               (let ((cell (cold-find-classoid-cell (classoid-name obj) :create t)))
                 (write-slots cell :classoid result)))
              ((ctype-p obj)
               ;; If OBJ belongs in a hash container, then deduce which
               (let* ((hashset (sb-kernel::ctype->hashset-sym obj))
                      (preload
-                      (cond ((and hashset (hashset-find (symbol-value hashset) obj))
-                             hashset)
-                            ((and (member-type-p obj)
-                                  ;; NULL is a hardwired case in the MEMBER type constructor
-                                  (neq obj (specifier-type 'null))
-                                  (type-singleton-p obj))
-                             'sb-kernel::*eql-type-cache*))))
-                (when preload ; Record it
+                       (cond ((and hashset (hashset-find (symbol-value hashset) obj))
+                              hashset)
+                             ((and (member-type-p obj)
+                                   ;; NULL is a hardwired case in the MEMBER type constructor
+                                   (neq obj (specifier-type 'null))
+                                   (type-singleton-p obj))
+                              'sb-kernel::*eql-type-cache*))))
+                (when preload           ; Record it
                   (cold-push (cold-cons result preload) 'sb-kernel::*!initial-ctypes*)))))
        result))))
+
+(defun layout-to-core (warm-layout)
+  (let* ((name (sb-kernel::layout-proper-name warm-layout))
+         (existing-layout (gethash name *cold-layouts*)))
+    (if existing-layout
+        (cold-layout-descriptor existing-layout)
+        (make-cold-layout name
+                          (layout-depthoid warm-layout)
+                          (layout-flags warm-layout)
+                          (layout-length warm-layout)
+                          (layout-bitmap warm-layout)
+                          (vector-in-core (map 'list #'layout-to-core
+                                               (layout-inherits warm-layout)))))))
 
 (defun initialize-layouts ()
   (flet ((chill-layout (name &rest inherits)
@@ -1571,6 +1607,80 @@ core and return a descriptor to it."
         (chill-layout 'null t-layout sequence list symbol))
       (chill-layout 'sb-lockless::list-node t-layout s-o-layout)
       (chill-layout 'stream t-layout))))
+
+;; An association of xc classes to their target descriptors.
+(defvar *cold-instances*)
+(declaim (type hash-table *cold-instances*))
+
+;;; Reflect a model of a target standard instance as a cold instance.
+#+nil
+(defun chill-standard-instance (instance)
+  (declare (optimize debug))
+  (aver (typep instance 'sb-pcl::standard-instance))
+  (or (gethash instance *cold-instances*)
+      (let* ((host-type (sb-xc:class-name (sb-xc:class-of instance)))
+             (host-layout (%instance-layout instance))
+             (layout-type (classoid-name (layout-classoid host-layout)))
+             (target-layout (let ((existing-layout (gethash layout-type *cold-layouts*)))
+                              (or (and existing-layout (cold-layout-descriptor existing-layout))
+                                  (chill-layout layout-type)
+                                  (error "No target layout for ~S" layout-type))))
+             (result (if (sb-pcl::funcallable-instance-p instance)
+                         (allocate-funcallable-instance 1
+                                                        target-layout
+                                                        *dynamic*)
+                         (allocate-struct 1 ;;; For the slots vector.
+                                          target-layout
+                                          *dynamic*))))
+        (setf (gethash instance *cold-instances*) result)
+        (if (sb-pcl::funcallable-instance-p instance)
+            (write-wordindexed result
+                               sb-vm:funcallable-instance-info-offset
+                               (vector-in-core (map 'list
+                                                    #'host-constant-to-core
+                                                    (sb-pcl::fsc-instance-slots instance))))
+            (write-wordindexed result
+                               sb-vm:instance-slots-offset
+                               (vector-in-core (map 'list
+                                                    #'host-constant-to-core
+                                                    (sb-pcl::std-instance-slots instance)))))
+        #-(and compact-instance-header x86-64)
+        (write-wordindexed result
+                           (if (sb-pcl::funcallable-instance-p instance)
+                               sb-vm:funcallable-instance-info-offset
+                               sb-vm:instance-slots-offset)
+                           (typecase instance
+                             (sb-pcl::standard-instance
+                              (sb-pcl::standard-instance-hash-code instance))
+                             (sb-pcl::standard-funcallable-instance
+                              (sb-pcl::standard-funcallable-instance-hash-code instance))))
+        result)))
+
+;;; Resolve classoid cells and place their pcl classes into them. Also
+;;; fixup layouts to have pointers to their classoids.
+(defun finalize-classoids ()
+  (let ((classoids))
+    ;; Place the pcl-class into its classoid-cell.
+    (maphash
+     (lambda (name cold-layout)
+       (let ((classoid (find-classoid name nil))
+             (cell (cold-find-classoid-cell name :create t)))
+         (when (and classoid
+                    (not (structure-classoid-p classoid)))
+           (let ((target-classoid (ctype-to-core classoid))
+                 (target-layout (cold-layout-descriptor cold-layout)))
+             (write-slots cell
+                          :classoid target-classoid
+                          :pcl-class (instance-to-core (find-class name)))
+             (write-slots target-layout
+                          :classoid target-classoid)))))
+     *cold-layouts*)))
+
+(defun set-gdefinitions ()
+  (maphash (lambda (name function)
+             (cold-fset name (host-constant-to-core function)))
+           sb-pcl::*gdefinitions*))
+
 
 ;;;; interning symbols in the cold image
 
@@ -1685,6 +1795,56 @@ core and return a descriptor to it."
   (ensure-gethash name *uninterned-symbol-table*
                   (allocate-symbol sb-vm:symbol-size nil name)))
 
+(defun instance-to-core (instance)
+  (declare (type sb-kernel::xc-instance instance))
+  (or (gethash instance *cold-instances*)
+      (let* ((length (%instance-length instance))
+             (data (sb-kernel::xc-instance-data instance))
+             (result (allocate-struct length
+                                      (layout-to-core (%instance-layout instance)))))
+        (setf (gethash instance *cold-instances*)
+              result)
+        (dotimes (i length)
+          (write-wordindexed result
+                             (+ i sb-vm:instance-slots-offset)
+                             (host-constant-to-core (svref data i))))
+        result)))
+
+(defun funcallable-instance-to-core (fin)
+  (declare (funcallable-instance fin))
+  (or (gethash fin *cold-instances*)
+      (let* ((gspace *dynamic*)
+             (layout (%fun-layout fin))
+             (info (sb-kernel::funcallable-instance-info fin))
+             ;; EVIL HARDCODED CRAP FIXME MISSING SOME WORDS
+             (nwords (+ 2
+                        #-compact-instance-header 1
+                        ;(length info)
+                        ))
+             ;; Add +1 for the header.
+             (object (allocate-object gspace
+                                      (1+ nwords)
+                                      sb-vm:fun-pointer-lowtag))
+             (target-layout (layout-to-core layout)))
+        (setf (gethash fin *cold-instances*)
+              object)
+        ;; Length as stored in the header is the exact number of useful words
+        ;; that follow, as is customary. A padding word, if any is not "useful"
+        (write-header-word
+         object
+         (logior #+compact-instance-header (ash (descriptor-bits layout) 32)
+                 (ash nwords sb-vm:funcallable-instance-info-offset)
+                 sb-vm:funcallable-instance-widetag))
+        (write-wordindexed/raw object sb-vm:funcallable-instance-trampoline-slot
+                               (lookup-assembler-reference 'sb-vm::funcallable-instance-tramp))
+        (write-wordindexed object sb-vm:funcallable-instance-function-slot (host-constant-to-core (%funcallable-instance-fun fin)))
+        #-compact-instance-header
+        (write-wordindexed object sb-vm:funcallable-instance-layout-slot target-layout)
+        (dotimes (i (length info))
+          (write-wordindexed object (+ sb-vm:funcallable-instance-info-offset i)
+                             (host-constant-to-core (aref info i))))
+        object)))
+
 ;;; Dump the target representation of HOST-VALUE,
 ;;; the type of which is in a restrictive set.
 (defun host-constant-to-core (host-value &optional helper)
@@ -1710,6 +1870,18 @@ core and return a descriptor to it."
                                (target-representation (cdr value))))
               (simple-vector
                (vector-in-core (map 'list #'target-representation value)))
+              (sb-kernel::xc-instance
+               (instance-to-core value))
+              (sb-kernel::layout
+               (layout-to-core value))
+              (function
+               (cold-symbol-function 'constantly-nil))
+              (condition
+               (make-descriptor #xdeadbeef))
+              (sb-kernel::funcallable-instance
+               (funcallable-instance-to-core value))
+              ((or sb-pcl::cache sb-pcl::pv-table sb-pcl::arg-info sb-pcl::initial sb-pcl::slot-info sb-pcl::n-n sb-pcl::one-class sb-pcl::one-index)
+               (make-descriptor #xdeadbeef))
               (t
                (or (and helper (funcall helper value))
                    (error "host-constant-to-core: can't convert ~S"
@@ -2715,6 +2887,7 @@ Legal values for OFFSET are -4, -8, -12, ..."
 ;;; sort key for this because we don't have multiple inheritance in
 ;;; the system object type lattice.
 (defun sort-initial-methods ()
+  (declare (optimize debug))
   (cold-set
    'sb-pcl::*!initial-methods*
    (list-to-core
@@ -2724,8 +2897,8 @@ Legal values for OFFSET are -4, -8, -12, ..."
            (cold-intern gf-name)
            (vector-in-core
             (loop for (class fun)
-                    ;; Methods must be sorted because we invoke
-                    ;; only the first applicable one.
+                  ;; Methods must be sorted because we invoke
+                  ;; only the first applicable one.
                     in (stable-sort methods #'> ; highest depthoid first
                                     :key (lambda (method)
                                            (class-depthoid (warm-symbol (car method)))))
@@ -4174,6 +4347,7 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
            (*host->cold-ctype* (make-hash-table))
            (*cold-layouts* (make-hash-table :test 'eq)) ; symbol -> cold-layout
            (*cold-layout-by-addr* (make-hash-table :test 'eql)) ; addr -> cold-layout
+           (*cold-instances* (make-hash-table :test 'eq)) ; host instance -> cold-instance
            (*tls-index-to-symbol* nil)
            ;; '*COLD-METHODS* is never seen in the target, so does not need
            ;; to adhere to the #\! convention for automatic uninterning.
@@ -4236,6 +4410,10 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
               *!cold-toplevels*)
         (cold-load file-name verbose (find file-name foptrace-file-names :test 'equal)))
 
+      (when core-file-name
+        (finalize-classoids)
+        (set-gdefinitions))
+
       (sb-cold::check-no-new-cl-symbols)
 
       (when (and verbose core-file-name)
@@ -4293,7 +4471,7 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
   #+host-quirks-sbcl (declare (host-sb-ext:muffle-conditions host-sb-ext:compiler-note))
   (format stream "#include ~S
 extern unsigned char *gc_card_mark;~%" (lispobj-dot-h))
-
+  (break)
   #-soft-card-marks
   (progn
     (aver (= ncards 1))

@@ -262,7 +262,7 @@ bootstrapping.
                     (arglist (elt qab arglist-pos))
                     (qualifiers (subseq qab 0 arglist-pos))
                     (body (nthcdr (1+ arglist-pos) qab)))
-               `(defmethod ,fun-name ,@qualifiers ,arglist ,@body))))
+               `(sb-xc:defmethod ,fun-name ,@qualifiers ,arglist ,@body))))
       (macrolet ((initarg (key) `(getf initargs ,key)))
         (dolist (option options)
           (let ((car-option (car option)))
@@ -387,6 +387,7 @@ bootstrapping.
          :format-arguments format-arguments))
 
 (defun check-gf-lambda-list (lambda-list)
+  #-sb-xc-host
   (declare (muffle-conditions compiler-note))
   (binding* ((context "a generic function lambda list")
              ((nil nil optional nil keys)
@@ -426,13 +427,13 @@ bootstrapping.
   method-lambda)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (fmakunbound 'defmethod))
+  (fmakunbound 'sb-xc:defmethod))
 ;;; As per CLHS -
 ;;; "defmethod is not required to perform any compile-time side effects."
 ;;; and we don't do much other than to make the function known to be defined,
 ;;; which means that checking of callers' arglists can only occur after called
 ;;; methods are actually loaded.
-(defmacro defmethod (name &rest args)
+(defmacro sb-xc:defmethod (name &rest args)
   (check-designator name 'defmethod #'legal-fun-name-p "function name")
   (multiple-value-bind (qualifiers lambda-list body)
       (parse-defmethod args)
@@ -581,6 +582,7 @@ bootstrapping.
 (defun make-defmethod-form
     (name qualifiers specializers unspecialized-lambda-list
      method-class-name initargs-form)
+  #-sb-xc-host
   (declare (sb-ext:muffle-conditions sb-ext:code-deletion-note))
   (let (fn
         fn-lambda)
@@ -1512,6 +1514,7 @@ bootstrapping.
                 (setq restp (constant-form-value restp))
                 (with-unique-names (emf-n)
                   `(locally
+                       #-sb-xc-host
                        (declare (optimize (sb-c:insert-step-conditions 0)))
                      (let ((,emf-n ,emf))
                        (trace-emf-call ,emf-n ,restp (list ,@required-args ,@rest-arg))
@@ -1630,6 +1633,7 @@ bootstrapping.
      &environment env)
   (let* ((next-method-p-def
           `((next-method-p ()
+              #-sb-xc-host
               (declare (optimize (sb-c:insert-step-conditions 0)))
               (not (null ,next-method-call)))))
          (rebindings (when (or setq-p call-next-method-p)
@@ -1641,7 +1645,9 @@ bootstrapping.
         `(flet (,@(when call-next-method-p
                     `((call-next-method (&rest cnm-args)
                         (declare (dynamic-extent cnm-args)
+                                 #-sb-xc-host
                                  (muffle-conditions code-deletion-note)
+                                 #-sb-xc-host
                                  (optimize (sb-c:insert-step-conditions 0)))
                         ,@(if (safe-code-p env)
                               `((%check-cnm-args cnm-args (list ,@args)
@@ -1764,6 +1770,7 @@ bootstrapping.
                  ;; (let ((arg1 (truly-the specialization1 arg1))
                  ;;       (arg2 (truly-the specialization2 arg2)) ...
                  ;; and then having ordinary transforms kick in.
+                 #-sb-xc-host
                  (when (var-declaration '%parameter var env)
                    ;; If a parameter is shadowed by another binding it won't have a
                    ;; %PARAMETER declaration.
@@ -1791,6 +1798,12 @@ bootstrapping.
                       (funcall fun form slots required-parameters env))
                     form))
                (t form))))
+      #+sb-xc-host
+      (values method-lambda
+              call-next-method-p
+              (not (null parameters-setqd))
+              parameters-setqd)
+      #-sb-xc-host
       (let* ((sb-walker::*walk-form-preserve-source* t)
              (walked-lambda (walk-form method-lambda env #'walk-function)))
         ;;; FIXME: the walker's rewriting of the source code causes
@@ -1988,6 +2001,11 @@ bootstrapping.
                            macro.~@:>")
           :format-arguments (list fun-name)))
 
+(define-load-time-global *sgf-wrapper*
+  (!boot-make-wrapper (!early-class-size 'standard-generic-function)
+                      'standard-generic-function
+                      sb-kernel::funinstance-layout-bitmap))
+
 (define-load-time-global *sgf-slots-init*
   (mapcar (lambda (canonical-slot)
             (if (memq (getf canonical-slot :name) '(arg-info source))
@@ -2184,6 +2202,17 @@ bootstrapping.
            (!bootstrap-slot-index 'global-boundp-method s)
            (!bootstrap-slot-index 'global-makunbound-method s))))
 
+(declaim (list **standard-method-classes**))
+(defglobal **standard-method-classes** nil)
+
+(defconstant-eqx +standard-method-class-names+
+  '(standard-method standard-reader-method
+    standard-writer-method
+    global-reader-method global-writer-method
+    global-boundp-method
+    global-makunbound-method)
+  #'equal)
+
 (defun safe-method-specializers (method)
   (if (member (class-of method) **standard-method-classes** :test #'eq)
       (clos-slots-ref (std-instance-slots method) +sm-specializers-index+)
@@ -2255,6 +2284,9 @@ bootstrapping.
       (setf (gf-info-c-a-m-emf-std-p arg-info) std-p)
       (unless (gf-info-c-a-m-emf-std-p arg-info)
         (setf (gf-info-simple-accessor-type arg-info) t))))
+
+  ;; Let dfuns and emfs be pre-computed for "normal" PCL methods, not
+  ;; the ones generated in the course of optimizations.
   (unless was-valid-p
     (let ((name (if (eq **boot-state** 'complete)
                     (generic-function-name gf)
@@ -2266,11 +2298,15 @@ bootstrapping.
                             *internal-pcl-generalized-fun-name-symbols*))
                nil)
               (t (let* ((symbol (fun-name-block-name name))
-                        (package (symbol-package symbol))
+                        (package (sb-xc:symbol-package symbol))
                         (pcl-package #.(find-package "SB-PCL")))
                    (and (or (eq package pcl-package)
+                            ;; XXX: I made a non-trivial change that
+                            ;; matches the initial PCL implementation
+                            ;; though and helped fix bootstrapping
+                            ;; CLASS-NAME.
+                            (eq package *cl-package*)
                             (memq package (package-use-list pcl-package)))
-                        (not (eq package *cl-package*))
                         ;; FIXME: this test will eventually be
                         ;; superseded by the *internal-pcl...* test,
                         ;; above.  While we are in a process of
@@ -2573,6 +2609,7 @@ bootstrapping.
 (defun !early-make-a-method (class qualifiers arglist specializers initargs doc
                             &key slot-name object-class method-class-function
                             ((source source)))
+  #-sb-xc-host
   (aver (notany #'sb-pcl::eql-specializer-p specializers))
   (binding*
       ;; Figure out whether we got class objects or class names as the
@@ -2901,7 +2938,7 @@ bootstrapping.
            (when (symbolp instance)
              `((declare (%variable-rebinding ,instance-var ,instance)))))))
 
-  (defmacro with-slots (slots instance &body body)
+  (sb-xc:defmacro with-slots (slots instance &body body)
     (let ((in (gensym)))
       `(let ((,in ,instance))
          (declare (ignorable ,in))
@@ -2924,7 +2961,7 @@ bootstrapping.
                       slots)
            ,@body))))
 
-  (defmacro with-accessors (slots instance &body body)
+  (sb-xc:defmacro with-accessors (slots instance &body body)
     (let ((in (gensym)))
       `(let ((,in ,instance))
          (declare (ignorable ,in))

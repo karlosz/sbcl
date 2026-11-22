@@ -790,6 +790,9 @@ NOTE: This interface is experimental and subject to change."
 (defun legal-class-name-p (thing)
   (symbolp thing))
 
+;;; XXX: Is this the right place?
+(defun interned-symbol-p (x) (and (symbolp x) (cl:symbol-package x)))
+
 ;;; * extended-function-designator: an object that denotes a function and that is one of:
 ;;;   a function name (denoting the function it names in the global environment),
 ;;;   or a function (denoting itself). The consequences are undefined if a function name

@@ -49,13 +49,13 @@
                                                                 ',slot-vars))
                       ,@slot-vars)))))
 
-(sb-xc:defmacro %new-instance (layout size)
+(defmacro %new-instance (layout size)
   `(let* ((l ,layout)
           (i (truly-the ,(if (constantp layout) (layout-classoid layout) 'instance)
                         (%make-instance ,size))))
      (%set-instance-layout i l)
      i))
-(sb-xc:defmacro %new-instance* (layout len)
+(defmacro %new-instance* (layout len)
   `(let ((i (truly-the
              ,(if (constantp layout) (layout-classoid layout) 'instance)
              (if (logtest (layout-flags ,layout) sb-vm::+strictly-boxed-flag+)
@@ -2420,6 +2420,8 @@ or they must be declared locally notinline at each call site.~@:>"
                          (dsd-name dsd)
                          (dsd-accessor-name dsd)))))
             (t
+             (print 'pcl-object-encountered)
+             #+nil ; XXX
              (error "Missing DD for ~S" pair))))))
     (format output ";; EOF~%")))
 
@@ -2428,27 +2430,38 @@ or they must be declared locally notinline at each call site.~@:>"
 ;; Emulate variable-length structures for COMPILED-DEBUG-INFO.
 (defun %instance-length (instance)
   (declare (notinline layout-length))
-  (let ((basic (layout-length (%instance-layout instance))))
-    (if (sb-c::compiled-debug-info-p instance)
-        (+ (1- basic)
-           (length (the simple-vector (sb-c::compiled-debug-info-rest instance))))
-        basic)))
+  (if (xc-instance-p instance)
+      (length (xc-instance-data instance))
+      (let ((basic (layout-length (%instance-layout instance))))
+        (if (sb-c::compiled-debug-info-p instance)
+            (+ (1- basic)
+               (length (the simple-vector (sb-c::compiled-debug-info-rest instance))))
+            basic))))
 (defun %instance-ref (instance index)
-  (let* ((layout (%instance-layout instance))
-         (map (layout-index->accessor-map layout)))
-    (when (zerop (length map)) ; construct it on demand
-      (let ((slots (dd-slots (layout-%info layout))))
-        (setf map (make-array (1+ (reduce #'max slots :key #'dsd-index))
-                              :initial-element nil)
-              (layout-index->accessor-map layout) map)
-        (dolist (dsd slots)
-          (setf (aref map (dsd-index dsd)) (dsd-accessor-name dsd)))))
-    (if (and (sb-c::compiled-debug-info-p instance)
-             (>= index (1- (length map))))
-        (aref (sb-c::compiled-debug-info-rest instance) (- index (1- (length map))))
-        (funcall (aref map index) instance)))))
+  (cond ((xc-instance-p instance)
+         (svref (xc-instance-data instance) index))
+        ((funcall 'sb-pcl::standard-funcallable-instance-p instance)
+         (svref (funcall 'sb-pcl::standard-funcallable-instance-clos-slots instance) index))
+        (t
+         (let* ((layout (%instance-layout instance))
+                (map (layout-index->accessor-map layout)))
+           (when (zerop (length map))    ; construct it on demand
+             (let ((slots (dd-slots (layout-%info layout))))
+               (setf map (make-array (1+ (reduce #'max slots :key #'dsd-index))
+                                     :initial-element nil)
+                     (layout-index->accessor-map layout) map)
+               (dolist (dsd slots)
+                 (setf (aref map (dsd-index dsd)) (dsd-accessor-name dsd)))))
+           (if (and (sb-c::compiled-debug-info-p instance)
+                    (>= index (1- (length map))))
+               (aref (sb-c::compiled-debug-info-rest instance) (- index (1- (length map))))
+               (funcall (aref map index) instance)))))))
 
 (defun %raw-instance-ref/word (instance index) (%instance-ref instance index))
+
+(defun set-layout-inherits (layout inherits structurep this-id)
+  (declare (ignore structurep this-id))
+  (setf (layout-inherits layout) inherits))
 ) ; end PROGN
 
 (/show0 "code/defstruct.lisp end of file")

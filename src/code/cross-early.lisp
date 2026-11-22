@@ -31,7 +31,7 @@
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (cl:defconstant ,@args)))
 
-(defgeneric sb-xc:make-load-form (obj &optional env))
+(cl:defgeneric sb-xc:make-load-form (obj &optional env))
 
 ;;; Restore normalcy of MOD and RATIONAL as type specifiers.
 (deftype mod (n) `(integer 0 ,(1- n)))

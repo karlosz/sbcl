@@ -303,6 +303,7 @@
        ;; by one of the two fixed key-count cases. I'm not sure it matters.
        (t
         (flet ((matchp (base layout-list)
+                 #-sb-xc-host
                  (declare (optimize (sb-c::type-check 0)))
                  (loop for offset of-type index from 0 below key-count
                        always (eq (svref vector (truly-the index (+ base offset)))

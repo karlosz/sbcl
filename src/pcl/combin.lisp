@@ -147,6 +147,9 @@
       `(combined-method ,(generic-function-name gf))))
 
 (defun maybe-trace-method (gf method fun fmf-p)
+  #+sb-xc-host
+  fun
+  #-sb-xc-host
   (let ((m-name (when (plusp (hash-table-count sb-debug::*traced-funs*))
                   ;; KLUDGE: testing if *TRACE-FUNS* has anything anything to
                   ;; avoid calling METHOD-TRACE-NAME during PCL bootstrapping
@@ -268,6 +271,7 @@
 
 (defun expand-effective-method-function (gf effective-method &optional env)
   (declare (ignore env))
+  #-sb-xc-host
   (declare (muffle-conditions code-deletion-note))
   (multiple-value-bind (nreq applyp)
       (get-generic-fun-info gf)

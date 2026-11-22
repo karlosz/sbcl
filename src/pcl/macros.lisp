@@ -27,7 +27,7 @@
 (in-package "SB-PCL")
 
 (defglobal *optimize-speed*
-  '(optimize (speed 3) (safety 0) (sb-ext:inhibit-warnings 3) (debug 0)))
+  '(optimize (speed 3) (safety 0) #-sb-xc-host (sb-ext:inhibit-warnings 3) (debug 0)))
 
 (declaim (declaration
           ;; These nonstandard declarations seem to be used privately

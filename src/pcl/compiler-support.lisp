@@ -61,7 +61,7 @@
                  (symbolp slot)
                  (symbolp class))
         (values t slot)))))
-
+#-sb-xc-host ; FIXME: set-info-value barfs?
 (define-internal-pcl-function-name-syntax sb-pcl::fast-method (list)
   (valid-function-name-p (cadr list)))
 

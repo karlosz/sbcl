@@ -120,7 +120,8 @@
            ;; signed zeros. I'm not sure if the answer has to match SBCL's
            ;; answer, but this makes it so it does.
            (single-float #.(sxhash-single-float-xform 'obj))
-           (double-float #.(sxhash-double-float-xform 'obj)))))
+           (double-float #.(sxhash-double-float-xform 'obj))
+           (t (cl:sxhash obj)))))
     (push (cons obj answer) *sxhash-crosscheck*)
     answer))
 

@@ -133,6 +133,7 @@
   "Set the name of a compiled function object. Return the function."
   (when (valid-function-name-p fun)
     (setq fun (fdefinition fun)))
+  #-sb-xc-host ; FIXME
   (typecase fun
     (%method-function fun)
     ;; a closure potentially becomes a different closure
@@ -183,6 +184,7 @@
   ;; Suppress a code-deletion note.  FIXME: doing the FIXME above,
   ;; integrating PCL more with the compiler, would remove the need for
   ;; this icky stuff.
+  #-sb-xc-host
   (declare (optimize (inhibit-warnings 3)))
   ;; Was: (WHEN (PCL-INSTANCE-P INSTANCE) (GET-SLOTS INSTANCE))
   ;; but we can do better then to perform STD-/FSC- discrimination twice

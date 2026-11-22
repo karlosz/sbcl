@@ -125,6 +125,7 @@
 ;;;
 
 ;;; Type is either CTOR, for MAKE-INSTANCE, or ALLOCATOR, for ALLOCATE-INSTANCE
+#-sb-xc-host
 (!defstruct-with-alternate-metaclass ctor
   :slot-names (type class-or-name class initargs state safe-p)
   :constructor %make-ctor

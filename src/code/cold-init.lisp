@@ -124,6 +124,9 @@
     (when list
       (format t "~&cross-compiler SXHASH tests passed: ~D cases~%" (length list)))))
 
+#+nil
+(defclass moo () ())
+
 ;;; called when a cold system starts up
 (defun !cold-init ()
   "Give the world a shove and hope it spins."
@@ -343,6 +346,10 @@
   (/show0 "enabling GC")
   (setq *gc-inhibit* nil)
   #+sb-thread (finalizer-thread-start)
+
+  ;; Let's put PCL in the braid state right before doing the rest of
+  ;; PCL init.
+  (setq sb-pcl::**boot-state** 'sb-pcl::braid)
 
   ;; The show is on.
   (/show0 "going into toplevel loop")

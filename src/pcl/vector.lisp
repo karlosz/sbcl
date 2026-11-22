@@ -635,7 +635,7 @@
                   &rest forms)
   ;; Decide which expansion to use based on the state of the PV-ENV-ENVIRONMENT
   ;; symbol-macrolet.
-  (if (eq (macroexpand 'pv-env-environment env) 'default)
+  (if (eq (#+sb-xc-host cl:macroexpand #-sb-xc-host macroexpand 'pv-env-environment env) 'default)
       `(locally (declare (simple-vector .pv.))
          ,@forms)
       `(let* ((.pv-table. ,pv-table-form)

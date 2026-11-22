@@ -112,7 +112,7 @@
 ;;; After the metabraid has been setup, and the protocol for defining
 ;;; classes has been defined, the real definition of LOAD-DEFCLASS is
 ;;; installed by the file std-class.lisp
-(sb-xc:defmacro defclass (&environment env name direct-superclasses direct-slots &rest options)
+(defmacro defclass (&environment env name direct-superclasses direct-slots &rest options)
   (check-class-name name nil)
   (let (*initfunctions-for-this-defclass*
         *readers-for-this-defclass* ;Truly a crock, but we got
@@ -150,7 +150,7 @@
                                    ',*writers-for-this-defclass*
                                    ',*slot-names-for-this-defclass*
                                    (sb-c:source-location)
-                                   ,@(and (safe-code-p env)
+                                   ,@(and #-sb-xc-host (safe-code-p env)
                                           '(t))))))
           (if defstruct-p
               (progn
@@ -242,7 +242,7 @@
       (values (or metaclass 'standard-class) (nreverse canonized-options))))
 
 (defun canonize-defclass-slot (class-name metaclass spec env)
-  (let ((location (sb-c::make-definition-source-location))
+  (let ((location #+sb-xc-host nil #-sb-xc-host (sb-c::make-definition-source-location))
         (spec (sb-int:ensure-list spec)))
     (when (and (cdr spec) (null (cddr spec)))
       (%program-error "~@<in DEFCLASS ~S, the slot specification ~S ~
@@ -360,6 +360,7 @@
                                (gensym)
                                `(function
                                  (lambda ()
+                                  #-sb-xc-host
                                   (declare (optimize (sb-c:store-coverage-data 0)
                                                      (sb-c:verify-arg-count 0)))
                                   ,initform))))

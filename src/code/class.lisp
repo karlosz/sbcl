@@ -116,12 +116,13 @@
                        (typep classoid 'undefined-classoid))
                (sb-c:compiler-error "can't dump ~S" layout))
              `(xc-load-layout ',name
-                               ,(layout-depthoid layout)
-                               (vector ,@(map 'list #'externalize (layout-inherits layout)))
-                               ,(layout-length layout)
-                               ,(layout-bitmap layout))))
+                              ,(layout-depthoid layout)
+                              (vector ,@(map 'list #'externalize (layout-inherits layout)))
+                              ,(layout-length layout)
+                              ,(layout-bitmap layout)
+                              ,(layout-flags layout))))
     (externalize layout)))
-(defun xc-load-layout (name depthoid inherits length bitmap)
+(defun xc-load-layout (name depthoid inherits length bitmap flags)
   (let ((classoid (find-classoid name)))
     (aver (and classoid (not (undefined-classoid-p classoid))))
     (let ((layout (classoid-layout classoid)))
@@ -129,9 +130,10 @@
                    (= (length (layout-inherits layout)) (length inherits))
                    (every #'eq (layout-inherits layout) inherits)
                    (= (layout-length layout) length)
-                   (= (layout-bitmap layout) bitmap))
+                   (= (layout-bitmap layout) bitmap)
+                   (= (layout-flags layout) flags))
         (error "XC can't reload layout for ~S with ~S vs ~A"
-               name (list depthoid inherits length bitmap) layout))
+               name (list depthoid inherits length bitmap flags) layout))
       layout)))
 ) ; end PROGN
 
@@ -1336,7 +1338,8 @@ between the ~A definition and the ~A definition"
                                         (list (car inherits))
                                         '(t))))
        x
-     (declare (ignorable codes state translation trans-p predicate))
+     (declare (ignorable codes state translation trans-p predicate
+                         length hierarchical-p))
      ;; instance metatypes and T don't need a prototype, everything else does
      (unless (or prototype-form depth (eq name 't))
        (error "Missing prototype in ~S" x))
@@ -1371,6 +1374,7 @@ between the ~A definition and the ~A definition"
        (unless trans-p
          (setf (info :type :builtin name) classoid))
        #-sb-xc-host (setf (info :type :builtin name) (or translation classoid))
+       #+sb-xc-host
        (let* ((inherits-vector
                 (map 'simple-vector
                      (lambda (x)

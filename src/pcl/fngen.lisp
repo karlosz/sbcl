@@ -24,6 +24,11 @@
 (in-package "SB-PCL")
 
 (defun pcl-compile (expr safety)
+  ;; TODO: We need to actually cross compile here as well, and build a
+  ;; different kind of function. Maybe with a hash table again to
+  ;; attach the cross compiled version to the host version.
+  (compile nil expr)
+  #-sb-xc-host
   (labels ((strictly-heap-p (x)
              (or (atom x)
                  (and (heap-allocated-p x) (strictly-heap-p (cdr x)))))

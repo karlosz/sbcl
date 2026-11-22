@@ -65,5 +65,4 @@
 ;;; It seems only reasonable to also export this for users, since
 ;;; otherwise dealing with STANDARD-INSTANCE-ACCESS becomes harder
 ;;; -- and slower -- than it needs to be.
-#-sb-xc-host (define-symbol-macro +slot-unbound+ (make-unbound-marker))
-
+(define-symbol-macro +slot-unbound+ (make-unbound-marker))
