@@ -13,18 +13,6 @@
 
 (in-package "SB-REGALLOC")
 
-;;; TNs connected by moves, to be packed in one location. COST is that of
-;;; all their references less the moves between them, LOCATIONS those all
-;;; their SCs allow. TRIED is set once the group was tried in a register.
-(defstruct (move-group (:constructor make-move-group (tn)))
-  (tns (list tn) :type list)
-  (cost (tn-cost tn) :type fixnum)
-  (locations 0 :type sc-locations)
-  (tried nil :type boolean))
-
-(defun move-group (tn groups)
-  (and groups (gethash tn groups)))
-
 ;;; for debugging: some parameters controlling which optimizations we
 ;;; attempt
 (defvar *pack-assign-costs* t)
@@ -1945,6 +1933,20 @@
 ;;; location. The TNs themselves are not merged, so debug info is
 ;;; unaffected.
 
+;;; TNs connected by moves, to be packed in one location. COST is that of
+;;; all their references less the moves between them, LOCATIONS those all
+;;; their SCs allow. TRIED is set once the group was tried in a
+;;; register: what a split left over, or all of it if nothing suits,
+;;; goes on the stack in the final pass and is not to be tried again.
+(defstruct (move-group (:constructor make-move-group (tn)))
+  (tns (list tn) :type list)
+  (cost (tn-cost tn) :type fixnum)
+  (locations (tn-group-locations tn) :type sc-locations)
+  (tried nil :type boolean))
+
+(defun move-group (tn groups)
+  (and groups (gethash tn groups)))
+
 (defun groupable-tn-p (tn)
   (and (member (tn-kind tn) '(:normal :debug-environment))
        (sb-c::lambda-var-p (tn-leaf tn))
@@ -1985,7 +1987,6 @@
     (flet ((group (tn)
              (or (gethash tn groups)
                  (let ((group (make-move-group tn)))
-                   (setf (move-group-locations group) (tn-group-locations tn))
                    (setf (gethash tn groups) group)))))
       (dolist (move (stable-sort moves #'> :key #'first))
         (destructuring-bind (weight from to) move
@@ -2125,6 +2126,8 @@
                  (move-group-cost group) (reduce #'+ tns :key #'tn-cost)
                  (move-group-locations group)
                  (reduce #'logand tns :key #'tn-group-locations)
+                 ;; What a split left over goes on the stack, not in
+                 ;; a register.
                  (move-group-tried group) t)
            (dolist (tn tns)
              (setf (gethash tn groups) group))
