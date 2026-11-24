@@ -111,8 +111,6 @@ void arch_skip_instruction(os_context_t *context)
 #endif
         case trap_PendingInterrupt:
         case trap_Halt:
-        case trap_SingleStepAround:
-        case trap_SingleStepBefore:
             /* only needed to skip the Code */
             break;
 

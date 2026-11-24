@@ -724,12 +724,10 @@
      (:info    ,@(unless (or variable (eq return :tail)) '(arg-locs))
                ,@(unless variable '(nargs))
                ,@(when (eq named :direct) '(fun))
-               ,@(when (eq return :fixed) '(nvals))
-               step-instrumenting)
+               ,@(when (eq return :fixed) '(nvals)))
 
      (:ignore  ,@(unless (or variable (eq return :tail)) '(arg-locs))
-               ,@(unless variable '(args))
-               ,@(when (eq named :direct) '(step-instrumenting)))
+               ,@(unless variable '(args)))
 
                ;; We pass either the fdefn object (for named call) or
                ;; the actual function object (for unnamed call) in
@@ -851,12 +849,6 @@
                                   (frame-word-offset ocfp-save-offset))
 
                           (move ebp-tn new-fp))))  ; NB - now on new stack frame.
-       ,@(unless (eq named :direct)  ;; handle-single-step-around-trap can't handle it
-           `((when step-instrumenting
-               (emit-single-step-test)
-               (inst jmp :e DONE)
-               (inst break single-step-around-trap))))
-       DONE
 
        (note-this-location vop ,(if (eq return :tail)
                                     :tail-call-site
@@ -1394,31 +1386,3 @@
               (t
                (check-min)))))))
 
-;;; Single-stepping
-(defun emit-single-step-test ()
-  ;; We use different ways of representing whether stepping is on on
-  ;; +SB-THREAD / -SB-THREAD: on +SB-THREAD, we use a slot in the
-  ;; thread structure. On -SB-THREAD we use the value of a static
-  ;; symbol. Things are done this way, since reading a thread-local
-  ;; slot from a symbol would require an extra register on +SB-THREAD,
-  ;; and reading a slot from a thread structure would require an extra
-  ;; register on -SB-THREAD.
-  #+sb-thread
-  (progn
-    #+win32 (inst push eax-tn)
-    (with-tls-ea (EA :base #+win32 eax-tn #-win32 :unused
-                     :disp-type :constant
-                     :disp (* thread-stepping-slot n-word-bytes))
-      (inst cmp EA 0 :maybe-fs))
-    #+win32 (inst pop eax-tn))
-  #-sb-thread
-  (inst cmp (make-ea-for-symbol-value sb-impl::*stepping*) 0))
-
-(define-vop (step-instrument-before-vop)
-  (:vop-var vop)
-  (:generator 3
-     (emit-single-step-test)
-     (inst jmp :e DONE)
-     (inst break single-step-before-trap)
-     DONE
-     (note-this-location vop :internal-error)))

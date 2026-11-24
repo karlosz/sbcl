@@ -1185,7 +1185,6 @@
             ,@(when (eq named :direct) '(fun))
             ,@(when (and (eq return :fixed)
                          (neq direct :return)) '(nvals))
-            step-instrumenting
             ,@(when (eq direct :call)
                 '(n-fixed)))
 
@@ -1290,23 +1289,7 @@
                             `(inst add nsp-tn cur-nfp (add-sub-immediate
                                                        (bytes-needed-for-non-descriptor-stack-frame)))
                             `(store-stack-tn nfp-save cur-nfp)))
-                      ((nil)))))
-                (insert-step-instrumenting ()
-                  ;; Conditionally insert a conditional trap:
-                  (when step-instrumenting
-                    (assemble ()
-                      #-sb-thread
-                      (load-symbol-value tmp-tn sb-impl::*stepping*)
-                      #+sb-thread
-                      (loadw tmp-tn thread-tn thread-stepping-slot)
-                      (inst cbz tmp-tn step-done-label)
-                      ;; CONTEXT-PC will be pointing here when the
-                      ;; interrupt is handled, not after the
-                      ;; DEBUG-TRAP.
-                      (note-this-location vop :internal-error)
-                      (inst brk single-step-around-trap)
-                      STEP-DONE-LABEL))))
-           (declare (ignorable #'insert-step-instrumenting))
+                      ((nil))))))
            ,@(case named
                ((t)
                 `((sc-case name
@@ -1317,8 +1300,7 @@
                     (constant
                      (load-constant vop name name-pass)
                      (do-next-filler)))
-                  (do-next-filler)
-                  (insert-step-instrumenting)))
+                  (do-next-filler)))
                ((nil)
                 `((sc-case arg-fun
                     (descriptor-reg (move lexenv arg-fun))
@@ -1328,7 +1310,6 @@
                     (constant
                      (load-constant vop arg-fun lexenv)
                      (do-next-filler)))
-                  (insert-step-instrumenting)
                   (do-next-filler))))
            ,@(case named
                ((t)
@@ -1844,21 +1825,4 @@
     (move vals vals-arg)
     (move nvals nvals-arg)
     (invoke-asm-routine 'return-multiple tmp-tn :tail t)))
-
-;;; Single-stepping
 
-(define-vop (step-instrument-before-vop)
-  (:vop-var vop)
-  (:generator 3
-    #-sb-thread
-    (load-symbol-value tmp-tn sb-impl::*stepping*)
-    #+sb-thread
-    (loadw tmp-tn thread-tn thread-stepping-slot)
-    (inst cbz tmp-tn DONE)
-    ;; CONTEXT-PC will be pointing here when the interrupt is handled,
-    ;; not after the BREAK.
-    (note-this-location vop :internal-error)
-    ;; A best-guess effort at a debug trap suitable for a
-    ;; single-step-before-trap.
-    (inst brk single-step-before-trap)
-    DONE))

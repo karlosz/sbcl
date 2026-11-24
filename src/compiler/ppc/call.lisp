@@ -575,8 +575,7 @@ default-value-8
     (:info ,@(unless (or variable (eq return :tail)) '(arg-locs))
            ,@(unless variable '(nargs))
            ,@(when (eq named :direct) '(fun))
-           ,@(when (eq return :fixed) '(nvals))
-           step-instrumenting)
+           ,@(when (eq return :fixed) '(nvals)))
 
      (:ignore
       ,@(unless (eq return :tail) '(return-pc-pass))
@@ -624,7 +623,6 @@ default-value-8
      ,@(when (eq return :fixed)
          '((:temporary (:scs (descriptor-reg) :from :eval) move-temp)))
 
-     (:temporary (:scs (descriptor-reg) :to :eval) stepping)
 
      ,@(unless (eq return :tail)
          '((:temporary (:scs (non-descriptor-reg)) temp)
@@ -641,7 +639,6 @@ default-value-8
        (let* ((cur-nfp (current-nfp-tn vop))
               ,@(unless (eq return :tail)
                   '((lra-label (gen-label))))
-              (step-done-label (gen-label))
               (filler
                (remove nil
                        (list :load-nargs
@@ -699,29 +696,7 @@ default-value-8
                                     '(if (> nargs register-arg-count)
                                          (move cfp-tn new-fp)
                                          (move cfp-tn csp-tn))))))
-                      ((nil)))))
-                (insert-step-instrumenting (callable-tn)
-                  ;; Conditionally insert a conditional trap:
-                  (when step-instrumenting
-                    ;; Get the symbol-value of SB-IMPL::*STEPPING*
-                    #-sb-thread
-                    (load-symbol-value stepping sb-impl::*stepping*)
-                    #+sb-thread
-                    (loadw stepping thread-base-tn thread-stepping-slot)
-                    (inst cmpwi stepping 0)
-                    ;; If it's not null, trap.
-                    (inst beq step-done-label)
-                    ;; CONTEXT-PC will be pointing here when the
-                    ;; interrupt is handled, not after the UNIMP.
-                    (note-this-location vop :internal-error)
-                    ;; Construct a trap code with the low bits from
-                    ;; SINGLE-STEP-AROUND-TRAP and the high bits from
-                    ;; the register number of CALLABLE-TN.
-                    (inst unimp (logior single-step-around-trap
-                                        (ash (reg-tn-encoding callable-tn)
-                                             8)))
-                    (emit-label step-done-label))))
-           (declare (ignorable #'insert-step-instrumenting))
+                      ((nil))))))
            ,@(case named
                ((t)
                 `((sc-case name
@@ -733,10 +708,6 @@ default-value-8
                      (loadw name-pass code-tn (tn-offset name)
                          other-pointer-lowtag)
                      (do-next-filler)))
-                  ;; The step instrumenting must be done after
-                  ;; FUNCTION is loaded, but before ENTRY-POINT is
-                  ;; calculated.
-                  (insert-step-instrumenting name-pass)
                   ;; The raw-addr (ENTRY-POINT) will be one of:
                   ;; closure-tramp, undefined-tramp, or somewhere
                   ;; within a simple-fun object.  If the latter, then
@@ -762,10 +733,6 @@ default-value-8
                   (loadw function lexenv closure-fun-slot
                       fun-pointer-lowtag)
                   (do-next-filler)
-                  ;; The step instrumenting must be done before
-                  ;; after FUNCTION is loaded, but before ENTRY-POINT
-                  ;; is calculated.
-                  (insert-step-instrumenting function)
                   (inst addi entry-point function
                         (- (ash simple-fun-insts-offset word-shift)
                            fun-pointer-lowtag))))
@@ -1208,22 +1175,4 @@ default-value-8
           ((plusp min)
            (inst twi :llt nargs (fixnumize min))))))
 
-(define-vop (step-instrument-before-vop)
-  (:temporary (:scs (descriptor-reg)) stepping)
-  (:vop-var vop)
-  (:generator 3
-    ;; Get the symbol-value of SB-IMPL::*STEPPING*
-    #-sb-thread
-    (load-symbol-value stepping sb-impl::*stepping*)
-    #+sb-thread
-    (loadw stepping thread-base-tn thread-stepping-slot)
-    (inst cmpwi stepping 0)
-    ;; If it's not zero, trap.
-    (inst beq DONE)
-    ;; CONTEXT-PC will be pointing here when the interrupt is handled,
-    ;; not after the UNIMP.
-    (note-this-location vop :internal-error)
-    ;; CALLEE-REGISTER-OFFSET isn't needed for before-traps, so we
-    ;; can just use a bare SINGLE-STEP-BEFORE-TRAP as the code.
-    (inst unimp single-step-before-trap)
-    DONE))
+

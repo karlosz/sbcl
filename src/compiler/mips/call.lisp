@@ -604,8 +604,7 @@ default-value-8
      (:info ,@(unless (or variable (eq return :tail)) '(arg-locs))
             ,@(unless variable '(nargs))
             ,@(when (eq named :direct) '(fun))
-            ,@(when (eq return :fixed) '(nvals))
-            step-instrumenting)
+            ,@(when (eq return :fixed) '(nvals)))
 
      (:ignore ,@(unless (or variable (eq return :tail)) '(arg-locs))
               ,@(unless variable '(args)))
@@ -650,7 +649,6 @@ default-value-8
      ,@(when (eq return :fixed)
          '((:temporary (:scs (descriptor-reg) :from :eval) move-temp)))
 
-     (:temporary (:scs (descriptor-reg) :to :eval) stepping)
 
      ,@(unless (eq return :tail)
          '((:temporary (:scs (non-descriptor-reg)) temp)
@@ -666,7 +664,6 @@ default-value-8
        (let* ((cur-nfp (current-nfp-tn vop))
               ,@(unless (eq return :tail)
                   '((lra-label (gen-label))))
-              (step-done-label (gen-label))
               (filler
                (remove nil
                        (list :load-nargs
@@ -727,21 +724,7 @@ default-value-8
                                          (move cfp-tn new-fp)
                                          (move cfp-tn csp-tn))))))
                       ((nil)
-                       (inst nop)))))
-                (insert-step-instrumenting (callable-tn)
-                  ;; Conditionally insert a conditional trap:
-                  (when step-instrumenting
-                    (load-symbol-value stepping sb-impl::*stepping*)
-                    ;; If it's not 0, trap.
-                    (inst beq stepping STEP-DONE-LABEL)
-                    (inst nop)
-                    ;; CONTEXT-PC will be pointing here when the
-                    ;; interrupt is handled, not after the BREAK.
-                    (note-this-location vop :internal-error)
-                    (inst break (reg-tn-encoding callable-tn)
-                          single-step-around-trap)
-                    (emit-label step-done-label))))
-           (declare (ignorable #'insert-step-instrumenting))
+                       (inst nop))))))
            ,@(case named
                ((t)
                 `((sc-case name
@@ -755,10 +738,6 @@ default-value-8
                            (- (tn-byte-offset name)
                               other-pointer-lowtag))
                      (do-next-filler)))
-                  ;; The step instrumenting must be done after
-                  ;; FUNCTION is loaded, but before ENTRY-POINT is
-                  ;; calculated.
-                  (insert-step-instrumenting name-pass)
                   (inst lw entry-point name-pass
                         (- (ash fdefn-raw-addr-slot word-shift)
                            other-pointer-lowtag))
@@ -779,10 +758,6 @@ default-value-8
                         (- (ash closure-fun-slot word-shift)
                            fun-pointer-lowtag))
                   (do-next-filler)
-                  ;; The step instrumenting must be done before
-                  ;; after FUNCTION is loaded, but before ENTRY-POINT
-                  ;; is calculated.
-                  (insert-step-instrumenting function)
                   (inst addu entry-point function
                         (- (ash simple-fun-insts-offset word-shift)
                            fun-pointer-lowtag))))
@@ -1254,21 +1229,3 @@ default-value-8
               (inst sltu temp nargs temp)
               (inst bne temp err-lab)
               (inst nop))))))))
-
-;;; Single-stepping
-
-(define-vop (step-instrument-before-vop)
-  (:temporary (:scs (descriptor-reg)) stepping)
-  (:vop-var vop)
-  (:generator 3
-    (load-symbol-value stepping sb-impl::*stepping*)
-    ;; If it's not 0, trap.
-    (inst beq stepping DONE)
-    (inst nop)
-    ;; CONTEXT-PC will be pointing here when the interrupt is handled,
-    ;; not after the BREAK.
-    (note-this-location vop :internal-error)
-    ;; CALLEE-REGISTER-OFFSET isn't needed for before-traps, so we
-    ;; can just use a bare SINGLE-STEP-BEFORE-TRAP as the code.
-    (inst break 0 single-step-before-trap)
-    DONE))

@@ -23,16 +23,6 @@
     (vop move node block x y))
   (values))
 
-;;; Determine whether we should emit a single-stepper breakpoint
-;;; around a call / before a vop.
-(defun emit-step-p (node)
-  (declare (ignore node))
-  ;; The instrumentation based stepper is superseded by the
-  ;; breakpoint based one; the step info this consulted is still
-  ;; dumped in the debug info, which the breakpoint stepper signals
-  ;; conditions from.
-  nil)
-
 ;;; Allocate an indirect value cell.
 (defevent make-value-cell-event "Allocate heap value cell for lexical var.")
 (defun emit-make-value-cell (node block value res)
@@ -844,8 +834,6 @@
                  (r-refs (reference-tn-list results t)))
             (aver (= (length info-args)
                      (template-info-arg-count template)))
-            (when (emit-step-p call)
-              (vop sb-vm::step-instrument-before-vop call block))
             (if info-args
                 (emit-template call block template args r-refs info-args)
                 (emit-template call block template args r-refs))
@@ -1210,24 +1198,24 @@
                  (vop* tail-call node block
                        (fun-tn old-fp return-pc pass-refs)
                        (nil)
-                       nargs (emit-step-p node)))
+                       nargs))
                 #-linkage-space
                 ((eq fun-tn named)
                  (vop* static-tail-call-named node block
                        (old-fp return-pc pass-refs) ; args
                        (nil)                        ; results
-                       nargs named (emit-step-p node)))
+                       nargs named))
                 (fixed-args-p
                  (when-vop-existsp (:named sb-vm::fixed-tail-call-named)
                   (vop* sb-vm::fixed-tail-call-named node block
                         (#-linkage-space fun-tn old-fp return-pc pass-refs) ; args
                         (nil)           ; results
-                        nargs #+linkage-space named (emit-step-p node))))
+                        nargs #+linkage-space named)))
                 (t
                  (vop* tail-call-named node block
                        (#-linkage-space fun-tn old-fp return-pc pass-refs) ; args
                        (nil)            ; results
-                       nargs #+linkage-space named (emit-step-p node))))))) ; info
+                       nargs #+linkage-space named)))))) ; info
   (values))
 
 (defun fixed-args-state (node)
@@ -1345,35 +1333,35 @@
                              (fp #-linkage-space fun-tn args) ; args
                              (loc-refs)
                              arg-locs nargs #+linkage-space named ; info
-                                            (emit-step-p node))
+                                           )
                        (vop* sb-vm::unboxed-call-named node block
                              (fp #-linkage-space fun-tn args) ; args
                              (loc-refs)
                              arg-locs nargs #+linkage-space named ; info
-                                            (emit-step-p node)))))
+                                           ))))
                 ((not named)
                  (vop* call node block (fp fun-tn args) (loc-refs)
-                       arg-locs nargs nvals (emit-step-p node)))
+                       arg-locs nargs nvals))
                 #-linkage-space
                 ((eq fun-tn named)
                  (vop* static-call-named node block
                        (fp args)
                        (loc-refs)
                        arg-locs nargs named nvals
-                       (emit-step-p node)))
+                      ))
                 (fixed-args-p
                  (when-vop-existsp (:named sb-vm::fixed-call-named)
                    (vop* sb-vm::fixed-call-named node block
                          (fp #-linkage-space fun-tn args) ; args
                          (loc-refs)                       ; results
                          arg-locs nargs #+linkage-space named nvals ; info
-                         (emit-step-p node))))
+                        )))
                 (t
                  (vop* call-named node block
                        (fp #-linkage-space fun-tn args) ; args
                        (loc-refs)                       ; results
                        arg-locs nargs #+linkage-space named nvals ; info
-                       (emit-step-p node))))
+                      )))
 
           (move-lvar-result node block locs lvar)))))
   (values))
@@ -1392,27 +1380,27 @@
             (let ((loc-refs (reference-tn-list locs t)))
               (cond ((not named)
                      (vop* multiple-call node block (fp fun-tn args) (loc-refs)
-                           arg-locs nargs (emit-step-p node)))
+                           arg-locs nargs))
                     #-linkage-space
                     ((eq fun-tn named)
                      (vop* static-multiple-call-named node block
                            (fp args)
                            (loc-refs)
                            arg-locs nargs named
-                           (emit-step-p node)))
+                          ))
                     (fixed-args-p
                      (when-vop-existsp (:named sb-vm::fixed-multiple-call-named)
                        (vop* sb-vm::fixed-multiple-call-named node block
                              (fp #-linkage-space fun-tn args) ; args
                              (loc-refs) ; results
                              arg-locs nargs #+linkage-space named ; info
-                             (emit-step-p node))))
+                            )))
                     (t
                      (vop* multiple-call-named node block
                            (fp #-linkage-space fun-tn args) ; args
                            (loc-refs)                       ; results
                            arg-locs nargs #+linkage-space named ; info
-                                          (emit-step-p node)))))))))
+                                         ))))))))
   (values))
 
 #+tls-based-mv-return
@@ -1432,10 +1420,10 @@
           (if named
               (vop* call-direct-named node block (fp #-linkage-space fun-tn args)
                     ((reference-tn-list register-locs t))
-                    arg-locs nargs #+linkage-space named (emit-step-p node))
+                    arg-locs nargs #+linkage-space named)
               (vop* call-direct node block (fp fun-tn args)
                     ((reference-tn-list register-locs t))
-                    arg-locs nargs (emit-step-p node)))
+                    arg-locs nargs))
           (loop for result in register-locs
                 for arg in locs
                 do (emit-move node block result arg)))))))
@@ -1450,20 +1438,20 @@
           (fun-lvar-tn node block fun-lvar)
         (cond ((not named)
                (vop* sb-vm::pass-through-call node block (fp fun-tn args) (nil)
-                     arg-locs nargs (emit-step-p node)))
+                     arg-locs nargs))
               (fixed-args-p
                (when-vop-existsp (:named sb-vm::fixed-pass-through-call-named)
                  (vop* sb-vm::fixed-pass-through-call-named node block
                        (fp #-linkage-space fun-tn args)
                        (nil)
                        arg-locs nargs #+linkage-space named
-                       (emit-step-p node))))
+                      )))
               (t
                (vop* sb-vm::pass-through-call-named node block
                      (fp #-linkage-space fun-tn args)
                      (nil)
                      arg-locs nargs #+linkage-space named
-                     (emit-step-p node))))))))
+                    )))))))
 
 ;;; stuff to check in PONDER-FULL-CALL
 ;;;
@@ -1940,11 +1928,11 @@
                        (vop* mv-call-direct-named node block
                              (fp #-linkage-space fun (car extra-args) args)
                              ((reference-tn-list locs t))
-                             arg-locs #+linkage-space fun (length locs) (emit-step-p node) fixed-args)
+                             arg-locs #+linkage-space fun (length locs) fixed-args)
                        (vop* mv-call-direct node block
                              (fp fun (car extra-args) args)
                              ((reference-tn-list locs t))
-                             arg-locs (length locs) (emit-step-p node) fixed-args))
+                             arg-locs (length locs) fixed-args))
                    (move-lvar-result node block locs lvar)))))
             (t
              (let* ((start-lvar (lvar-info (first (basic-combination-args node))))
@@ -1962,17 +1950,17 @@
                        (eq (ir2-lvar-kind 2lvar) :pass-through))
                   (vop* sb-vm::pass-through-call-variable node block (start fun nil)
                         (nil)
-                        (emit-step-p node)))
+                       ))
                  ((and 2lvar
                        (eq (ir2-lvar-kind 2lvar) :unknown))
                   (vop* multiple-call-variable node block (start fun nil)
                         ((reference-tn-list (ir2-lvar-locs 2lvar) t))
-                        (emit-step-p node)))
+                       ))
                  (t
                   (let ((locs (standard-result-tns lvar)))
                     (vop* call-variable node block (start fun nil)
                           ((reference-tn-list locs t)) (length locs)
-                          (emit-step-p node))
+                         )
                     (move-lvar-result node block locs lvar))))))))))
 
 ;;; Reset the stack pointer to the start of the specified

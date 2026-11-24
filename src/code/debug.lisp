@@ -2733,11 +2733,9 @@ Stepping over call instead.~%")
 
 (!def-debug-command "OUT" ()
   (if (typep *debug-condition* 'step-condition)
-      (if sb-impl::*step-out*
-          (let ((restart (find-restart 'step-out *debug-condition*)))
-            (aver restart)
-            (invoke-restart restart))
-          (format *debug-io* "~&OUT can only be used step out of frames that were originally stepped into with STEP.~%"))
+      (let ((restart (find-restart 'step-out *debug-condition*)))
+        (aver restart)
+        (invoke-restart restart))
       (format *debug-io* "~&Not currently single-stepping. (Use START to activate the single-stepper)~%")))
 
 ;;; miscellaneous commands

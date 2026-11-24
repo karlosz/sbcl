@@ -131,8 +131,7 @@
     thread-current-catch-block-slot *current-catch-block*)
   (define-tls-accessors load-current-unwind-protect-block store-current-unwind-protect-block
     thread-current-unwind-protect-block-slot *current-unwind-protect-block*)
-  (define-tls-accessors load-stepping store-stepping
-    thread-stepping-slot sb-impl::*stepping*))
+  )
 
 (defun load-foreign-symbol-value (dest symbol temp)
   (aver (string/= symbol "foreign_function_call_active"))

@@ -521,8 +521,7 @@
         ,@(unless (or variable (eq return :tail)) '(arg-locs))
         ,@(unless variable '(nargs))
         ,@(when (eq named :direct) '(fun))
-        ,@(when (eq return :fixed) '(nvals))
-        step-instrumenting)
+        ,@(when (eq return :fixed) '(nvals)))
        (:ignore ,@(unless (eq return :tail) '(return-pc-pass))
                 ,@(unless (or variable (eq return :tail)) '(arg-locs))
                 ,@(unless variable '(args)))
@@ -564,7 +563,6 @@
        ,@(when (eq return :fixed)
            '((:temporary (:scs (descriptor-reg) :from :eval) move-temp)))
 
-       (:temporary (:scs (descriptor-reg) :to :eval) stepping)
 
        ,@(unless (eq return :tail)
            '((:temporary (:sc control-stack :offset nfp-save-offset) nfp-save)
@@ -578,7 +576,6 @@
          (let* ((cur-nfp (current-nfp-tn vop))
                 ,@(unless (eq return :tail)
                     '((label (gen-label))))
-                (step-done-label (gen-label))
                 (filler
                   (remove nil
                           (list :load-nargs
@@ -633,21 +630,7 @@
                                       '(if (> nargs register-arg-count)
                                         (move cfp-tn new-fp)
                                         (move cfp-tn csp-tn))))))
-                        ((nil)))))
-                  (insert-step-instrumenting (callable-tn)
-                    ;; Conditionally insert a conditional trap:
-                    (when step-instrumenting
-                      (load-stepping stepping)
-                      ;; If it's not 0, trap.
-                      (inst beq stepping zero-tn STEP-DONE-LABEL)
-                      ;; CONTEXT-PC will be pointing here when the
-                      ;; interrupt is handled, not after the EBREAK.
-                      (note-this-location vop :internal-error)
-                      (inst ebreak single-step-around-trap)
-                      (inst byte (tn-offset callable-tn))
-                      (emit-alignment 2)
-                      (emit-label step-done-label))))
-             (declare (ignorable #'insert-step-instrumenting))
+                        ((nil))))))
              ,@(case named
                  ((t)
                   `((sc-case name
@@ -658,7 +641,6 @@
                       (constant
                        (load-constant vop name name-pass)
                        (do-next-filler)))
-                    (insert-step-instrumenting name-pass)
                     (loadw function name-pass fdefn-raw-addr-slot
                            other-pointer-lowtag)
                     (do-next-filler)))
@@ -673,8 +655,7 @@
                        (do-next-filler)))
                     (loadw function lexenv closure-fun-slot
                            fun-pointer-lowtag)
-                    (do-next-filler)
-                    (insert-step-instrumenting function)))
+                    (do-next-filler)))
                  (:direct
                   `((etypecase (static-fun-offset fun)
                       (short-immediate
@@ -1127,18 +1108,4 @@
              (inst li temp (fixnumize min))
              (inst bltu nargs temp err-lab))))))
 
-(define-vop (step-instrument-before-vop)
-  (:temporary (:scs (descriptor-reg)) stepping)
-  (:vop-var vop)
-  (:generator 3
-    (load-stepping stepping)
-    ;; If it's not 0, trap.
-    (inst beq stepping zero-tn DONE)
-    ;; CONTEXT-PC will be pointing here when the interrupt is handled,
-    ;; not after the EBREAK.
-    (note-this-location vop :internal-error)
-    ;; CALLEE-REGISTER-OFFSET isn't needed for before-traps, so we
-    ;; can just use a bare SINGLE-STEP-BEFORE-TRAP as the code.
-    (inst ebreak single-step-before-trap)
-    (emit-alignment 2)
-    DONE))
+

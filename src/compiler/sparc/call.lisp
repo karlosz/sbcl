@@ -576,8 +576,7 @@ default-value-8
      (:info ,@(unless (or variable (eq return :tail)) '(arg-locs))
             ,@(unless variable '(nargs))
             ,@(when (eq named :direct) '(fun))
-            ,@(when (eq return :fixed) '(nvals))
-            step-instrumenting)
+            ,@(when (eq return :fixed) '(nvals)))
 
      (:ignore
       ,@(unless (or variable (eq return :tail)) '(arg-locs))
@@ -622,7 +621,6 @@ default-value-8
      ,@(when (eq return :fixed)
          '((:temporary (:scs (descriptor-reg) :from :eval) move-temp)))
 
-     (:temporary (:scs (descriptor-reg) :to :eval) stepping)
 
      ,@(unless (eq return :tail)
          '((:temporary (:scs (non-descriptor-reg)) temp)
@@ -636,7 +634,6 @@ default-value-8
        (let* ((cur-nfp (current-nfp-tn vop))
               ,@(unless (eq return :tail)
                   '((lra-label (gen-label))))
-              (step-done-label (gen-label))
               (filler
                (remove nil
                        (list :load-nargs
@@ -694,26 +691,7 @@ default-value-8
                                     '(if (> nargs register-arg-count)
                                          (move cfp-tn new-fp)
                                          (move cfp-tn csp-tn))))))
-                      ((nil)))))
-                (insert-step-instrumenting (callable-tn)
-                  ;; Conditionally insert a conditional trap:
-                  (when step-instrumenting
-                    ;; Get the symbol-value of SB-IMPL::*STEPPING*
-                    (load-symbol-value stepping sb-impl::*stepping*)
-                    (inst cmp stepping zero-tn)
-                    ;; If it's not null, trap.
-                    (inst b :eq step-done-label)
-                    (inst nop)
-                    ;; FIXME: this doesn't look right.
-                    (note-this-location vop :internal-error)
-                    ;; Construct a trap code with the low bits from
-                    ;; SINGLE-STEP-AROUND-TRAP and the high bits from
-                    ;; the register number of CALLABLE-TN.
-                    (inst unimp (logior single-step-around-trap
-                                        (ash (reg-tn-encoding callable-tn)
-                                             8)))
-                    (emit-label step-done-label))))
-           (declare (ignorable #'insert-step-instrumenting))
+                      ((nil))))))
            ,@(case named
                ((t)
                 `((sc-case name
@@ -725,7 +703,6 @@ default-value-8
                      (loadw name-pass code-tn (tn-offset name)
                          other-pointer-lowtag)
                      (do-next-filler)))
-                  (insert-step-instrumenting name-pass)
                   (loadw function name-pass fdefn-raw-addr-slot
                       other-pointer-lowtag)
                   (do-next-filler)))
@@ -741,8 +718,7 @@ default-value-8
                      (do-next-filler)))
                   (loadw function lexenv closure-fun-slot
                       fun-pointer-lowtag)
-                  (do-next-filler)
-                  (insert-step-instrumenting function)))
+                  (do-next-filler)))
                (:direct
                 `((inst ld function null-tn (static-fun-offset fun)))))
            (loop
@@ -1162,16 +1138,3 @@ default-value-8
              ((plusp min)
               (inst cmp nargs (fixnumize min))
               (b :ltu)))))))
-
-;;; Single-stepping
-(define-vop (step-instrument-before-vop)
-  (:temporary (:scs (descriptor-reg)) stepping)
-  (:vop-var vop)
-  (:generator 3
-    (load-symbol-value stepping sb-impl::*stepping*)
-    (inst cmp stepping zero-tn)
-    (inst b :eq DONE)
-    (inst nop)
-    (note-this-location vop :internal-error)
-    (inst unimp single-step-before-trap)
-    DONE))

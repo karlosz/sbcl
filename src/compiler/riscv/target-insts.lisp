@@ -248,10 +248,6 @@ function addresses and register values.")
         (nt "halt trap"))
        (#.fun-end-breakpoint-trap
         (nt "function end breakpoint trap"))
-       (#.single-step-around-trap
-        (nt "single-step trap (around)"))
-       (#.single-step-before-trap
-        (nt "single-step trap (before)"))
        (#.invalid-arg-count-trap
         (nt "Invalid argument count trap"))
        (t

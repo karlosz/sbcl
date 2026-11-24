@@ -68,9 +68,6 @@ extern void arch_handle_fun_end_breakpoint(os_context_t *context);
 #ifdef trap_AfterBreakpoint
 extern void arch_handle_after_breakpoint(os_context_t *context);
 #endif
-#ifdef trap_SingleStepAround
-#endif
-
 extern void arch_write_linkage_table_entry(int index, void *target_addr, int datap);
 
 #endif /* __ARCH_H__ */

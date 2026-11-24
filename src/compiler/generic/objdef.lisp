@@ -494,7 +494,9 @@ during backtrace.
   ;; of a symbol is initialized to zero
   (no-tls-value-marker)
 
-  (stepping)
+  ;; Unused padding, kept to preserve the parity of the following
+  ;; slots; the stepping state it used to hold is gone.
+  (padding)
 
   ;; Keep this first bunch of slots from binding-stack-pointer through alloc-region
   ;; near the beginning of the structure so that x86[-64] assembly code

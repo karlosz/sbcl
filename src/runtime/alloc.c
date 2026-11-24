@@ -905,7 +905,6 @@ alloc_thread_struct(void* spaces, unsigned int control_stack_size) {
         thread_private_events(th,i) = CreateEvent(NULL,FALSE,FALSE,NULL);
     thread_extra_data(th)->synchronous_io_handle_and_flag = 0;
 #endif
-    th->stepping = 0;
     return th;
 }
 

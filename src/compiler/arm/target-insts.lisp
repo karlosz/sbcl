@@ -192,10 +192,6 @@
          (nt "Breakpoint trap"))
         (#.fun-end-breakpoint-trap
          (nt "Function end breakpoint trap"))
-        (#.single-step-around-trap
-         (nt "Single step around trap"))
-        (#.single-step-before-trap
-         (nt "Single step before trap"))
         (t
          (when (or (and (= trap cerror-trap) (progn (nt "cerror trap") t))
                    (>= trap error-trap))

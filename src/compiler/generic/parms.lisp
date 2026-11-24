@@ -230,8 +230,6 @@
     #-sb-thread *control-stack-start* ; ditto
     #-sb-thread *control-stack-end*   ; ditto
 
-    #-sb-thread *stepping*
-
     ;; threading support
     #+sb-thread sb-thread::*starting-threads*
     *free-tls-index* ; always exists for benefit of C runtime

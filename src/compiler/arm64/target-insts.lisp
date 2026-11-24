@@ -919,9 +919,5 @@
          (nt "Breakpoint trap"))
         (#.fun-end-breakpoint-trap
          (nt "Function end breakpoint trap"))
-        (#.single-step-around-trap
-         (nt "Single step around trap"))
-        (#.single-step-before-trap
-         (nt "Single step before trap"))
         (#.invalid-arg-count-trap
          (nt "Invalid argument count trap"))))))

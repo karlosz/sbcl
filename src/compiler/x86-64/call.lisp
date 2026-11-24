@@ -918,7 +918,12 @@
 ;;; have been set up in the current frame.
 (defmacro define-full-call (vop-name named return variable &optional args direct)
   (aver (not (and variable (eq return :tail))))
-  `(define-vop (,vop-name ,@(when (eq return :unknown) '(unknown-values-receiver)))
+  ;; RAX is a temporary of the vop for anonymous calls, which pass
+  ;; the function in it, and for named calls with immobile space,
+  ;; which load the linkage table base into it; without immobile
+  ;; space a named call addresses the table relative to NIL instead.
+  (let ((rax-temp-p (or #+immobile-space t (not named))))
+    `(define-vop (,vop-name ,@(when (eq return :unknown) '(unknown-values-receiver)))
      (:args
       ,@(unless (eq return :tail)
           '((new-fp :scs (any-reg) :to (:argument 1))))
@@ -959,7 +964,6 @@
             ,@(when (and (eq return :fixed)
                          (neq direct :return))
                 '(nvals))
-            step-instrumenting
             ,@(when (eq direct :call)
                 '(n-fixed)))
 
@@ -969,11 +973,13 @@
                           (eq return :unboxed)) '(values))
               ,@(when (eq args :fixed) '(nargs)))
 
-     ;; For anonymous call, RAX is the function. For named call, RAX will be the linkage
-     ;; table base if not stepping, or the linkage cell itself if stepping.
-     ;; Calls from immobile-space without stepping avoid using RAX, and instead
-     ;; access the linkage table relative to RIP.
-     (:temporary (:sc descriptor-reg :offset rax-offset :from (:argument 0) :to :eval) rax)
+     ;; For anonymous call, RAX is the function.  For named call with
+     ;; immobile space, RAX holds the linkage table base.
+     ,@(when rax-temp-p
+         '((:temporary
+            (:sc descriptor-reg :offset rax-offset
+                 :from (:argument 0) :to :eval)
+            rax)))
 
      ;; We pass the number of arguments in RCX.
      ,@(unless (eq args :fixed)
@@ -1116,15 +1122,10 @@
                (inst jmp :l LOOP)
                (unless (zerop n-fixed)
                  (inst add :dword rcx (fixnumize n-fixed))))))
-       (when step-instrumenting
-         ,@(when named '((compute-linkage-cell node fun rax)))
-         (emit-single-step-test)
-         (inst jmp :e DONE)
-         (inst break single-step-around-trap))
-       DONE
        ,(cond (named
                `(emit-direct-call fun ',(if (eq return :tail) 'jmp 'call)
-                                  node step-instrumenting vop
+                                  node vop
+                                  ,@(if rax-temp-p '(rax) '(nil))
                                   ,(if (eq return :tail)
                                        :tail-call-site
                                        :call-site)))
@@ -1144,7 +1145,7 @@
                   (receive-unknown-values values-start nvals start count node)))
                (:pass-through
                 '((note-this-location vop :unknown-return)))
-               ((:tail :unboxed)))))))
+               ((:tail :unboxed))))))))
 
 (define-full-call call nil :fixed nil)
 (define-full-call call-named t :fixed nil)
@@ -1178,19 +1179,17 @@
 
 ;;; Call NAME "directly" meaning in a single JMP or CALL instruction,
 ;;; if possible (without loading RAX)
-(defun emit-direct-call (name instruction node step-instrumenting vop
-                        note-kind)
+(defun emit-direct-call (name instruction node vop rax note-kind)
+  (declare (ignorable rax))
   ;; The call site location goes right at the call instruction, so
   ;; that the debugger can resolve the callee from the context there;
-  ;; the loads before it are not where a call is made.
+  ;; the loads before it are not where a call is made.  RAX is the
+  ;; temporary the vop declares to reserve the register for the table
+  ;; base when the code can be immobile.
   (flet ((note ()
            (when note-kind
              (note-this-location vop note-kind))))
-    (cond (step-instrumenting
-           ;; If step-instrumenting, then RAX points to the linkage table cell
-           (note)
-           (inst* instruction (ea rax-tn)))
-          ((code-immobile-p node)
+    (cond ((code-immobile-p node)
            (note)
            (inst* instruction (rip-relative-ea (linkage-cell-fixup name node))))
           #-immobile-space
@@ -1200,9 +1199,9 @@
           #+immobile-space ; again, this should not be worse than #-immobile-space, but it is
           (t
            ;; get the linkage table base into RAX
-           (inst mov rax-tn (static-constant-ea lisp-linkage-table))
+           (inst mov rax (static-constant-ea lisp-linkage-table))
            (note)
-           (inst* instruction (ea (linkage-cell-fixup name node) rax-tn))))))
+           (inst* instruction (ea (linkage-cell-fixup name node) rax))))))
 
 ;;; Invoke the function-designator FUN.
 (defun tail-call-unnamed (fun fun-ref vop)
@@ -1797,25 +1796,3 @@
                    ((plusp min)
                     (inst cmp :dword nargs (fixnumize min))
                     (inst jmp :b err-lab))))))))
-;;; Single-stepping
-
-(defun emit-single-step-test ()
-  ;; We use different ways of representing whether stepping is on on
-  ;; +SB-THREAD / -SB-THREAD: on +SB-THREAD, we use a slot in the
-  ;; thread structure. On -SB-THREAD we use the value of a static
-  ;; symbol. Things are done this way, since reading a thread-local
-  ;; slot from a symbol would require an extra register on +SB-THREAD,
-  ;; and reading a slot from a thread structure would require an extra
-  ;; register on -SB-THREAD. While this isn't critical for x86-64,
-  ;; it's more serious for x86.
-  #+sb-thread (inst cmp :byte (thread-slot-ea thread-stepping-slot) 0)
-  #-sb-thread (inst cmp :byte (static-symbol-value-ea 'sb-impl::*stepping*) 0))
-
-(define-vop (step-instrument-before-vop)
-  (:vop-var vop)
-  (:generator 3
-     (emit-single-step-test)
-     (inst jmp :e DONE)
-     (inst break single-step-before-trap)
-     DONE
-     (note-this-location vop :internal-error)))
