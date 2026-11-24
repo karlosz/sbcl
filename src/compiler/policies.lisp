@@ -88,8 +88,8 @@ and will refer to the new function, bound to FOO.")
         debug
         0)
   ("no" "no" "no" "yes")
-  "Control instrumentation of code, enabling single-stepping through
-it in the debugger.
+  "Record stepping information for code, enabling single-stepping
+through it in the debugger.
 
 This option has no effect without COMPUTE-DEBUG-FUN.")
 

@@ -139,6 +139,7 @@ Breakpoints and steps:
     Abbreviations: BR, BP
   STEP* [n]                          Step to the next location or step n times.
   STEP-INTO*                         Step into the function which is about to be called.
+    Abbreviation: SI
   STEP-OUT*                          Step until the current frame returns.
     Abbreviations: SO
 

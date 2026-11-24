@@ -744,7 +744,9 @@
   stepping of compiled code. Breakpoints can only be set at known
   locations (see @UNKNOWN-LOCATIONS-AND-INTERRUPTS), so these commands
   are largely useless unless the @DEBUG optimize quality is at least
-  2 (see @DEBUG-INFORMATION). These commands manipulate breakpoints:
+  2 (see @DEBUG-INFORMATION). In addition, support is included for a
+  stepper based on this breakpoint support. These commands manipulate
+  breakpoints:
 
   - `breakpoint <location> [<option> <value>]*`
 
@@ -786,7 +788,18 @@
 
       Step to the next possible breakpoint location in the current
       function. This always steps over function calls, instead of
-      stepping into them."
+      stepping into them. When a call is stepped over, its return
+      values are printed to standard output.
+
+  - `step-into*` or `si`
+
+      Step into a function which is about to be called in the current
+      frame.
+
+  - `step-out*`
+
+      Continue until the current frame returns and stop in the calling
+      frame."
   (@breakpoint-example section))
 
 (defsection @breakpoint-example (:title "Breakpoint Example")
@@ -855,25 +868,29 @@
 
       (! 9) ; We hit the breakpoint in the recursive call
       Source: (* N (! (1- N)))
-      3]
-
-  > _Note_: The `step*` command differs from the single stepping
-  > commands in that it also functions in compiled code which has not
-  > been compiled with stepping instrumentation. It simply steps to
-  > the next compiled code location. In the future, this form of
-  > stepping may be improved enough to subsume the
-  > instrumentation-based stepping commands, which have much higher
-  > overhead.")
+      3]")
 
 (defsection @single-stepping (:title "Single Stepping"
                               :concepts ("stepper"
                                          "single-stepping"))
-  "SBCL includes an instrumentation-based single-stepper for compiled
-  code, which can be invoked via the STEP macro or from within the
-  debugger. See @DEBUG-INFORMATION for details on enabling stepping
-  for compiled code.
+  "SBCL includes a breakpoint-based single-stepper for compiled code,
+  which can be invoked via the STEP macro or from within the debugger.
+  The stepper stops at the code locations of the compiled code it
+  executes: before and after calls, at the start of functions it
+  steps into, and after a frame it steps out of returns. The source
+  form of each location is displayed. Stepping works in compiled code
+  generally, whether or not it was compiled with stepping in mind; the
+  only requirement is enough DEBUG policy for the code locations to be
+  present. See @DEBUG-INFORMATION for details.
 
-  The following debugger commands are used for controlling single stepping.
+  Since the stepper walks the compiled code, it does not directly step
+  through the source form by form: macros are already expanded, and the
+  compiler may have optimized out or transformed function calls. In
+  return, stepping gives the user an idea of what the compiled code is
+  actually executing.
+
+  When a step condition is signalled, the following debugger commands
+  are available for controlling single stepping.
 
   - `start`
 
@@ -884,24 +901,116 @@
 
   - `step`
 
-      Step into the current form. Stepping will be resumed when the
-      next form that has been compiled with stepper instrumentation is
-      evaluated.
+      Step into the current form. Stepping stops again when the next
+      stepped form is evaluated.
 
   - `next`
 
-      Step over the current form. Stepping will be disabled until
-      evaluation of the form is complete.
+      Step over the current form. Stepping resumes when the evaluation
+      of the form is complete, and the values it returned are reported.
 
   - `out`
 
-      Step out of the current frame. Stepping will be disabled until
-      the topmost stack frame that had been stepped into returns.
+      Step out of the current frame. Stepping resumes when the
+      topmost stack frame that had been stepped into returns.
 
   - `stop`
 
-      Stop the single stepper and resumes normal execution."
-  (step macro))
+      Stop the single stepper and resumes normal execution.
+
+  The step conditions are signalled through *STEPPER-HOOK*, which
+  allows other consumers than the debugger to drive stepping."
+  (step macro)
+  (@stepping-example section))
+
+(defsection @stepping-example (:title "Stepping Example")
+  "The STEP macro can be used to step through a function from the
+  toplevel. Consider this definition of the Fibonacci function:
+
+      (defun fib (x)
+        (if (< x 2)
+            1
+            (+ (fib (1- x))
+               (fib (- x 2)))))
+
+  The STEP macro wraps its argument form in an anonymous lambda and
+  opens the debugger in stepping mode:
+
+      * (step (fib 10))
+
+      Stepping the form
+        (FIB 10)
+      using the debugger.  Type HELP for help.
+
+
+      *Step*
+
+      (\"stepping lambda\")
+         source: (SB-INT:NAMED-LAMBDA \"stepping lambda\"
+                     NIL
+                   (FIB 10))
+      0] step*
+
+      *Step*
+      About to tail call: (FIB 10)
+
+      (\"stepping lambda\")
+         source: (FIB 10)
+      0] step-into*
+
+      *Step*
+
+      (FIB 10)
+         source: (DEFUN FIB (X)
+                   (DECLARE (OPTIMIZE DEBUG))
+                   (IF (< X 2)
+                       1
+                       (+ (FIB (1- X)) (FIB (- X 2)))))
+      0] step*
+
+      *Step*
+      About to call: (SB-KERNEL:TWO-ARG-< 10 2)
+
+      (FIB 10)
+         source: (< X 2)
+      0] step*
+
+      The call (SB-KERNEL:TWO-ARG-< 10 2) returned NIL.
+
+      *Step*
+
+      (FIB 10)
+         source: (< X 2)
+      0] step*
+
+      *Step*
+
+      (FIB 10)
+         source: (+ (FIB (1- X)) (FIB (- X 2)))
+      0] step*
+
+      *Step*
+      About to call: (SB-KERNEL:TWO-ARG-- 10 1)
+
+      (FIB 10)
+         source: (1- X)
+      0] step*
+
+      The call (SB-KERNEL:TWO-ARG-- 10 1) returned 9.
+
+      *Step*
+
+      (FIB 10)
+         source: (1- X)
+
+  Note that the debugger lists two code locations associated with a
+  source-level function call: a call site location kind and a return
+  location kind. Therefore, when stepping, the debugger stops when a
+  function call is made and also stops immediately after the call is
+  stepped over, allowing the user to inspect the state of the frame
+  around a call with other debugger commands. Stepping over a function
+  call will also cause the debugger to print the return values of the
+  call.")
 
 (defsection @ldb (:title "\\LDB")
   "\\LDB, the low-level debugger, is implemented in C and can work

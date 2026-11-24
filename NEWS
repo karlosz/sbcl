@@ -1,6 +1,17 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
 
 changes in sbcl-2.6.10 relative to sbcl-2.6.9:
+  * enhancement: single stepping is now performed by the breakpoint-based
+    stepper, and the instrumentation-based stepper has been removed. The
+    STEP macro and the step, next, out and stop debugger commands place
+    breakpoints at the code locations of the compiled code being executed,
+    so stepping works in any code with enough DEBUG optimization quality
+    for code locations to be present, whether or not it was compiled with
+    stepping in mind. Stepping over a call reports the values it returned,
+    and the step conditions and *STEPPER-HOOK* work as before.
+  * enhancement: the breakpoint debugger commands gained STEP-INTO*, which
+    steps into a call in the current frame, and STEP-OUT*, which stops in
+    the calling frame after the current frame returns.
   * minor incompatible change: testing for float equality using `=` is now a
     quiet operation, not signalling when given NaNs as input.
   * enhancement: Unicode support has been updated to support version 18.0.0 of
