@@ -9,46 +9,11 @@
 ;;;; provided with absolutely no warranty. See the COPYING and CREDITS
 ;;;; files for more information.
 
-;;;; Single stepping works by having compiler insert STEP-CONDITION
-;;;; signalling forms into code compiled at high debug settings, and
-;;;; having a handler for them at the toplevel.
+;;;; Single stepping signals STEP-CONDITIONs from breakpoints at the
+;;;; code locations the compiler steps, and has a handler for them at
+;;;; the toplevel.
 
 (in-package "SB-IMPL")
-
-(defun step-form (form args)
-  (restart-case
-      (signal 'step-form-condition
-              :form form
-              :args args)
-    (step-continue ()
-      :report "Resume normal execution"
-      (disable-stepping)
-      (setf *step-out* nil))
-    (step-out ()
-      :report "Resume stepping after returning from this function"
-      (ecase *step-out*
-        ((nil)
-         (error "Can't STEP-OUT: No STEP-IN on the call-stack"))
-        ((t :maybe)
-         (disable-stepping)
-         (setf *step-out* t)))
-      nil)
-    (step-next ()
-      :report "Step over call"
-      nil)
-    (step-into ()
-      :report "Step into call"
-      t)))
-
-(defun step-values (form &rest values)
-  (declare (dynamic-extent values))
-  (signal 'step-values-condition :form form :result values)
-  (values-list values))
-
-(defun step-finished ()
-  (restart-case
-      (signal 'step-finished-condition)
-    (continue ())))
 
 (defgeneric single-step (condition))
 

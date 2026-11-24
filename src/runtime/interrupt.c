@@ -2149,12 +2149,6 @@ handle_trap(os_context_t *context, int trap)
         arch_handle_after_breakpoint(context);
         break;
 #endif
-#ifdef trap_SingleStepAround
-    case trap_SingleStepAround:
-    case trap_SingleStepBefore:
-        arch_handle_single_step_trap(context, trap);
-        break;
-#endif
 #ifdef trap_GlobalSafepoint
     case trap_GlobalSafepoint:
         fake_foreign_function_call(context);

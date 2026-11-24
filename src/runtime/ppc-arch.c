@@ -456,14 +456,6 @@ arch_handle_after_breakpoint(os_context_t *context)
                     sizeof(unsigned int));
 }
 
-void
-arch_handle_single_step_trap(os_context_t *context, int trap)
-{
-    unsigned int code = *(uint32_t *)OS_CONTEXT_PC(context);
-    int register_offset = code >> 8 & 0x1f;
-    handle_single_step_trap(context, trap, register_offset);
-    arch_skip_instruction(context);
-}
 
 #if 0
 static void dump_cpu_state(char *reason, os_context_t* context)

@@ -414,14 +414,6 @@ arch_handle_fun_end_breakpoint(os_context_t *context)
     OS_CONTEXT_PC(context) = (uword_t)handle_fun_end_breakpoint(context);
 }
 
-void
-arch_handle_single_step_trap(os_context_t *context, int trap)
-{
-    arch_skip_instruction(context);
-    /* On x86-64 the fdefn / function is always in RAX, so we pass
-     * 0 as the register_offset. */
-    handle_single_step_trap(context, trap, 0);
-}
 
 
 void

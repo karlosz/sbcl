@@ -74,14 +74,6 @@ arch_handle_fun_end_breakpoint(os_context_t *context)
     OS_CONTEXT_PC(context) = (long) handle_fun_end_breakpoint(context);
 }
 
-void
-arch_handle_single_step_trap(os_context_t *context, int trap)
-{
-    unsigned char register_offset =
-      *((unsigned char *)(OS_CONTEXT_PC(context)) + 5);
-    handle_single_step_trap(context, trap, register_offset);
-    arch_skip_instruction(context);
-}
 
 int riscv_user_emulation;
 

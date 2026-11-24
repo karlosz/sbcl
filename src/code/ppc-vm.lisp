@@ -226,5 +226,4 @@
     (code-header-set code code-debug-info-slot (if undef name function))
     (%code-entry-point code 0)))
 
-(defun stepper-fun (closure) (ensure-simplistic closure nil))
 ) ; end PROGN

@@ -213,12 +213,6 @@ arch_handle_fun_end_breakpoint(os_context_t *context)
     OS_CONTEXT_PC(context) = (uword_t)handle_fun_end_breakpoint(context);
 }
 
-void
-arch_handle_single_step_trap(os_context_t *context, int trap)
-{
-    handle_single_step_trap(context, trap, reg_LEXENV);
-    arch_skip_instruction(context);
-}
 
 
 static void

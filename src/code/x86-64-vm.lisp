@@ -305,7 +305,6 @@
           (setf (%funcallable-instance-fun tramp) function)))
     tramp))
 
-(defun stepper-fun (closure) (ensure-simplistic closure nil))
 
 ;;; Return the target of the call instruction in the current signal
 ;;; context.  The trap of an installed breakpoint overwrites the first

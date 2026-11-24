@@ -394,17 +394,6 @@ arch_handle_fun_end_breakpoint(os_context_t *context)
     OS_CONTEXT_PC(context) = (int) handle_fun_end_breakpoint(context);
 }
 
-void
-arch_handle_single_step_trap(os_context_t *context, int trap)
-{
-    unsigned char register_offset = *(unsigned char *)(OS_CONTEXT_PC(context)+5);
-    handle_single_step_trap(context, trap, register_offset);
-    /* KLUDGE: arch_skip_instruction() only skips one instruction, and
-     * there is a following word to deal with as well, so skip
-     * twice. */
-    arch_skip_instruction(context);
-    arch_skip_instruction(context);
-}
 
 
 
