@@ -59,25 +59,25 @@
 (defconstant-eqx compiled-debug-block-nsucc-shift 1 #'equalp)
 (defconstant compiled-debug-block-elsewhere-p #b1)
 
-(defconstant-eqx compiled-code-location-kind-byte (byte 3 0) #'equalp)
+(defconstant-eqx compiled-code-location-kind-byte (byte 4 0) #'equalp)
 (defconstant-eqx +compiled-code-location-kinds+
-    #(:unknown-return :known-return :internal-error :non-local-exit
-      :block-start :call-site :single-value-return :non-local-entry)
+    #(:unknown-return :tail-call-site :internal-error :non-local-exit
+      :block-start :call-site :single-value-return :non-local-entry
+      :known-return)
   #'equalp)
 
 (eval-when (:compile-toplevel)
-  (assert (<= (integer-length (1- (length +compiled-code-location-kinds+))) 3)))
+  (assert (<= (integer-length (1- (length +compiled-code-location-kinds+))) 4)))
 
-;;; Location flags, encoded in the low 4 bits of location kind byte
-(defconstant compiled-code-location-stepping         (ash #b00001 3))
-(defconstant compiled-code-location-context          (ash #b00010 3))
-(defconstant compiled-code-location-live             (ash #b00100 3))
-(defconstant compiled-code-location-zero-form-number (ash #b01000 3))
+;;; Location flags, encoded in the high 4 bits of location kind byte
+(defconstant compiled-code-location-stepping         (ash #b00001 4))
+(defconstant compiled-code-location-context          (ash #b00010 4))
+(defconstant compiled-code-location-live             (ash #b00100 4))
 
 ;;; Means the previous live-set is the same. Since -live is implied,
 ;;; the -live bit is repurposed to mean that the form-number is also
 ;;; the same.
-(defconstant compiled-code-location-equal-live       (ash #b10000 3))
+(defconstant compiled-code-location-equal-live       (ash #b01000 4))
 
 
 ;;;; DEBUG-FUN objects

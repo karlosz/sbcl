@@ -1358,19 +1358,21 @@
                 (do-next-filler)
                 (return)))
 
-
-           (note-this-location vop :call-site)
+           ,(when (and named (not (eq return :tail)))
+              ;; Load CFP just before calling for better profiling.
+              `(move cfp-tn new-fp-tn))
 
            ,(if named
                 (if (eq return :tail)
-                    `(inst br lr)
                     `(progn
-                       ;; Load CFP just before calling for better profiling.
-                       (move cfp-tn new-fp-tn)
+                       (note-this-location vop :tail-call-site)
+                       (inst br lr))
+                    `(progn
+                       (note-this-location vop :call-site)
                        (inst blr lr)))
                 (if (eq return :tail)
-                    `(tail-call-unnamed lexenv fun-ref lr)
-                    `(call-unnamed lexenv fun-ref lr new-fp-tn))))
+                    `(tail-call-unnamed lexenv fun-ref lr vop)
+                    `(call-unnamed lexenv fun-ref lr new-fp-tn vop))))
 
          ,@(if (eq direct :return)
                `((assemble ()
@@ -1458,7 +1460,7 @@
                         :tail t)))
 
 ;;; Invoke the function-designator FUN.
-(defun tail-call-unnamed (lexenv fun-ref lr)
+(defun tail-call-unnamed (lexenv fun-ref lr vop)
   (let ((type (fun-tn-type fun-ref)))
     (case type
       (:symbol
@@ -1471,9 +1473,10 @@
          (loadw lr lexenv closure-fun-slot fun-pointer-lowtag)
          call
          (inst add lr lr 4)
+         (note-this-location vop :tail-call-site)
          (inst br lr))))))
 
-(defun call-unnamed (lexenv fun-ref lr new-fp-tn)
+(defun call-unnamed (lexenv fun-ref lr new-fp-tn vop)
   (let ((type (fun-tn-type fun-ref)))
     (case type
       (:symbol
@@ -1486,6 +1489,7 @@
          (loadw lr lexenv closure-fun-slot fun-pointer-lowtag)
          call
          (move cfp-tn new-fp-tn)
+         (note-this-location vop :call-site)
          (inst blr lr))))))
 
 ;;;; Unknown values return:

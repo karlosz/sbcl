@@ -13,6 +13,11 @@
   ;; 8?
   (+ (context-register scp ra-offset) 8))
 
+;;; The riscv has no breakpoints, so no call site is ever decoded.
+(defun context-call-site-target (context instruction)
+  (declare (ignore context instruction))
+  (error "Unimplemented"))
+
 
 ;;; CONTEXT-FLOAT-REGISTER
 (define-alien-routine ("os_context_float_register_addr" context-float-register-addr)

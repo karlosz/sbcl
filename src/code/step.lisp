@@ -84,26 +84,22 @@
 with the STEP-CONDITION as argument.")
 
 (defun invoke-stepper (condition)
-  (when (and (stepping-enabled-p)
-             *stepper-hook*)
-    (with-stepping-disabled
-      (let ((hook *stepper-hook*)
-            (*stepper-hook* nil))
-        (funcall hook condition)))))
+  (when *stepper-hook*
+    (let ((hook *stepper-hook*)
+          (*stepper-hook* nil))
+      (funcall hook condition))))
 
 (defmacro step (form)
   "The form is evaluated with single stepping enabled. Function calls
 outside the lexical scope of the form can be stepped into only if the
 functions in question have been compiled with sufficient DEBUG policy
 to be at least partially steppable."
-  `(locally
-    (declare (optimize debug (sb-c:insert-step-conditions 0)))
-     ;; Allow stepping out of the STEP form.
-     (let ((*step-out* :maybe))
-       (unwind-protect
-            (with-stepping-enabled
-              (multiple-value-prog1
-                  (locally (declare (optimize (sb-c:insert-step-conditions 3)))
-                    ,form)
-                (step-finished)))))))
+  `(sb-debug::step-internal (named-lambda "stepping lambda" ()
+                              ;; Debug 1 makes the locations the
+                              ;; stepper needs be dumped even when the
+                              ;; STEP form sits in low debug code.
+                              (declare (optimize (debug 1)
+                                                 (sb-c:insert-step-conditions 3)))
+                              ,form)
+                            ',form))
 

@@ -874,6 +874,30 @@
         (format nil "foreign function: ~A" name)
         (format nil "foreign function: #x~X" (sap-int sap)))))
 
+;;; Resolve the DEBUG-FUN of the function the call instruction at
+;;; PC-OFFSET in the code component CODE calls, given the register
+;;; CONTEXT at the trap. NIL when the callee is a static function or
+;;; an assembly routine, which has no debug fun of its own.
+(defun call-site-target-debug-fun (code pc-offset context)
+  (let* ((breakpoint-data (breakpoint-data code pc-offset nil))
+         (target (context-call-site-target
+                  context
+                  ;; If there is a breakpoint set at the location,
+                  ;; get the real call instruction.
+                  (and breakpoint-data
+                       (breakpoint-data-instruction breakpoint-data))))
+         (callee-code (code-header-from-pc target))
+         (debug-fun (debug-fun-from-pc
+                     callee-code
+                     (with-pinned-objects (callee-code)
+                       (sap- target
+                             (code-instructions callee-code))))))
+    (cond ((eq (debug-fun-kind debug-fun) :external)
+           (fun-debug-fun (debug-fun-fun debug-fun)))
+          ((bogus-debug-fun-p debug-fun)
+           nil)
+          (t debug-fun))))
+
 ;;; This returns a frame for the one existing in time immediately
 ;;; prior to the frame referenced by current-fp. This is current-fp's
 ;;; caller or the next frame down the control stack. If there is no
@@ -905,29 +929,57 @@
              (unless code
                (setf code :foreign-function
                      pc-offset 0))))
-      (let ((d-fun (case code
-                     (:undefined-function
-                      (make-bogus-debug-fun
-                       "undefined function"))
-                     (:foreign-function
-                      (make-bogus-debug-fun
-                       (foreign-function-backtrace-name ra)))
-                     ((nil)
-                      (make-bogus-debug-fun
-                       "bogus stack frame"))
-                     (t
-                      (debug-fun-from-pc code pc-offset
-                                         ;; Assembly routines share the frame
-                                         ;; but still use call/return,
-                                         ;; and debug-fun-from-pc will
-                                         ;; match the correct location
-                                         ;; if it's at the end of a
-                                         ;; debug-fun
-                                         (unless assembly-routine-p
-                                           escaped))))))
-        (make-compiled-frame caller up-frame d-fun
-                             (code-location-from-pc d-fun pc-offset
-                                                    escaped)
+      (let* ((d-fun (case code
+                      (:undefined-function
+                       (make-bogus-debug-fun
+                        "undefined function"))
+                      (:foreign-function
+                       (make-bogus-debug-fun
+                        (foreign-function-backtrace-name ra)))
+                      ((nil)
+                       (make-bogus-debug-fun
+                        "bogus stack frame"))
+                      (t
+                       (debug-fun-from-pc code pc-offset
+                                          ;; Assembly routines share the frame
+                                          ;; but still use call/return,
+                                          ;; and debug-fun-from-pc will
+                                          ;; match the correct location
+                                          ;; if it's at the end of a
+                                          ;; debug-fun
+                                          (unless assembly-routine-p
+                                            escaped)))))
+             (loc (code-location-from-pc d-fun pc-offset escaped))
+             ;; The caller of a full call moves CFP to the callee's
+             ;; new frame before the call instruction, so at a
+             ;; :call-site breakpoint CFP is the new frame, and the
+             ;; caller's original frame pointer must be read from
+             ;; where the caller stored it there: the callee's old fp
+             ;; passing location, a word offset from CFP.  On the
+             ;; x86oids a call of a static function or an assembly
+             ;; routine shares the caller's frame instead, and CFP
+             ;; is still the executing frame's own pointer, so there
+             ;; the frame is only new when the callee resolves to a
+             ;; debug fun of its own.
+             (caller #+(or x86 x86-64)
+                     (if (and escaped
+                              (compiled-debug-fun-p d-fun)
+                              (eq (code-location-kind loc) :call-site)
+                              (ignore-errors
+                                (call-site-target-debug-fun
+                                 code pc-offset escaped)))
+                         (int-sap (sap-ref-word caller 0))
+                         caller)
+                     #-(or x86 x86-64)
+                     (if (and escaped
+                              (compiled-debug-fun-p d-fun)
+                              (eq (code-location-kind loc) :call-site))
+                         (int-sap (sap-ref-word
+                                   caller
+                                   (* sb-vm:ocfp-save-offset
+                                      sb-vm:n-word-bytes)))
+                         caller)))
+        (make-compiled-frame caller up-frame d-fun loc
                              (if up-frame (1+ (frame-number up-frame)) 0)
                              ;; If we have an interrupt-context that's not on
                              ;; our stack at all, and we're computing the
@@ -1661,9 +1713,7 @@
                                     (sb-c:read-var-integerf blocks i)))
                     (equal-live (logtest sb-c::compiled-code-location-equal-live flags))
                     (form-number
-                      (cond ((logtest sb-c::compiled-code-location-zero-form-number flags)
-                             0)
-                            ((and equal-live
+                      (cond ((and equal-live
                                   (logtest sb-c::compiled-code-location-live flags))
                              prev-form-number)
                             (t
@@ -3210,7 +3260,12 @@
        (etypecase what
          (compiled-code-location
           ;; This slot is filled in due to calling CODE-LOCATION-UNKNOWN-P.
-          (when (eq (compiled-code-location-kind what) :unknown-return)
+          ;; When the single value return lands at the same address as
+          ;; the multiple value one, the partner would just be a second
+          ;; breakpoint on the same trap, whose hook is invoked a
+          ;; second time on each hit.
+          (when (and (eq (compiled-code-location-kind what) :unknown-return)
+                     (plusp single-value-return-byte-offset))
             (let ((other-bpt (%make-breakpoint hook-fun what
                                                :unknown-return-partner
                                                info)))
@@ -3408,10 +3463,11 @@
 (defun deactivate-compiled-breakpoint (breakpoint)
   (if (eq (breakpoint-kind breakpoint) :fun-end)
       (let ((starter (breakpoint-start-helper breakpoint)))
-        (unless (find-if (lambda (bpt)
-                           (and (not (eq bpt breakpoint))
-                                (eq (breakpoint-status bpt) :active)))
-                         (breakpoint-%info starter))
+        (when (and (eq (breakpoint-status starter) :active)
+                   (not (find-if (lambda (bpt)
+                                   (and (not (eq bpt breakpoint))
+                                        (eq (breakpoint-status bpt) :active)))
+                                 (breakpoint-%info starter))))
           (deactivate-compiled-breakpoint starter)))
       (let* ((data (breakpoint-internal-data breakpoint))
              (bpts (delete breakpoint (breakpoint-data-breakpoints data))))
@@ -3939,3 +3995,33 @@
                 (flush-frames-above caller)
                 (return caller)))))
       ((or error debug-condition) ()))))
+
+;;;; breakpoint stepping support
+
+;;;; Note: The following functions serve a similar purpose to :FUN-END
+;;;; breakpoint cookies.
+
+;;; FRAME1 and FRAME2 are considered the same frame if they have the
+;;; same frame pointer.
+(defun same-frame-p (frame1 frame2)
+  (sap= (frame-pointer frame1) (frame-pointer frame2)))
+
+;;; Return whether FRAME1 is the parent of FRAME2.
+(defun frame-calls-p (frame1 frame2)
+  (sap= (frame-pointer frame1)
+        (descriptor-sap
+         (frame-saved-cfp frame2 (frame-debug-fun frame2)))))
+
+;;; Given a FRAME interrupted at a :CALL-SITE code location, return
+;;; the DEBUG-FUN of the function which is about to be called if there
+;;; is one. Otherwise return NIL.
+(defun frame-call-site-target (frame)
+  (declare (type frame frame))
+  (let ((location (frame-code-location frame)))
+    (aver (memq (code-location-kind location) '(:call-site :tail-call-site)))
+    (etypecase location
+      (compiled-code-location
+       (call-site-target-debug-fun
+        (compiled-debug-fun-component (code-location-debug-fun location))
+        (compiled-code-location-pc location)
+        (compiled-frame-escaped frame))))))

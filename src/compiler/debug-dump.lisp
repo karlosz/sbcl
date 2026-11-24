@@ -24,7 +24,8 @@
 
 (deftype location-kind ()
   '(member :unknown-return :known-return :internal-error :non-local-exit
-           :block-start :call-site :single-value-return :non-local-entry))
+           :block-start :call-site :single-value-return :non-local-entry
+           :tail-call-site))
 
 ;;; The LOCATION-INFO structure holds the information what we need
 ;;; about locations which code generation decided were "interesting".
@@ -264,7 +265,9 @@
 
          (path (node-source-path node))
          (loc (if (fixnump label) label (label-position label)))
-         (form-number (source-path-form-number path)))
+         (form-number (source-path-form-number path))
+         (same-form-number (and equal-live
+                                 (eql form-number *previous-form-number*))))
     (vector-push-extend
      (logior
       (if context
@@ -273,15 +276,11 @@
       (if stepping
           compiled-code-location-stepping
           0)
-      (if (zerop form-number)
-          compiled-code-location-zero-form-number
-          0)
       (cond (equal-live
-             (cond ((eql form-number *previous-form-number*)
+             (cond (same-form-number
                     ;; Repurpose this bit for equal-form-number since
                     ;; -equal-live and -live don't need to appear at the
                     ;; same time.
-                    (setf form-number 0)
                     compiled-code-location-live)
                    (t
                     0)))
@@ -299,7 +298,7 @@
 
     (unless tlf-num
       (write-var-integer (source-path-tlf-number path) byte-buffer))
-    (unless (zerop form-number)
+    (unless same-form-number
       (setf *previous-form-number* form-number)
       (write-var-integer form-number byte-buffer))
 

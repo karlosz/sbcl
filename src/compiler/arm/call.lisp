@@ -909,7 +909,9 @@
                  (do-next-filler)
                  (return)))
 
-           (note-this-location vop :call-site)
+           (note-this-location vop ,(if (eq return :tail)
+                                        :tail-call-site
+                                        :call-site))
            ,@(if (eq return :tail)
                  '((loadw lip cfp-tn lra-save-offset)
                    (lisp-jump function))

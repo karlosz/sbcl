@@ -26,10 +26,12 @@
 ;;; Determine whether we should emit a single-stepper breakpoint
 ;;; around a call / before a vop.
 (defun emit-step-p (node)
-  (if (and (policy node (= insert-step-conditions 3))
-           (typep node 'combination))
-      (combination-step-info node)
-      nil))
+  (declare (ignore node))
+  ;; The instrumentation based stepper is superseded by the
+  ;; breakpoint based one; the step info this consulted is still
+  ;; dumped in the debug info, which the breakpoint stepper signals
+  ;; conditions from.
+  nil)
 
 ;;; Allocate an indirect value cell.
 (defevent make-value-cell-event "Allocate heap value cell for lexical var.")

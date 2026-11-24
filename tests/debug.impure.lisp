@@ -854,7 +854,7 @@
               (with-simple-restart (debugger-test-done! "Debugger Test Done!")
                 (let* ((*debug-io* (make-two-way-stream
                                     (make-string-input-stream control)
-                                    (make-broadcast-stream out #+nil *standard-output*)))
+                                    (make-broadcast-stream out *standard-output*)))
                        ;; Initial announcement goes to *ERROR-OUTPUT*
                        (*error-output* *debug-io*)
                        (*invoke-debugger-hook* nil))
@@ -970,28 +970,28 @@
    "0: (DEFUN ! (N)"
    "     (DECLARE (OPTIMIZE DEBUG))"
    "     (IF (ZEROP N)"
-   "         1"
-   "         (* N (! (1- N)))))"
-   "1: (ZEROP N)"
-   "2: (* N (! (1- N)))"
-   "3: (1- N)"
-   "4: (! (1- N))"
-   "5: (* N (! (1- N)))"
-   "6: (DEFUN ! (N)"
-   "     (DECLARE (OPTIMIZE DEBUG))"
-   "     (IF (ZEROP N)"
-   "         1"
-   "         (* N (! (1- N)))))"
-   "7: (IF (ZEROP N)"
-   "       1"
-   "       (* N (! (1- N))))"
+   "        1"
+   "        (* N (! (1- N)))))"
+   "1-2: (ZEROP N)"
+   "3: (* N (! (1- N)))"
+   "4-5: (1- N)"
+   "6-7: (! (1- N))"
+   "8-9: (* N (! (1- N)))"
+   "10: (DEFUN ! (N)"
+   "      (DECLARE (OPTIMIZE DEBUG))"
+   "      (IF (ZEROP N)"
+   "          1"
+   "          (* N (! (1- N)))))"
+   "11: (IF (ZEROP N)"
+   "        1"
+   "        (* N (! (1- N))))"
    "0]"))
 
 (with-test (:name (:debugger :breakpoint-and-step)
             :fails-on (:or :freebsd :arm :riscv))
   (test-debugger
    "ll #'!
-    br #.(progn (setq *ok-p* t) 2)"
+    br #.(progn (setq *ok-p* t) 3)"
    '(break)
    '*
    "debugger invoked"
@@ -1004,11 +1004,13 @@
    '*
    "(* N (! (1- N)))"
    '*
-   "1: 2 in !"
+   "1: 3 in !"
    "added"
    "0]")
   (test-debugger
    "step* 1
+    step* 1
+    step* 1
     step* 1
     debugger-test-done!"
    `(! 10)
@@ -1018,14 +1020,966 @@
    "(! 10)"
    "   source: (* N (! (1- N)))"
    "0]"
+   ""
+   "*Step*"
+   ;; The generic arithmetic routines are assembly code on the
+   ;; x86oids, with no debug fun of their own: neither the call
+   ;; display nor the return values appear there.
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-- 10 1)"
+   ""
    "(! 10)"
    "   source: (1- N)"
    "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-- 10 1) returned 9."
+   ""
+   "*Step*"
+   ""
+   "(! 10)"
+   "   source: (1- N)"
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (! 9)"
+   ""
+   "(! 10)"
+   "   source: (! (1- N))"
    '*
    "*Breakpoint hit*"
    '*
    "(! 9)"
    "   source: (* N (! (1- N)))"
+   "0]"))
+
+(defun step-test-callee (x)
+  (declare (optimize debug))
+  (+ x 1))
+
+(defun step-test-caller (x)
+  (declare (optimize debug))
+  (step-test-callee x)
+  x)
+
+(with-test (:name (:debugger :step*-call-site-display)
+            :fails-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "ll #'step-test-caller
+    br #.(progn (setq *ok-p* t) :start)"
+   '(break)
+   '*
+   "debugger invoked"
+   '*
+   "0]"
+   '*
+   "0]"
+   "2: FUN-START in STEP-TEST-CALLER"
+   "added"
+   "0]")
+  (test-debugger
+   "step* 1
+    step* 1
+    debugger-test-done!"
+   '(step-test-caller 5)
+   '*
+   "*Breakpoint hit*"
+   '*
+   "(STEP-TEST-CALLER 5)"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (STEP-TEST-CALLEE 5)"
+   ""
+   "(STEP-TEST-CALLER 5)"
+   "   source: (STEP-TEST-CALLEE X)"
+   "0]"
+   "The call (STEP-TEST-CALLEE 5) returned 6."
+   ""
+   "*Step*"
+   ""
+   "(STEP-TEST-CALLER 5)"
+   "   source: (STEP-TEST-CALLEE X)"
+   "0]"))
+
+(with-test (:name (:debugger :step-into*-enters-callee)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "ll #'step-test-caller
+    br #.(progn (setq *ok-p* t) :start)"
+   '(break)
+   '*
+   "debugger invoked"
+   '*
+   "0]"
+   '*
+   "0]"
+   "3: FUN-START in STEP-TEST-CALLER"
+   "added"
+   "0]")
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(step-test-caller 5)
+   '*
+   "*Breakpoint hit*"
+   '*
+   "(STEP-TEST-CALLER 5)"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (STEP-TEST-CALLEE 5)"
+   ""
+   "(STEP-TEST-CALLER 5)"
+   "   source: (STEP-TEST-CALLEE X)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-TEST-CALLEE 5)"
+   "   source: (DEFUN STEP-TEST-CALLEE (X) (DECLARE (OPTIMIZE DEBUG)) (+ X 1))"
+   "0]"
+   ""
+   "*Step"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-+ 5 1)"
+   ""
+   "(STEP-TEST-CALLEE 5)"
+   "   source: (+ X 1)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-+ 5 1) returned 6."
+   ""
+   "*Step*"
+   ""
+   "(STEP-TEST-CALLEE 5)"
+   "  source: (+ X 1)"
+   "0]"))
+
+(with-test (:name (:debugger :step-into*-not-at-call-site))
+  (test-debugger
+   "si
+    debugger-test-done!"
+   '(break)
+   '* "No call to step into"
+   '* "0]"))
+
+(defun fib (x)
+  (declare (optimize debug))
+  (if (< x 2)
+      1
+      (+ (fib (1- x))
+         (fib (- x 2)))))
+
+;; Check that recursive step breakpoints and recursvie
+;; :fun-end-breakpoints for showing return values work correctly.
+(with-test (:name (:debugger :step*-fib-test))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (fib 3))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (FIB 3)"
+   ""
+   "(\"stepping lambda\")"
+   "   source: (FIB 3)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ;; The generic arithmetic routines are assembly code on the
+   ;; x86oids, with no debug fun of their own: neither the call
+   ;; display nor the return values appear there.
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-< 3 2)"
+   ""
+   "(FIB 3)"
+   "  source: (< X 2)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-< 3 2) returned NIL."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "  source: (< X 2)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-- 3 1)"
+   ""
+   "(FIB 3)"
+   "   source: (1- X)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-- 3 1) returned 2."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (1- X)"
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (FIB 2)"
+   ""
+   "(FIB 3)"
+   "  source: (FIB (1- X))"
+   "0]"
+   "The call (FIB 2) returned 2."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (FIB (1- X))"
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-- 3 2)"
+   ""
+   "(FIB 3)"
+   "  source: (- X 2)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-- 3 2) returned 1."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (- X 2)"
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (FIB 1)"
+   ""
+   "(FIB 3)"
+   "   source: (FIB (- X 2))"
+   "0]"
+   "The call (FIB 1) returned 1."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (FIB (- X 2))"
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-+ 2 1)"
+   ""
+   "(FIB 3)"
+   "   source: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-+ 2 1) returned 3."
+   ""
+   "*Step*"
+   ""
+   "(FIB 3)"
+   "   source: (+ (FIB (1- X)) (FIB (- X 2)))"
+   "0]"))
+
+;;; Test that stepping over calls correctly displays multiple return
+;;; values.
+(defun step*-mv-callee ()
+  (declare (optimize debug))
+  (values 1 2 3))
+
+(defun step*-mv-test ()
+  (declare (optimize debug))
+  (step*-mv-callee)
+  t)
+
+(with-test (:name (:debugger :step*-multiple-values)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-mv-test))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP*-MV-TEST)"
+   ""
+   "(\"stepping lambda\")"
+   "   source: (STEP*-MV-TEST)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (STEP*-MV-CALLEE)"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source: (STEP*-MV-CALLEE)"
+   "0]"
+   "The call (STEP*-MV-CALLEE) returned 1, 2, 3."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source: (STEP*-MV-CALLEE)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MV-TEST)"
+   "   source:"
+   '*
+   "0]"))
+
+;;; Test stepping into a local (FLET) function.
+(defun step*-local-fn (x)
+  (declare (optimize debug))
+  (flet ((add-one (y)
+           (declare (optimize debug))
+           (+ y 1)))
+    (add-one x)))
+
+(with-test (:name (:debugger :step*-local-function)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-local-fn 5))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP*-LOCAL-FN 5)"
+   ""
+   "(\"stepping lambda\")"
+   "   source: (STEP*-LOCAL-FN 5)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-LOCAL-FN 5)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: ((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   ""
+   "(STEP*-LOCAL-FN 5)"
+   "   source: (ADD-ONE X)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (ADD-ONE (Y) (DECLARE (OPTIMIZE DEBUG)) (+ Y 1))"
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-+ 5 1)"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (+ Y 1)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-+ 5 1) returned 6."
+   ""
+   "*Step*"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (+ Y 1)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "((FLET ADD-ONE :IN STEP*-LOCAL-FN) 5)"
+   "   source: (ADD-ONE (Y) (DECLARE (OPTIMIZE DEBUG)) (+ Y 1))"
+   "0]"))
+
+;;; The location immediately after a local call returns must have the
+;;; :KNOWN-RETURN kind again: the debugger reads variables which are
+;;; saved across the call from their save locations at such locations.
+;;; At debug 2 the single local call uses the local call convention;
+;;; at debug 3 local calls go through the full call machinery and
+;;; their returns are :SINGLE-VALUE-RETURN, which the debugger
+;;; already treats as a post-call location.
+(defun step-known-ret (x)
+  (declare (optimize (debug 2)))
+  (flet ((bump (y) (1+ y)))
+    (let ((v (* x 2)))
+      (bump v)
+      v)))
+
+(with-test (:name (:debugger :known-return-location))
+  (let ((kinds '()))
+    (sb-di:do-debug-fun-blocks (block (sb-di:fun-debug-fun #'step-known-ret))
+      (when (typep block 'sb-di::compiled-debug-block)
+        (dolist (loc (coerce (sb-di::compiled-debug-block-code-locations block)
+                             'list))
+          (push (sb-di:code-location-kind loc) kinds))))
+    (assert (member :known-return kinds))))
+
+(with-test (:name (:debugger :known-return-var)
+            :skipped-on (not (or :arm64 :x86-64)))
+  ;; With V live across the local call, the stop after (BUMP V)
+  ;; returns must read V from its save location: the location has the
+  ;; :KNOWN-RETURN kind, and evaluating V there yields the value it
+  ;; had before the call, not the call's return value.
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    v
+    debugger-test-done!"
+   '(sb-debug::step* (step-known-ret 10))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP-KNOWN-RET 10)"
+   ""
+   "(\"stepping lambda\")"
+   "   source: (STEP-KNOWN-RET 10)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-KNOWN-RET 10)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-* 10)"
+   ""
+   "(STEP-KNOWN-RET 10)"
+   "   source: (* X 2)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-* 10) returned 20."
+   ""
+   "*Step*"
+   ""
+   "(STEP-KNOWN-RET 10)"
+   "   source: (* X 2)"
+   "0]"
+   ""
+   "*Step*"
+   "About to call: ((FLET BUMP :IN STEP-KNOWN-RET) 20)"
+   ""
+   "(STEP-KNOWN-RET 10)"
+   "   source: (BUMP V)"
+   "0]"
+   "The call ((FLET BUMP :IN STEP-KNOWN-RET) 20) returned no values."
+   ""
+   "*Step*"
+   ""
+   "(STEP-KNOWN-RET 10)"
+   "   source: (BUMP V)"
+   "0]"
+   "20"
+   "0]"))
+
+;;; The condition protocol of the instrumentation based stepper,
+;;; spoken by a *STEPPER-HOOK* consumer: one STEP-FORM-CONDITION per
+;;; stepped form, a STEP-VALUES-CONDITION when a stepped over call
+;;; returns, and a STEP-FINISHED-CONDITION at the end.
+(with-test (:name (:debugger :step-protocol)
+            :skipped-on (not (or :arm64 :x86-64)))
+  ;; The earlier tests leave their breakpoints on these functions.
+  (dolist (info sb-debug::*breakpoints*)
+    (sb-di:delete-breakpoint (sb-debug::breakpoint-info-breakpoint info)))
+  (setf sb-debug::*breakpoints* nil)
+  (let* ((results nil)
+         (sb-ext:*stepper-hook*
+           (lambda (condition)
+             (typecase condition
+               (sb-ext:step-form-condition
+                (push (list (sb-ext:step-condition-form condition)
+                            (sb-ext:step-condition-args condition))
+                      results)
+                (invoke-restart 'sb-ext:step-next))
+               (sb-ext:step-values-condition
+                (push (list :values
+                            (sb-ext:step-condition-form condition)
+                            (sb-ext:step-condition-result condition))
+                      results))
+               (sb-ext:step-finished-condition
+                (push (list :finished) results))))))
+    (sb-debug::step* (1+ (step-test-caller 5)))
+    (assert (equal
+             (reverse results)
+             ;; Step next descends into the callee like the
+             ;; instrumentation based stepper did.
+             '(("(STEP-TEST-CALLER 5)" (5))
+               ("(STEP-TEST-CALLEE X)" (5))
+               ("(+ X 1)" :unknown)
+               ;; The generic arithmetic has no debug fun on the
+               ;; x86oids, so its return values are not reported there.
+               #-(or x86 x86-64) (:values "(+ X 1)" (6))
+               (:values "(STEP-TEST-CALLEE X)" (6))
+               (:values "(STEP-TEST-CALLER 5)" (5))
+               ("(+ (STEP-TEST-CALLER 5) 1)" :unknown)
+               #-(or x86 x86-64) (:values "(+ (STEP-TEST-CALLER 5) 1)" (6))
+               (:finished))))))
+
+;;; Test stepping through mutually recursive local functions.
+(defun step*-mutual (n)
+  (declare (optimize debug))
+  (labels ((my-evenp (x)
+             (declare (optimize debug))
+             (if (zerop x) t (my-oddp (1- x))))
+           (my-oddp (x)
+             (declare (optimize debug))
+             (if (zerop x) nil (my-evenp (1- x)))))
+    (my-evenp n)))
+
+(with-test (:name (:debugger :step*-mutual-recursion)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-mutual 6))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP*-MUTUAL 6)"
+   ""
+   "(\"stepping lambda\")"
+   "   source: (STEP*-MUTUAL 6)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: ((LABELS MY-EVENP :IN STEP*-MUTUAL) 6)"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source: (MY-EVENP N)"
+   "0]"
+   "The call ((LABELS MY-EVENP :IN STEP*-MUTUAL) 6) returned T."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source: (MY-EVENP N)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-MUTUAL 6)"
+   "   source:"
+   '*
+   "0]"))
+
+;;; Combined test: a local function returning multiple values with
+;;; MV-CALL.
+(defun step*-combined (x)
+  (declare (optimize debug))
+  (flet ((compute (y)
+           (declare (optimize debug))
+           (values y (* y 2) (* y 3))))
+    (multiple-value-call #'+ (compute x))))
+
+(with-test (:name (:debugger :step*-combined)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-combined 5))
+   '*
+   "Stepping the form"
+   '*
+   "*Step*"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP*-COMBINED 5)"
+   ""
+   "(\"stepping lambda\")"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: ((FLET COMPUTE :IN STEP*-COMBINED) 5)"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (COMPUTE X)"
+   "0]"
+   "The call ((FLET COMPUTE :IN STEP*-COMBINED) 5) returned 5, 10, 15."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (COMPUTE X)"
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-+ 5 10)"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-+ 5 10) returned 15."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "0]"
+   ""
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-+ 15 15)"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-+ 15 15) returned 30."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-COMBINED 5)"
+   "   source: (MULTIPLE-VALUE-CALL #'+ (COMPUTE X))"
+   "0]"))
+
+(defun step*-target-fn (z)
+  (declare (optimize debug))
+  (+ z 100))
+
+(defun step*-caller-of-arg (fn val)
+  (declare (optimize debug))
+  (funcall fn val))
+
+(with-test (:name (:debugger :step*-funcall-arg)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step*-caller-of-arg #'step*-target-fn 20))
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP*-CALLER-OF-ARG #<FUNCTION STEP*-TARGET-FN> 20)"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-CALLER-OF-ARG #<FUNCTION STEP*-TARGET-FN> 20)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (STEP*-TARGET-FN 20)"
+   ""
+   "(STEP*-CALLER-OF-ARG #<FUNCTION STEP*-TARGET-FN> 20)"
+   "   source: (FUNCALL FN VAL)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-TARGET-FN 20)"
+   "   source:"
+   '*
+   "*Step*"
+   #-(or x86 x86-64) "About to call: (SB-KERNEL:TWO-ARG-+ 20 100)"
+   ""
+   "(STEP*-TARGET-FN 20)"
+   "  source: (+ Z 100)"
+   "0]"
+   #-(or x86 x86-64) "The call (SB-KERNEL:TWO-ARG-+ 20 100) returned 120."
+   ""
+   "*Step*"
+   ""
+   "(STEP*-TARGET-FN 20)"
+   "  source: (+ Z 100)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP*-TARGET-FN 20)"
+   "  source:"
+   "0]"))
+
+;;; Step out of the current frame and continue stepping in the caller.
+(defun step-out-inner (x)
+  (declare (optimize debug))
+  (truncate x 2))
+
+(defun step-out-outer (x)
+  (declare (optimize debug))
+  (list (step-out-inner x) x))
+
+(with-test (:name (:debugger :step-out*)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    si
+    so
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step-out-outer 30))
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP-OUT-OUTER 30)"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-OUT-OUTER 30)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (STEP-OUT-INNER 30)"
+   ""
+   "(STEP-OUT-OUTER 30)"
+   "   source: (STEP-OUT-INNER X)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-OUT-INNER 30)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-OUT-OUTER 30)"
+   "   source: (STEP-OUT-INNER X)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-OUT-OUTER 30)"
+   "   source:"
+   '*
+   "0]"))
+
+;;; Stepping from the last location of a frame stops in the calling
+;;; frame at the return location of the call.
+(defun step-last-inner (x)
+  (declare (optimize debug))
+  (truncate x 2))
+
+(defun step-last-outer (x)
+  (declare (optimize debug))
+  (list (step-last-inner x) x))
+
+(with-test (:name (:debugger :step-last-location)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "step* 1
+    si
+    step* 1
+    si
+    step* 1
+    step* 1
+    step* 1
+    step* 1
+    debugger-test-done!"
+   '(sb-debug::step* (step-last-outer 30))
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP-LAST-OUTER 30)"
+   ""
+   "(\"stepping lambda\")"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-LAST-OUTER 30)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (STEP-LAST-INNER 30)"
+   ""
+   "(STEP-LAST-OUTER 30)"
+   "   source: (STEP-LAST-INNER X)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-LAST-INNER 30)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to call: (TRUNCATE 30 2)"
+   ""
+   "(STEP-LAST-INNER 30)"
+   "   source: (TRUNCATE X 2)"
+   "0]"
+   "The call (TRUNCATE 30 2) returned 15, 0."
+   ""
+   "*Step*"
+   ""
+   "(STEP-LAST-INNER 30)"
+   "   source: (TRUNCATE X 2)"
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-LAST-INNER 30)"
+   "   source:"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   ""
+   "(STEP-LAST-OUTER 30)"
+   "   source: (STEP-LAST-INNER X)"
+   "0]"))
+
+(defun step-test-tail-called (x)
+  (+ x 1))
+
+(defun step-test-tail-calls (x)
+  (step-test-tail-called x))
+
+(with-test (:name (:debugger :step-tail-calls)
+            :skipped-on (not (or :arm64 :x86-64)))
+  (test-debugger
+   "ll #'step-test-tail-calls
+    br #.(progn (setq *ok-p* t) :start)"
+   '(break)
+   '*
+   "debugger invoked"
+   '*
+   "0]"
+   '*
+   "0]"
+   "2: FUN-START in STEP-TEST-TAIL-CALLS"
+   "added"
+   "0]")
+  (test-debugger
+   "step* 1
+    step* 1
+    debugger-test-done!"
+   '(step-test-tail-calls 5)
+   '*
+   "*Breakpoint hit*"
+   '*
+   "(STEP-TEST-TAIL-CALLS 5)"
+   '*
+   "0]"
+   ""
+   "*Step*"
+   "About to tail call: (STEP-TEST-TAIL-CALLED 5)"
+   ""
+   "(STEP-TEST-TAIL-CALLS 5)"
+   "   source: (STEP-TEST-TAIL-CALLED X)"
+   "0]"
+   "The tail call (STEP-TEST-TAIL-CALLED 5) returned 6."
+   ""
+   "*Step*"
+   ""
+   "(SB-INT:SIMPLE-EVAL-IN-LEXENV (STEP-TEST-TAIL-CALLS 5)"
    "0]"))
 
 (with-test (:name (disassemble :high-debug-eval))

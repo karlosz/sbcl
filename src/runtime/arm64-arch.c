@@ -159,6 +159,7 @@ void arch_do_displaced_inst(os_context_t *context, unsigned int orig_inst)
     }
     else if (((orig_inst >> 25) & 0b1111111) == 0b1101011) {
         int rt;
+        bool link = false;
         // Uncond branch register
         switch ((orig_inst >> 21) & 0b1111) {
         case 0b00: // BR
@@ -166,7 +167,7 @@ void arch_do_displaced_inst(os_context_t *context, unsigned int orig_inst)
             break;
         case 0b01: // BLR
             rt = (orig_inst >> 5) & 0b11111;
-            *os_context_register_addr(context, reg_LR) = (uword_t)(pc + 1);
+            link = true;
             break;
         case 0b10: // RET
             rt = reg_LR;
@@ -175,7 +176,11 @@ void arch_do_displaced_inst(os_context_t *context, unsigned int orig_inst)
             lose("Unrecognized instruction.");
             break;
         }
+        // Read the target register before clobbering LR in the case
+        // of BLR LR.
         next_pc = (unsigned int*)*os_context_register_addr(context, rt);
+        if (link)
+            *os_context_register_addr(context, reg_LR) = (uword_t)(pc + 1);
     }
     else if (((orig_inst >> 25) & 0b111111) == 0b011010) {
         // CBZ

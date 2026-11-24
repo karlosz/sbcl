@@ -36,6 +36,79 @@
   (let ((sp (context-register context sb-vm::esp-offset)))
     (sap-ref-word (int-sap sp) return-pc-save-offset)))
 
+;;; Return the target of the call instruction in the current signal
+;;; context.  INSTRUCTION is the original instruction word at the
+;;; trap, saved by the breakpoint machinery, when a breakpoint is
+;;; installed at the location.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (flet ((sx (value bits)
+           (if (logbitp (1- bits) value)
+               (logior value (- (ash 1 bits)))
+               value)))
+    (with-pinned-context-code-object (context)
+      (let* ((pc (context-pc context))
+             (read-byte
+               (lambda (i)
+                 (if (and instruction (< i 4))
+                     (ldb (byte 8 (* i 8)) instruction)
+                     (sap-ref-8 pc i))))
+             (read-dword
+               (lambda (i)
+                 (+ (funcall read-byte i)
+                    (ash (funcall read-byte (+ i 1)) 8)
+                    (ash (funcall read-byte (+ i 2)) 16)
+                    (ash (funcall read-byte (+ i 3)) 24))))
+             (opcode (funcall read-byte 0))
+             (modrm (funcall read-byte 1)))
+        (cond
+          ((= opcode #xE8)
+           ;; CALL rel32.
+           (sap+ pc (+ 5 (sx (funcall read-dword 1) 32))))
+          ((and (= opcode #xFF)
+                (= (ldb (byte 3 3) modrm) 2))
+           ;; CALL r/m32: FF /2.  A memory operand dereferences to
+           ;; the raw entry point of the callee; a register operand
+           ;; holds it.
+           (int-sap
+            (let* ((mod (ldb (byte 2 6) modrm))
+                   (rm (ldb (byte 3 0) modrm))
+                   (has-sib (and (/= mod 3) (= rm 4)))
+                   (sib (if has-sib (funcall read-byte 2) 0))
+                   (modrm-end (if has-sib 3 2))
+                   (disp
+                    (cond ((= mod 1)
+                           (sx (funcall read-byte modrm-end) 8))
+                          ((or (= mod 2)
+                               (and has-sib
+                                    (= (ldb (byte 3 0) sib) 5))
+                               (= rm 5))
+                           (sx (funcall read-dword modrm-end) 32))
+                          (t 0))))
+              (if (= mod 3)
+                  (context-register context rm)
+                  (+ (cond ((and (= mod 0) (= rm 5))
+                            ;; absolute, no base
+                            0)
+                           ((and has-sib (= mod 0)
+                                 (= (ldb (byte 3 0) sib) 5))
+                            0)
+                           (t (context-register
+                               context
+                               (if has-sib
+                                   (ldb (byte 3 0) sib)
+                                   rm))))
+                     (if (and has-sib
+                              (/= (ldb (byte 3 3) sib) 4))
+                         (ash (context-register
+                               context (ldb (byte 3 3) sib))
+                              (ldb (byte 2 6) sib))
+                         0)
+                     disp)))))
+          (t
+           (error "Unrecognized call instruction: ~x, pc: ~x"
+                  opcode pc)))))))
+
 #+(or linux win32)
 (define-alien-routine ("os_context_float_register_addr" context-float-register-addr)
   (* unsigned) (context (* os-context-t)) (index int))

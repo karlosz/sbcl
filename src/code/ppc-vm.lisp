@@ -21,6 +21,53 @@
 (defun context-lr (context)
   (declare (type (alien (* os-context-t)) context))
   (int-sap (deref (context-lr-addr context))))
+
+;;; Return the target of the call instruction in the current signal
+;;; context.  INSTRUCTION is the original instruction word at the
+;;; trap, saved by the breakpoint machinery, when a breakpoint is
+;;; installed at the location.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (labels ((sx (value bits)
+             (if (logbitp (1- bits) value)
+                 (logior value (- (ash 1 bits)))
+                 value))
+           (word-at (sap offset)
+             (sap-ref-32 sap (* 4 offset)))
+         (mtctr-reg (word)
+           ;; mtctr rt: opcode 31, XO 338, rt in bits 25:21.
+           (when (and (= (ldb (byte 6 26) word) 31)
+                      (= (ldb (byte 10 1) word) 338))
+             (ldb (byte 5 21) word)))
+         (bl-target (pc word)
+           ;; bl target: opcode 18 with LK set.
+           (sap+ pc (* 4 (sx (ldb (byte 24 2) word) 24)))))
+    (with-pinned-context-code-object (context)
+      (let* ((pc (context-pc context))
+             (word (or instruction (sap-ref-32 pc 0))))
+        (cond
+          ((mtctr-reg word)
+           ;; The register holds the raw entry point.
+           (int-sap (context-register context (mtctr-reg word))))
+          ((and (= (ldb (byte 6 26) word) 19)
+                (= (ldb (byte 10 1) word) 528))
+           ;; bctrl: the mtctr is before the location.
+           (int-sap (context-register
+                     context
+                     (mtctr-reg (word-at pc -1)))))
+          ((= (ldb (byte 6 26) word) 18)
+           (bl-target pc word))
+          (t
+           ;; The location can be at alignment padding before the
+           ;; bl of a local call; find it.
+           (let ((offset 0))
+             (loop
+              (incf offset)
+              (let ((w (word-at pc offset)))
+                (when (or (> offset 8)
+                          (= (ldb (byte 6 26) w) 18))
+                  (return (bl-target pc w))))))))))))
+
 (define-alien-routine ("os_context_float_register_addr" context-float-register-addr)
   (* unsigned) (context (* os-context-t)) (index int))
 

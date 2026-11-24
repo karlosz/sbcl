@@ -9,6 +9,33 @@
 (defun return-machine-address (scp)
   (context-register scp lip-offset))
 
+;;; Return the target of the call instruction in the current signal
+;;; context.  INSTRUCTION is the original instruction word at the
+;;; trap, saved by the breakpoint machinery, when a breakpoint is
+;;; installed at the location.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (flet ((sx (value bits)
+           (if (logbitp (1- bits) value)
+               (logior value (- (ash 1 bits)))
+               value)))
+    (with-pinned-context-code-object (context)
+      (let* ((pc (context-pc context))
+             (word (or instruction (sap-ref-32 pc 0))))
+        (cond
+          ((and (= (ldb (byte 6 26) word) 1)
+                (= (ldb (byte 5 16) word) #b10000))
+           ;; bal: the target is the delay slot plus the offset.
+           (sap+ pc (+ 4 (* 4 (sx (ldb (byte 16 0) word) 16)))))
+          ((and (zerop (ldb (byte 6 26) word))
+                (= (ldb (byte 6 0) word) 9))
+           ;; jalr: the register holds the raw entry point.
+           (int-sap (context-register context
+                                       (ldb (byte 5 21) word))))
+          (t
+           (error "Unrecognized call instruction: ~x, pc: ~x"
+                  word pc)))))))
+
 (define-alien-routine ("os_context_bd_cause" context-bd-cause-int)
     unsigned-int
   (context (* os-context-t) :in))

@@ -9,6 +9,35 @@
 (defun return-machine-address (scp)
   (context-register scp lr-offset))
 
+;;; Return the target of the call instruction in the current signal
+;;; context.  INSTRUCTION is the original instruction word at the
+;;; trap, saved by the breakpoint machinery, when a breakpoint is
+;;; installed at the location.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (flet ((sx (value bits)
+           (if (logbitp (1- bits) value)
+               (logior value (- (ash 1 bits)))
+               value)))
+    (with-pinned-context-code-object (context)
+      (let* ((pc (context-pc context))
+             (word (or instruction (sap-ref-32 pc 0))))
+        (cond
+          ((and (= (ldb (byte 4 24) word) #b1011)
+                (ldb (byte 1 27) word))
+           ;; bl: the target is pc + 8 + offset.
+           (sap+ pc (+ 8 (* 4 (sx (ldb (byte 24 0) word) 24)))))
+          ((= (ldb (byte 8 20) word) #b00101000)
+           ;; add lip, function, const: the register holds the
+           ;; tagged function; the constant makes its entry point.
+           (int-sap
+            (+ (context-register context (ldb (byte 4 16) word))
+               (- (ash simple-fun-insts-offset word-shift)
+                  fun-pointer-lowtag))))
+          (t
+           (error "Unrecognized call instruction: ~x, pc: ~x"
+                  word pc)))))))
+
 
 ;;;; "Sigcontext" access functions, cut & pasted from sparc-vm.lisp,
 ;;;; then modified for ARM.

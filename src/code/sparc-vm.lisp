@@ -18,6 +18,36 @@
 (defun return-machine-address (scp)
   (+ (context-register scp lip-offset) 8))
 
+;;; Return the target of the call instruction in the current signal
+;;; context.  INSTRUCTION is the original instruction word at the
+;;; trap, saved by the breakpoint machinery, when a breakpoint is
+;;; installed at the location.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (flet ((sx (value bits)
+           (if (logbitp (1- bits) value)
+               (logior value (- (ash 1 bits)))
+               value)))
+    (with-pinned-context-code-object (context)
+      (let* ((pc (context-pc context))
+             (word (or instruction (sap-ref-32 pc 0)))
+             (op (ldb (byte 2 30) word)))
+        (cond
+          ((= op 1)
+           ;; call target: the word is the signed 30 bit word
+           ;; displacement.
+           (sap+ pc (* 4 (sx (ldb (byte 30 0) word) 30))))
+          ((and (= op 2)
+                (= (ldb (byte 6 19) word) 56)
+                (logbitp 13 word))
+           ;; jmpl: the target is rs1 + simm13.
+           (int-sap
+            (+ (context-register context (ldb (byte 5 14) word))
+               (sx (ldb (byte 13 0) word) 13))))
+          (t
+           (error "Unrecognized call instruction: ~x, pc: ~x"
+                  word pc)))))))
+
 
 ;;;; "Sigcontext" access functions, cut & pasted from alpha-vm.lisp.
 ;;;;

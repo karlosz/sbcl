@@ -1122,10 +1122,12 @@
          (inst jmp :e DONE)
          (inst break single-step-around-trap))
        DONE
-       (note-this-location vop :call-site)
        ,(cond (named
                `(emit-direct-call fun ',(if (eq return :tail) 'jmp 'call)
-                                  node step-instrumenting))
+                                  node step-instrumenting vop
+                                  ,(if (eq return :tail)
+                                       :tail-call-site
+                                       :call-site)))
               ((eq return :tail)
                `(tail-call-unnamed rax fun-ref vop))
               (t
@@ -1176,42 +1178,58 @@
 
 ;;; Call NAME "directly" meaning in a single JMP or CALL instruction,
 ;;; if possible (without loading RAX)
-(defun emit-direct-call (name instruction node step-instrumenting)
-  (cond (step-instrumenting
-         ;; If step-instrumenting, then RAX points to the linkage table cell
-         (inst* instruction (ea rax-tn)))
-        ((code-immobile-p node)
-         (inst* instruction (rip-relative-ea (linkage-cell-fixup name node))))
-        #-immobile-space
-        (t (inst* instruction (ea (linkage-cell-fixup name node) null-tn)))
-        #+immobile-space ; again, this should not be worse than #-immobile-space, but it is
-        (t
-         ;; get the linkage table base into RAX
-         (inst mov rax-tn (static-constant-ea lisp-linkage-table))
-         (inst* instruction (ea (linkage-cell-fixup name node) rax-tn)))))
+(defun emit-direct-call (name instruction node step-instrumenting vop
+                        note-kind)
+  ;; The call site location goes right at the call instruction, so
+  ;; that the debugger can resolve the callee from the context there;
+  ;; the loads before it are not where a call is made.
+  (flet ((note ()
+           (when note-kind
+             (note-this-location vop note-kind))))
+    (cond (step-instrumenting
+           ;; If step-instrumenting, then RAX points to the linkage table cell
+           (note)
+           (inst* instruction (ea rax-tn)))
+          ((code-immobile-p node)
+           (note)
+           (inst* instruction (rip-relative-ea (linkage-cell-fixup name node))))
+          #-immobile-space
+          (t
+           (note)
+           (inst* instruction (ea (linkage-cell-fixup name node) null-tn)))
+          #+immobile-space ; again, this should not be worse than #-immobile-space, but it is
+          (t
+           ;; get the linkage table base into RAX
+           (inst mov rax-tn (static-constant-ea lisp-linkage-table))
+           (note)
+           (inst* instruction (ea (linkage-cell-fixup name node) rax-tn))))))
 
 ;;; Invoke the function-designator FUN.
 (defun tail-call-unnamed (fun fun-ref vop)
   (let ((relative-call (code-immobile-p vop))
         (fun-ea (object-slot-ea fun closure-fun-slot fun-pointer-lowtag)))
-    (case (fun-tn-type fun-ref)
-      (:designator
-       (assemble ()
-         (%test-lowtag fun rbx-tn (if relative-call
-                                      (make-fixup 'call-symbol :assembly-routine)
-                                      not-fun)
-                       t fun-pointer-lowtag
-                       :value-tn-ref fun-ref)
-         (inst jmp fun-ea)
-         not-fun
-         (unless relative-call
-           (if (csubtypep (tn-ref-type fun-ref) (specifier-type '(or null function)))
-               (emit-error-break vop error-trap (error-number-or-lose 'undefined-fun-error) (list fun))
-               (invoke-asm-routine 'jmp 'call-symbol vop)))))
-      (:symbol
-       (invoke-asm-routine 'jmp 'call-symbol vop))
-      (t
-       (inst jmp fun-ea)))))
+    (flet ((note ()
+             (note-this-location vop :tail-call-site)))
+      (case (fun-tn-type fun-ref)
+        (:designator
+         (assemble ()
+           (%test-lowtag fun rbx-tn (if relative-call
+                                        (make-fixup 'call-symbol :assembly-routine)
+                                        not-fun)
+                         t fun-pointer-lowtag
+                         :value-tn-ref fun-ref)
+           (note)
+           (inst jmp fun-ea)
+           not-fun
+           (unless relative-call
+             (if (csubtypep (tn-ref-type fun-ref) (specifier-type '(or null function)))
+                 (emit-error-break vop error-trap (error-number-or-lose 'undefined-fun-error) (list fun))
+                 (invoke-asm-routine 'jmp 'call-symbol vop)))))
+        (:symbol
+         (invoke-asm-routine 'jmp 'call-symbol vop))
+        (t
+         (note)
+         (inst jmp fun-ea))))))
 
 (defun call-unnamed (fun fun-ref vop)
   (let ((type (fun-tn-type fun-ref)))
@@ -1228,6 +1246,7 @@
                   (invoke-asm-routine 'call 'call-symbol vop)
                   (inst jmp ret))))
          call
+         (note-this-location vop :call-site)
          (inst call (object-slot-ea fun closure-fun-slot fun-pointer-lowtag))
          ret)))))
 

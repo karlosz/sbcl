@@ -80,3 +80,24 @@
                 (get-lisp-obj-address arg-count)))
         (setf (context-register context lexenv-offset) fun-addr)
         (set-context-pc context entry)))))
+
+;;; Return the target of the call instruction in the current signal
+;;; context.  INSTRUCTION is the original instruction word at the
+;;; trap, saved by the breakpoint machinery, when a breakpoint is
+;;; installed at the location.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (with-pinned-context-code-object (context)
+    (let* ((pc (context-pc context))
+           (word (or instruction (sap-ref-32 pc 0))))
+      (cond
+        ((= (ldb (byte 10 22) word) #b0000001011)
+         ;; addi.d lip, function, const: the register holds the
+         ;; tagged function; the constant makes its entry point.
+         (int-sap
+          (+ (context-register context (ldb (byte 5 5) word))
+             (- (ash simple-fun-insts-offset word-shift)
+                fun-pointer-lowtag))))
+        (t
+         (error "Unrecognized call instruction: ~x, pc: ~x"
+                word pc))))))

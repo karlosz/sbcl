@@ -50,7 +50,13 @@
     (= place 1)))
 
 (defun enable-stepping ()
-  (setf (stepping) 1))
+  ;; The breakpoint based stepper starts stepping from the frame we
+  ;; are currently stopped in; it is loaded later than this file.
+  ;; The old stepping flag stays off: with it on, instrumented code
+  ;; everywhere keeps signalling through the old runtime, on top of
+  ;; the breakpoints.
+  (when (fboundp 'sb-debug::%enable-stepping)
+    (sb-debug::%enable-stepping)))
 (defun disable-stepping ()
   (setf (stepping) 0))
 

@@ -11,8 +11,8 @@
 ;;;; absolutely no warranty. See the COPYING and CREDITS files for
 ;;;; more information.
 
-;; No stepper support on some platforms.
-#+(or interpreter riscv loongarch64 (and ppc64 big-endian)) (invoke-restart 'run-tests::skip-file)
+;; No breakpoint support on some platforms.
+#+(or interpreter riscv) (invoke-restart 'run-tests::skip-file)
 
 ;; These tests should either with code in dynamic space
 ;; or immobile space, but they only accidentally worked
@@ -58,9 +58,7 @@
 
 (defun test-step-into ()
   (let* ((results nil)
-         ;; The generic-< VOP on x86oids doesn't emit a full call
          (expected
-          #-(or x86 x86-64 arm64)
           '(("(FIB 3)" (3))
             ("(< X 2)" :unknown)
             ("(- X 1)" :unknown)
@@ -76,25 +74,7 @@
             ("(- X 2)" :unknown)
             ("(FIB (- X 2))" (1))
             ("(< X 2)" :unknown)
-            ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown))
-           #+(or x86 x86-64)
-           '(("(FIB 3)" (3))
-             ("(- X 1)" :unknown)
-             ("(FIB (1- X))" (2))
-             ("(- X 1)" :unknown)
-             ("(FIB (1- X))" (1))
-             ("(- X 2)" :unknown)
-             ("(FIB (- X 2))" (0))
-             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown)
-             ("(- X 2)" :unknown)
-             ("(FIB (- X 2))" (1))
-             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown))
-           #+arm64
-           '(("(FIB 3)" (3))
-             ("(FIB (1- X))" (2))
-             ("(FIB (1- X))" (1))
-             ("(FIB (- X 2))" (0))
-             ("(FIB (- X 2))" (1))))
+            ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown)))
          (*stepper-hook* (lambda (condition)
                            (typecase condition
                              (step-form-condition
@@ -122,24 +102,23 @@
              ("(- X 2)" :unknown)
              ("(FIB (- X 2))" (1))
              ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown))
-           #+(or x86 x86-64)
+           #+(or x86 x86-64 arm64)
            '(("(FIB 3)" (3))
+             ("(< X 2)" :unknown)
              ("(- X 1)" :unknown)
              ("(FIB (1- X))" (2))
+             ("(< X 2)" :unknown)
              ("(- X 1)" :unknown)
              ("(FIB (1- X))" (1))
+             ("(< X 2)" :unknown)
              ("(- X 2)" :unknown)
              ("(FIB (- X 2))" (0))
+             ("(< X 2)" :unknown)
              ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown)
              ("(- X 2)" :unknown)
              ("(FIB (- X 2))" (1))
-             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown))
-           #+arm64
-           '(("(FIB 3)" (3))
-             ("(FIB (1- X))" (2))
-             ("(FIB (1- X))" (1))
-             ("(FIB (- X 2))" (0))
-             ("(FIB (- X 2))" (1))))
+             ("(< X 2)" :unknown)
+             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown)))
          (count 0)
          (*stepper-hook* (lambda (condition)
                            (typecase condition
@@ -147,9 +126,7 @@
                               (push (list (step-condition-form condition)
                                           (step-condition-args condition))
                                     results)
-                              (if (< (incf count)
-                                     #+(or x86 x86-64) 4
-                                     #-(or x86 x86-64) 5)
+                              (if (< (incf count) 5)
                                   (invoke-restart 'step-into)
                                   (invoke-restart 'step-next)))))))
     (step (fib 3))
@@ -158,7 +135,6 @@
 (defun test-step-out ()
   (let* ((results nil)
          (expected
-           #-(or x86 x86-64 arm64)
            '(("(FIB 3)" (3))
              ("(< X 2)" :unknown)
              ("(- X 1)" :unknown)
@@ -167,22 +143,7 @@
              ("(- X 2)" :unknown)
              ("(FIB (- X 2))" (1))
              ("(< X 2)" :unknown)
-             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown))
-           #+(or x86 x86-64)
-           '(("(FIB 3)" (3))
-             ("(- X 1)" :unknown)
-             ("(FIB (1- X))" (2))
-             ("(- X 1)" :unknown)
-             ("(FIB (1- X))" (1))
-             ("(- X 2)" :unknown)
-             ("(FIB (- X 2))" (1))
-             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown))
-           #+arm64
-           '(("(FIB 3)" (3))
-             ("(FIB (1- X))" (2))
-             ("(FIB (1- X))" (1))
-             ("(FIB (- X 2))" (0))
-             ("(FIB (- X 2))" (1))))
+             ("(+ (FIB (1- X)) (FIB (- X 2)))" :unknown)))
          (count 0)
          (*stepper-hook* (lambda (condition)
                            (typecase condition
@@ -199,7 +160,6 @@
 (defun test-step-start-from-break ()
   (let* ((results nil)
          (expected
-          #-(or x86 x86-64 arm64)
           '(("(- X 2)" :unknown)
             ("(FIB-BREAK (- X 2))" (0))
             ("(< X 2)" :unknown)
@@ -207,17 +167,7 @@
             ("(- X 2)" :unknown)
             ("(FIB-BREAK (- X 2))" (1))
             ("(< X 2)" :unknown)
-            ("(+ (FIB-BREAK (1- X)) (FIB-BREAK (- X 2)))" :unknown))
-          #+(or x86 x86-64)
-          '(("(- X 2)" :unknown)
-            ("(FIB-BREAK (- X 2))" (0))
-            ("(+ (FIB-BREAK (1- X)) (FIB-BREAK (- X 2)))" :unknown)
-            ("(- X 2)" :unknown)
-            ("(FIB-BREAK (- X 2))" (1))
-            ("(+ (FIB-BREAK (1- X)) (FIB-BREAK (- X 2)))" :unknown))
-          #+arm64
-          '(("(FIB-BREAK (- X 2))" (0))
-            ("(FIB-BREAK (- X 2))" (1))))
+            ("(+ (FIB-BREAK (1- X)) (FIB-BREAK (- X 2)))" :unknown)))
          (*stepper-hook* (lambda (condition)
                            (typecase condition
                              (step-form-condition
@@ -236,18 +186,20 @@
 
 (defun test-step-frame ()
   (declare (optimize (debug 0)))
-  (let* ((count 0)
+  (let* ((names nil)
          (*stepper-hook* (lambda (condition)
                            (typecase condition
                              (step-form-condition
-                              (let* ((frame (sb-di::find-stepped-frame))
-                                     (dfun (sb-di::frame-debug-fun frame))
-                                     (name (sb-di::debug-fun-name dfun)))
-                                (assert (equal name 'fib))
-                                (incf count)
-                                (invoke-restart 'step-next)))))))
+                              (let ((frame (sb-di::find-stepped-frame)))
+                                (push (sb-di:debug-fun-name
+                                       (sb-di:frame-debug-fun frame))
+                                      names))
+                              (invoke-restart 'step-next))))))
     (step (fib 3))
-    (assert (= count #+arm64 2 #-(or x86 x86-64 arm64) 6 #+(or x86 x86-64) 5))))
+    ;; The first form is in the stepping lambda; the rest are in FIB.
+    (assert (equal (reverse names)
+                   '("stepping lambda" fib fib fib fib fib fib fib
+                     fib fib fib fib fib fib fib fib)))))
 
 (defun test-step-backtrace ()
   (let* ((*stepper-hook* (lambda (condition)

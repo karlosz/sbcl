@@ -307,6 +307,101 @@
 
 (defun stepper-fun (closure) (ensure-simplistic closure nil))
 
+;;; Return the target of the call instruction in the current signal
+;;; context.  The trap of an installed breakpoint overwrites the first
+;;; two instruction bytes; the original first four are passed in
+;;; INSTRUCTION, and later bytes are intact in memory.
+(defun context-call-site-target (context instruction)
+  (declare (type (alien (* os-context-t)) context))
+  (flet ((sx (value bits)
+           (if (logbitp (1- bits) value)
+               (logior value (- (ash 1 bits)))
+               value)))
+    (with-pinned-context-code-object (context)
+      (let* ((pc (context-pc context))
+             (read-byte
+               (lambda (i)
+                 (if (and instruction (< i 4))
+                     (ldb (byte 8 (* i 8)) instruction)
+                     (sap-ref-8 pc i))))
+             (read-dword
+               (lambda (i)
+                 (+ (funcall read-byte i)
+                    (ash (funcall read-byte (+ i 1)) 8)
+                    (ash (funcall read-byte (+ i 2)) 16)
+                    (ash (funcall read-byte (+ i 3)) 24))))
+             (rex (let ((b0 (funcall read-byte 0)))
+                    (if (= (ash b0 -4) 4) b0 0)))
+             (i (if (zerop rex) 0 1))
+             (opcode (funcall read-byte i))
+             (modrm (funcall read-byte (+ i 1))))
+        (cond
+          ((or (= opcode #xE8) (= opcode #xE9))
+           ;; CALL/JMP rel32.
+           (sap+ pc (+ i 5 (sx (funcall read-dword (+ i 1)) 32))))
+          ((and (= opcode #xFF)
+                (member (ldb (byte 3 3) modrm) '(2 4)))
+           ;; CALL/JMP r/m64: FF /2 or /4.  A memory operand
+           ;; dereferences to the raw entry point of the callee; a
+           ;; register operand holds it.
+           (int-sap
+            (let* ((mod (ldb (byte 2 6) modrm))
+                   (rm (ldb (byte 3 0) modrm))
+                   (has-sib (and (/= mod 3) (= rm 4)))
+                   (sib (if has-sib
+                            (funcall read-byte (+ i 2))
+                            0))
+                   (modrm-end (+ i (if has-sib 3 2)))
+                   (disp
+                    (cond ((= mod 1)
+                           (sx (funcall read-byte modrm-end) 8))
+                          ((= mod 2)
+                           (sx (funcall read-dword modrm-end) 32))
+                          ;; mod 0: a displacement is present for the
+                          ;; RIP relative form and for an absolute
+                          ;; SIB address.
+                          ((and has-sib (= (ldb (byte 3 0) sib) 5))
+                           (sx (funcall read-dword modrm-end) 32))
+                          ((= rm 5)
+                           (sx (funcall read-dword modrm-end) 32))
+                          (t 0)))
+                   (base-reg
+                    (cond ((and (= mod 0) (= rm 5)) :rip)
+                          ((and has-sib (= mod 0)
+                                (= (ldb (byte 3 0) sib) 5))
+                           :absolute)
+                          (t (if has-sib
+                                 (+ (ldb (byte 3 0) sib)
+                                    (if (logbitp 0 rex) 8 0))
+                                 (+ rm (if (logbitp 0 rex) 8 0))))))
+                   (index-reg
+                    (if (and has-sib
+                             (/= (+ (ldb (byte 3 3) sib)
+                                    (if (logbitp 1 rex) 8 0))
+                                 4))
+                        (+ (ldb (byte 3 3) sib)
+                           (if (logbitp 1 rex) 8 0))
+                        nil)))
+              (if (= mod 3)
+                  (context-register context
+                                   (+ rm (if (logbitp 0 rex) 8 0)))
+                  ;; The memory operand holds the raw entry point.
+                  (sap-ref-word
+                   (int-sap
+                    (+ (cond ((eq base-reg :rip)
+                              (+ (sap-int pc) (+ modrm-end 4)))
+                             ((eq base-reg :absolute) 0)
+                             (t (context-register context base-reg)))
+                       (if index-reg
+                           (ash (context-register context index-reg)
+                                (ldb (byte 2 6) sib))
+                           0)
+                       disp))
+                   0)))))
+          (t
+           (error "Unrecognized call instruction: ~x, pc: ~x"
+                  opcode pc)))))))
+
 ;;; Undo the effects of XEP-ALLOCATE-FRAME
 ;;; and point PC to FUNCTION
 (defun context-call-function (context function &optional arg-count)
