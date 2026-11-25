@@ -1954,6 +1954,12 @@
    "0]"
    '*
    "0]"
+   ;; The number of the frame the breakpoint stops in depends on the
+   ;; evaluator: the fast interpreter runs a form one frame fewer
+   ;; than the simple one.
+   #+sb-fasteval
+   "1: FUN-START in STEP-TEST-TAIL-CALLS"
+   #-sb-fasteval
    "2: FUN-START in STEP-TEST-TAIL-CALLS"
    "added"
    "0]")
@@ -1979,6 +1985,9 @@
    ""
    "*Step*"
    ""
+   #+sb-fasteval
+   "(SB-INT:EVAL-IN-LEXENV (STEP-TEST-TAIL-CALLS 5)"
+   #-sb-fasteval
    "(SB-INT:SIMPLE-EVAL-IN-LEXENV (STEP-TEST-TAIL-CALLS 5)"
    "0]"))
 
