@@ -43,7 +43,7 @@
                  (rep-one)
               ;; if we started stepping in the debugger, now is the
               ;; time to stop
-              (sb-impl::disable-stepping))))
+              (sb-debug::disable-stepping))))
        (declare (ignore reason-param))
        (cond
          ((and (eq reason :inspect)

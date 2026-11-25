@@ -561,8 +561,6 @@
 
  ("src/code/target-misc"       :not-host) ; dribble-stream, used by "save"
 
- ("src/code/early-step")                  ; target-thread needs *STEP-OUT*
-
  ("src/code/avltree"           :c-headers)
  ("src/code/target-thread"     :not-host)
 

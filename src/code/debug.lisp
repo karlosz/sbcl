@@ -547,6 +547,10 @@ Other commands:
     (sb-di:delete-breakpoint (car entry)))
   (setf *made-step-breakpoints* nil))
 
+(defun disable-stepping ()
+  ;; Stop following execution: clear the breakpoints the stepper armed.
+  (clear-step-breakpoints))
+
 ;;; Whether stepping is driven by a *STEPPER-HOOK* consumer through
 ;;; the condition protocol of the instrumentation based stepper,
 ;;; whose tests and editor integrations speak it.  The default hook
@@ -611,9 +615,8 @@ Other commands:
                 t))))))))
 
 ;;; Arm step breakpoints at the frame we are currently stopped in,
-;;; for starting to step from a break; called by
-;;; SB-IMPL:ENABLE-STEPPING.
-(defun %enable-stepping ()
+;;; for starting to step from a break.
+(defun enable-stepping ()
   ;; The frame to start stepping from is the one which signalled the
   ;; condition this runs from.  It sits below the handler we run in
   ;; and below the condition signalling machinery; walk down to the
@@ -2712,7 +2715,7 @@ Stepping over call instead.~%")
       (format *debug-io* "~&Already single-stepping.~%")
       (let ((restart (find-restart 'continue *debug-condition*)))
         (cond (restart
-               (sb-impl::enable-stepping)
+               (enable-stepping)
                (invoke-restart restart))
               (t
                (format *debug-io* "~&Non-continuable error, cannot start stepping.~%"))))))

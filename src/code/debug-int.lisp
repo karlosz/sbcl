@@ -964,6 +964,7 @@
              (caller #+(or x86 x86-64)
                      (if (and escaped
                               (compiled-debug-fun-p d-fun)
+                              (not (code-location-unknown-p loc))
                               (eq (code-location-kind loc) :call-site)
                               (ignore-errors
                                 (call-site-target-debug-fun
@@ -973,6 +974,7 @@
                      #-(or x86 x86-64)
                      (if (and escaped
                               (compiled-debug-fun-p d-fun)
+                              (not (code-location-unknown-p loc))
                               (eq (code-location-kind loc) :call-site))
                          (int-sap (sap-ref-word
                                    caller

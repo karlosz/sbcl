@@ -179,7 +179,7 @@
     (handler-bind ((cerror-break
                     (lambda (c)
                       (declare (ignore c))
-                      (sb-impl::enable-stepping)
+                      (sb-debug::enable-stepping)
                       (invoke-restart 'continue))))
       (fib-break 3))
     (assert (equal expected (reverse results)))))

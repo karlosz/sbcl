@@ -575,7 +575,7 @@
                     (sb-cover:save-coverage-in-file name))
                   (log-file-elapsed-time file start log))))
             (skip-file ())))
-        (sb-impl::disable-stepping)
+        (sb-debug::disable-stepping)
         (sb-int:unencapsulate 'open 'open-guard)
         (unless (eql (generation-number-of-gcs-before-promotion 0) gen0-gcs-before-promo)
           (format t "~&::: NOTE: nursery space promotion rate restored to nominal~%")

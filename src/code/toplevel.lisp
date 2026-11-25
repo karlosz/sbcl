@@ -759,7 +759,7 @@ that provides the REPL for the system. Assumes that *STANDARD-INPUT* and
                 (fresh-line)
                 (prin1 result)))))
      ;; If we started stepping in the debugger we want to stop now.
-     (disable-stepping))))
+     (sb-debug::disable-stepping))))
 
 ;;; a convenient way to get into the assembly-level debugger
 (defun %halt ()
