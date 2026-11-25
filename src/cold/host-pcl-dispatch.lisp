@@ -15,6 +15,11 @@
 
 (in-package "SB-PCL")
 
+;;; make-host-2's and genesis's records, and host PCL's generic functions,
+;;; which it makes as it builds
+(declaim (special sb-cold::*host-pcl-record* sb-fasl::*cold-early-methods*)
+         (ftype function add-reader-method add-writer-method class-wrapper))
+
 (unless (find-package "SB-PCL-DISPATCH")
   (make-package "SB-PCL-DISPATCH" :use nil))
 

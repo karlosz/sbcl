@@ -11,8 +11,6 @@
 ;;; files are loaded; genesis writes out what it builds.  In make-host-2,
 ;;; what host PCL compiles is cross-compiled into the cold core as well
 ;;; (SB-FASL::COLD-COMPILE).
-(load "src/cold/host-pcl.lisp")
-(load "src/cold/host-pcl-dispatch.lisp")
 (load "src/cold/host-pcl-dump.lisp")
 (setq sb-fasl::*cold-load-finish-hook*
       (lambda ()

@@ -645,6 +645,10 @@
  ("src/pcl/methods" :host-definitions :pcl-proper)
  ("src/pcl/fixup" :host-definitions :pcl-proper)
  ("src/pcl/defcombin" :host-definitions :pcl-proper)
+ ;; PCL on the host, over the cross-compiler's copy of PCL's files: genesis
+ ;; has it build the class hierarchy (src/cold/genesis-2.lisp)
+ ("src/cold/host-pcl" :not-target)
+ ("src/cold/host-pcl-dispatch" :not-target)
  ;; definitions the rest of the system calls from the start
  ("src/pcl/call-next-method" :not-host :pcl-target-only)
  ("src/pcl/env" :not-host :pcl-target-only)

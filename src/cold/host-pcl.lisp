@@ -22,7 +22,9 @@
 
 (in-package "SB-PCL")
 
-(setf (fdefinition 'sb-xc:ensure-generic-function) #'real-ensure-generic-function)
+;;; genesis's (FOP-MSET), and what INSTALL-HOST-PCL-OPERATORS defines
+(declaim (special sb-fasl::*cold-method-records*)
+         (ftype function host-real-make-method-initargs-form-internal1))
 
 
 
@@ -210,22 +212,33 @@
   (make-host-recipe '|STRUCTURE-OBJECT class constructor|))
 (defun host-make-condition (name) (make-host-recipe 'make-condition name))
 
-;;; Operators of PCL's code that are host PCL's on the host: FIND-CLASS,
-;;; and the layouts of PCL's classes
-(setf (fdefinition 'sb-xc:find-class) #'host-find-class
-      (fdefinition '(setf sb-xc:find-class)) #'(setf host-find-class))
-(let ((make-layout (fdefinition 'sb-kernel:make-layout))
-      (register-layout (fdefinition 'sb-kernel:register-layout)))
-  (setf (fdefinition 'sb-kernel:make-layout)
-        (lambda (hash classoid &rest keys)
-          (if (typep classoid 'sb-kernel:standard-classoid) ; PCL's
-              (apply #'host-make-layout hash classoid keys)
-              (apply make-layout hash classoid keys)))
-        (fdefinition 'sb-kernel:register-layout)
-        (lambda (layout &rest keys)
-          (if (host-own-classoid-p (sb-kernel:layout-classoid layout))
-              (apply #'host-register-layout layout keys)
-              (apply register-layout layout keys)))))
+;;; Operators of the cross-compiler's that are host PCL's while it builds
+;;; (HOST-PCL-BUILD): FIND-CLASS, the layouts of PCL's classes, ... until
+;;; then, the cross-compiler's, which make-host-2 compiles with.
+(defun install-host-pcl-operators ()
+  (setf (fdefinition 'sb-xc:ensure-generic-function) #'real-ensure-generic-function
+        (fdefinition 'sb-xc:find-class) #'host-find-class
+        (fdefinition '(setf sb-xc:find-class)) #'(setf host-find-class))
+  (let ((make-layout (fdefinition 'sb-kernel:make-layout))
+        (register-layout (fdefinition 'sb-kernel:register-layout)))
+    (setf (fdefinition 'sb-kernel:make-layout)
+          (lambda (hash classoid &rest keys)
+            (if (typep classoid 'sb-kernel:standard-classoid) ; PCL's
+                (apply #'host-make-layout hash classoid keys)
+                (apply make-layout hash classoid keys)))
+          (fdefinition 'sb-kernel:register-layout)
+          (lambda (layout &rest keys)
+            (if (host-own-classoid-p (sb-kernel:layout-classoid layout))
+                (apply #'host-register-layout layout keys)
+                (apply register-layout layout keys)))))
+  (setf (fdefinition '(setf slot-value)) #'host-set-slot-value
+        (fdefinition 'class-has-a-forward-referenced-superclass-p)
+        #'host-class-has-a-forward-referenced-superclass-p
+        (fdefinition 'host-real-make-method-initargs-form-internal1)
+        #'make-method-initargs-form-internal1
+        (fdefinition 'make-method-initargs-form-internal1)
+        #'host-make-method-initargs-form-internal1)
+  (setq *host-pcl-class-typep* #'host-pcl-class-typep))
 
 ;;;; Target operators that the host lacks
 
@@ -253,13 +266,13 @@
 
 ;;; (SETF SLOT-VALUE), as defsetfs.lisp's SET-SLOT-VALUE (PCL proper, which
 ;;; the host compiled, calls the function)
-(defun (setf slot-value) (new-value object slot-name)
+(defun host-set-slot-value (new-value object slot-name)
   (set-slot-value object slot-name new-value))
 
-;;; std-class.lisp's, which the cross-compiler has too (cross-type.lisp, and
-;;; replaced by host-pcl-defs.lisp): host PCL's own
+;;; std-class.lisp's, which the cross-compiler has too (a stub in
+;;; cross-type.lisp): host PCL's own
 (declaim (ftype function class-direct-superclasses)) ; host PCL defines it later
-(defun class-has-a-forward-referenced-superclass-p (class)
+(defun host-class-has-a-forward-referenced-superclass-p (class)
   (or (when (forward-referenced-class-p class)
         class)
       (some #'class-has-a-forward-referenced-superclass-p
@@ -308,7 +321,6 @@
                         :key (lambda (c)
                                (clos-slots-ref (get-slots c) (!bootstrap-slot-index 'class 'name))))
                 t)))))
-(setq *host-pcl-class-typep* #'host-pcl-class-typep)
 
 ;;;; Loading target sources into the host
 
@@ -339,14 +351,11 @@
                           (make-host-recipe '!built-in-class-prototype name))))
                 *built-in-classes*)))
 
-;;; boot.lisp's, which the cross-compiler has, wrapped
-(setf (fdefinition 'host-real-make-method-initargs-form-internal1)
-      #'make-method-initargs-form-internal1)
-
 ;;; The plists of the cross-compiled methods, which genesis has (FOP-MSET):
 ;;; methods built on the host get these, as they go with the cross-compiled
-;;; functions genesis gives them.
-(defun make-method-initargs-form-internal1 (initargs &rest args)
+;;; functions genesis gives them.  (boot.lisp's, which the cross-compiler
+;;; has, wrapped.)
+(defun host-make-method-initargs-form-internal1 (initargs &rest args)
   (let ((plist (and *method-name*
                     (getf (sixth (gethash *method-name*
                                           sb-fasl::*cold-method-records*))
@@ -450,6 +459,7 @@
 ;;; by their names (FOP-TEMPLATE-CLOSURE): while host PCL makes code they are
 ;;; numbered, by a count of its own.
 (defun host-pcl-build ()
+  (install-host-pcl-operators)
   (let ((xc-gensym (fdefinition 'sb-xc:gensym))
         (n 0))
     (setf (fdefinition 'sb-xc:gensym)
