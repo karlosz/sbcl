@@ -467,6 +467,25 @@
 
 ;;;; main entries to object dumping
 
+;;; A closure that host PCL made of a TEMPLATE-LAMBDA (src/cold/host-pcl.lisp):
+;;; *TEMPLATE-CLOSURE-OF* gives the template's name, the values of its
+;;; variables (an alist) and the closure's name, and genesis makes the
+;;; target's closure of the template's function (FOP-TEMPLATE-CLOSURE).
+#+sb-xc-host
+(progn
+(defvar *template-closure-of* nil)
+(defun dump-template-closure (x file)
+  (multiple-value-bind (template values name)
+      (if *template-closure-of*
+          (funcall *template-closure-of* x)
+          (error "This object cannot be dumped into a fasl file:~% ~S" x))
+    (dump-object template file)
+    (dump-object name file)
+    (loop for (var . value) in values
+          do (dump-object var file)
+             (dump-object value file))
+    (dump-fop 'fop-closure file (length values)))))
+
 ;;; This function deals with dumping objects that are complex enough
 ;;; so that we want to cache them in the table, rather than repeatedly
 ;;; dumping them. If the object is in the EQ-TABLE, then we push it,
@@ -499,6 +518,10 @@
               (dump-object 'values-specifier-type file)
               (dump-object (type-specifier x) file)
               (dump-fop 'fop-funcall file 1))
+             #+sb-xc-host
+             (function
+              (dump-template-closure x file)
+              (eq-save-object x file))
              (instance
               (multiple-value-bind (slot-names slot-names-p)
                   (gethash x (fasl-output-saved-slot-names file))

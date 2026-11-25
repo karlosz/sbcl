@@ -2829,6 +2829,60 @@ Legal values for OFFSET are -4, -8, -12, ..."
     (aver (not (gethash name *cold-template-funs*)))
     (setf (gethash name *cold-template-funs*) (cons fn vars))))
 
+;;; TEMPLATE's function and its closures' variables, as above
+(defun cold-template-fun (template)
+  (or (gethash template *cold-template-funs*)
+      (error "host PCL: no function for ~S" template)))
+;;; The value of the template's variable VAR in VALUES, an alist of its
+;;; variables (a gensym came back from the fasl as another of its name)
+(defun template-var-value (template var values)
+  (let ((cell (assoc var values
+                     :test (lambda (var key)
+                             (or (eq var key)
+                                 (and (null (cl:symbol-package var))
+                                      (null (cl:symbol-package key))
+                                      (string= var key)))))))
+    (unless cell
+      (error "host PCL: ~S closes over ~S, not given to it" template var))
+    (cdr cell)))
+;;; A name goes in the padding word after a closure's values, which an
+;;; even number of them doesn't have: as SET-CLOSURE-EXTRA-VALUES, add a
+;;; value slot.
+(defun template-closure-n-slots (n-values namedp)
+  (if (and namedp (evenp n-values)) (1+ n-values) n-values))
+;;; A closure of FUN with N-VALUES slots for the values and, if NAMEDP, one
+;;; for its name, which the caller writes (SET-TEMPLATE-CLOSURE-NAME)
+(defun allocate-template-closure (fun n-values namedp)
+  (let* ((n-words (+ sb-vm:closure-info-offset (template-closure-n-slots n-values namedp)))
+         (closure (allocate-object *dynamic* (+ n-words (if namedp 1 0))
+                                   sb-vm:fun-pointer-lowtag)))
+    (write-header-word closure
+                       (logior (sb-vm::compute-object-header n-words sb-vm:closure-widetag)
+                               (if namedp #x800000 0))) ; CLOSURE-EXTRA-DATA-INDICATOR
+    (write-wordindexed/raw closure sb-vm:closure-fun-slot (cold-fun-entry-addr fun))
+    closure))
+(defun set-template-closure-name (closure n-values name)
+  (write-wordindexed closure
+                     (+ sb-vm:closure-info-offset (template-closure-n-slots n-values t))
+                     name))
+(define-cold-fop (fop-closure (n))
+  (let* ((values (loop repeat n
+                       collect (let ((value (pop-stack)))
+                                 (cons (host-object-from-core (pop-stack) nil) value))))
+         (name (pop-stack))
+         (template (cold-pcl-method-key (host-object-from-core (pop-stack))))
+         (name (if (or (null name) (and (descriptor-p name) (cold-null name))) nil name)))
+    (destructuring-bind (fun . vars) (cold-template-fun template)
+      (if (eq vars :none)                 ; it closes over nothing
+          fun
+          (let ((closure (allocate-template-closure fun (length vars) name)))
+            (loop for var in vars for i from 0
+                  do (write-wordindexed closure (+ sb-vm:closure-info-offset i)
+                                        (template-var-value template var values)))
+            (when name
+              (set-template-closure-name closure (length vars) name))
+            closure)))))
+
 ;;; A method's name and specializers, or a template's name, as host PCL has
 ;;; them: PCL's definitions of CL's names (*PCL-SHADOWS*, *PCL-CLASS-SHADOWS*)
 ;;; are SB-XC's (HOST-PCL-CANONICAL-SYMBOL)

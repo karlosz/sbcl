@@ -1181,6 +1181,12 @@
 ;;; low.lisp), and the variables in its closure's slots, for genesis.
 (define-fop 85 :not-host (fop-template-closure (name vars fn) nil)
   (declare (ignore name vars fn)))
+;;; A closure of such a function, over the values of N of the template's
+;;; variables (on the stack after TEMPLATE and NAME, each after its
+;;; variable): genesis makes it, of host PCL's.
+(define-fop 86 :not-host (fop-closure ((:operands n) template name))
+  (declare (ignore template name))
+  (bug "FOP-CLOSURE (of ~D values) is only for genesis" n))
 
 ;;; Modify a slot of the code boxed constants.
 (define-fop 20 (fop-alter-code ((:operands index) code value) nil)

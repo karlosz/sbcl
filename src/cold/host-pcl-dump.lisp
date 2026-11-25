@@ -82,41 +82,24 @@
 (defun host-pcl-template-closure (x)
   (destructuring-bind (template . values) (gethash x sb-pcl::*host-templates*)
     (when (eq (second template) :cold-compile) (incf *host-pcl-cold-compiled-written*))
-    (destructuring-bind (fun . vars)
-        (or (gethash template *cold-template-funs*)
-            (error "host PCL: no function for ~S" template))
-      (let ((name (gethash x sb-pcl::*host-fun-names*)))
-        (when (eq vars :none)             ; it closes over nothing
-          (return-from host-pcl-template-closure fun))
-        (let* ((n-values (length vars))
-               ;; A name goes in the padding word after the values, which an
-               ;; even number of them doesn't have: as SET-CLOSURE-EXTRA-VALUES,
-               ;; add a value slot.
-               (n-slots (if (and name (evenp n-values)) (1+ n-values) n-values))
-               (n-words (+ sb-vm:closure-info-offset n-slots))
-               (closure (allocate-object *dynamic* (+ n-words (if name 1 0))
-                                         sb-vm:fun-pointer-lowtag)))
-          (setf (gethash x *host-pcl-memo*) closure)
-          (write-header-word closure
-                             (logior (sb-vm::compute-object-header n-words sb-vm:closure-widetag)
-                                     (if name #x800000 0))) ; CLOSURE-EXTRA-DATA-INDICATOR
-          (write-wordindexed/raw closure sb-vm:closure-fun-slot (cold-fun-entry-addr fun))
-          (loop for var in vars for i from 0
-                do (let ((cell (assoc var values
-                                    ;; a gensym came back from the fasl as another
-                                    :test (lambda (var key)
-                                            (or (eq var key)
-                                                (and (null (cl:symbol-package var))
-                                                     (null (cl:symbol-package key))
-                                                     (string= var key)))))))
-                     (unless cell
-                       (error "host PCL: ~S closes over ~S, not given to it" template var))
-                     (write-wordindexed closure (+ sb-vm:closure-info-offset i)
-                                        (host-pcl-slot-value (cdr cell) closure :closure i))))
-          (when name
-            (write-wordindexed closure (+ sb-vm:closure-info-offset n-slots)
-                               (host-pcl-to-core name)))
-          closure)))))
+    (destructuring-bind (fun . vars) (cold-template-fun template)
+      (when (eq vars :none)             ; it closes over nothing
+        (return-from host-pcl-template-closure fun))
+      (let* ((name (gethash x sb-pcl::*host-fun-names*))
+             (closure (allocate-template-closure fun (length vars) name)))
+        (setf (gethash x *host-pcl-memo*) closure)
+        (loop for var in vars for i from 0
+              do (write-wordindexed closure (+ sb-vm:closure-info-offset i)
+                                    (host-pcl-slot-value (template-var-value template var values)
+                                                         closure :closure i)))
+        (when name
+          (set-template-closure-name closure (length vars) (host-pcl-to-core name)))
+        closure))))
+;;; for the dumper (DUMP-TEMPLATE-CLOSURE)
+(setq sb-c::*template-closure-of*
+      (lambda (x)
+        (destructuring-bind (template . values) (gethash x sb-pcl::*host-templates*)
+          (values template values (gethash x sb-pcl::*host-fun-names*)))))
 
 (defun host-pcl-recipe-of (x)
   (cond ((sb-pcl::host-recipe-p x) x)
@@ -661,3 +644,4 @@
       (let ((*cold-load-functions-only* t))
         (cold-load fasl nil nil)))
     (values name closure-name parameters)))
+
