@@ -62,14 +62,14 @@
              (opcode (funcall read-byte 0))
              (modrm (funcall read-byte 1)))
         (cond
-          ((= opcode #xE8)
-           ;; CALL rel32.
+          ((or (= opcode #xE8) (= opcode #xE9))
+           ;; CALL/JMP rel32.
            (sap+ pc (+ 5 (sx (funcall read-dword 1) 32))))
           ((and (= opcode #xFF)
-                (= (ldb (byte 3 3) modrm) 2))
-           ;; CALL r/m32: FF /2.  A memory operand dereferences to
-           ;; the raw entry point of the callee; a register operand
-           ;; holds it.
+                (member (ldb (byte 3 3) modrm) '(2 4)))
+           ;; CALL/JMP r/m32: FF /2 or /4.  A memory operand
+           ;; dereferences to the raw entry point of the callee; a
+           ;; register operand holds it.
            (int-sap
             (let* ((mod (ldb (byte 2 6) modrm))
                    (rm (ldb (byte 3 0) modrm))
