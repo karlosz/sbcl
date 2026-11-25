@@ -207,6 +207,12 @@ Other commands:
 (defvar *made-step-breakpoints* nil)
 (declaim (type list *made-step-breakpoints*))
 
+;;; The step locations shown in place, without resuming first: the
+;;; ones which share their instruction with the location the stepper
+;;; is stopped at (see SET-STEP-BREAKPOINT).
+(defvar *presented-in-place-steps* nil)
+(declaim (type list *presented-in-place-steps*))
+
 ;;; Defined in src/code/step.lisp, which is compiled later than this
 ;;; file; declare it so that the references below compile.
 (declaim (special sb-ext:*stepper-hook*))
@@ -316,8 +322,15 @@ Other commands:
                             ((map 'list #'first-code-location
                                   (sb-di:debug-block-successors debug-block)))
                             (t nil))))
+      ;; The next location can name the same instruction as the one
+      ;; passed (with :TLS-BASED-MV-RETURN the single-value landing of
+      ;; a call is the one the next form starts at): a location of the
+      ;; same kind notes the same stop over again, so step to what
+      ;; follows it, but one of a different kind is a stop of its own.
       (when (and (= (length next-list) 1)
-                 (sb-di:code-location= (first next-list) code-location))
+                 (sb-di:code-location= (first next-list) code-location)
+                 (eq (sb-di:code-location-kind (first next-list))
+                     (sb-di:code-location-kind code-location)))
         (setf next-list (next-code-locations (first next-list))))
       next-list)))
 
@@ -382,6 +395,9 @@ Other commands:
 ;;; STEP breakpoints are.
 (defun main-hook-fun (current-frame breakpoint &optional return-vals
                                                          fun-end-cookie)
+  ;; A breakpoint fired, so execution moved past any location shown in
+  ;; place.
+  (setf *presented-in-place-steps* nil)
   (let ((*default-breakpoint-debug-fun*
           (sb-di:frame-debug-fun current-frame)))
     ;; Bind rather than set: the test harness checks that globals
@@ -545,7 +561,8 @@ Other commands:
 (defun clear-step-breakpoints ()
   (dolist (entry *made-step-breakpoints*)
     (sb-di:delete-breakpoint (car entry)))
-  (setf *made-step-breakpoints* nil))
+  (setf *made-step-breakpoints* nil
+        *presented-in-place-steps* nil))
 
 (defun disable-stepping ()
   ;; Stop following execution: clear the breakpoints the stepper armed.
@@ -700,7 +717,8 @@ Other commands:
       (when caller
         (arm-step-breakpoint caller
                              (sb-di:frame-code-location caller)
-                             number-of-steps))))
+                             number-of-steps)))
+    nil)
    (t
     (let* ((code-location (sb-di:frame-code-location frame))
            (next-code-locations (next-code-locations code-location))
@@ -764,36 +782,87 @@ Other commands:
               (push (cons bp frame) *made-step-breakpoints*)
               (push (create-breakpoint-info d-fun bp 0)
                     step-breakpoints)))))
-      (flet ((step-hook-fun (current-frame breakpoint &optional return-vals
+      (labels ((step-hook-fun (current-frame breakpoint &optional return-vals
                                                                 fun-end-cookie)
-               (when (sb-di::same-frame-p frame current-frame)
-                 (let ((*step-breakpoints* step-breakpoints)
-                       (*number-of-steps* number-of-steps))
-                   (main-hook-fun current-frame breakpoint
-                                  return-vals fun-end-cookie)))))
-        (cond
-         (next-code-locations
-          (dolist (code-location next-code-locations)
-            (let ((bp-info (location-in-list code-location *breakpoints*)))
-              (when bp-info
-                (sb-di:deactivate-breakpoint (breakpoint-info-breakpoint
-                                              bp-info))))
-            (let ((bp (sb-di:make-breakpoint #'step-hook-fun code-location
-                                             :kind :code-location)))
-              (sb-di:activate-breakpoint bp)
-              (push (cons bp frame) *made-step-breakpoints*)
-              (push (create-breakpoint-info code-location bp 0)
-                    step-breakpoints))))
-         (t
-          ;; FRAME has no more locations, so it is about to return.
-          ;; Its return cannot be intercepted with a :FUN-END
-          ;; breakpoint since it already entered; stop in the calling
-          ;; frame at the return location of the call instead.
-          (let ((caller (sb-di:frame-down frame)))
-            (when caller
-              (arm-step-breakpoint caller
-                                   (sb-di:frame-code-location caller)
-                                   number-of-steps))))))))))
+                  (when (sb-di::same-frame-p frame current-frame)
+                    (let ((*step-breakpoints* step-breakpoints)
+                          (*number-of-steps* number-of-steps))
+                      (main-hook-fun current-frame breakpoint
+                                     return-vals fun-end-cookie))))
+                (arm (locations)
+                  (dolist (code-location locations)
+                    (let ((bp-info (location-in-list code-location *breakpoints*)))
+                      (when bp-info
+                        (sb-di:deactivate-breakpoint (breakpoint-info-breakpoint
+                                                      bp-info))))
+                    (let ((bp (sb-di:make-breakpoint #'step-hook-fun code-location
+                                                     :kind :code-location)))
+                      (sb-di:activate-breakpoint bp)
+                      (push (cons bp frame) *made-step-breakpoints*)
+                      (push (create-breakpoint-info code-location bp 0)
+                            step-breakpoints))))
+                ;; FRAME has no more locations to stop at, so it is about
+                ;; to return.  Its return cannot be intercepted with a
+                ;; :FUN-END breakpoint since it already entered; stop in
+                ;; the calling frame at the return location of the call
+                ;; instead.
+                (arm-in-caller ()
+                  (let ((caller (sb-di:frame-down frame)))
+                    (when caller
+                      (arm-step-breakpoint caller
+                                           (sb-di:frame-code-location caller)
+                                           number-of-steps)))
+                  ;; Callers distinguish the in place case by the
+                  ;; return value of SET-STEP-BREAKPOINT.
+                  nil))
+        ;; A next location can name the same instruction the stepper
+        ;; is stopped at (see NEXT-CODE-LOCATIONS).  Resuming cannot
+        ;; reach that instruction again, so show the stop it belongs
+        ;; to in place instead of arming a breakpoint which could
+        ;; never fire.
+        (let* ((merged
+                (remove-if-not
+                 (lambda (location)
+                   (and (typep code-location 'sb-di::compiled-code-location)
+                        (typep location 'sb-di::compiled-code-location)
+                        (= (sb-di::compiled-code-location-pc location)
+                           (sb-di::compiled-code-location-pc code-location))))
+                 next-code-locations))
+               (to-show (remove-if (lambda (location)
+                                      (memq location *presented-in-place-steps*))
+                                    merged))
+               (remaining (remove-if (lambda (location)
+                                        (member location merged))
+                                      next-code-locations)))
+          (arm remaining)
+          (cond
+           ((and to-show (not (stepper-hook-driven-p)))
+            ;; Leave FRAME stopped; the STEP* command which called
+            ;; presents the first of these in place.  A hook driven
+            ;; consumer has no prompt to show a stop at, so it steps
+            ;; to what follows it like an already shown one.
+            (first to-show))
+           (merged
+            ;; Shown in place already; step to what follows the first
+            ;; one instead.
+            (let ((follow (next-code-locations (first merged))))
+              (if follow
+                  (arm follow)
+                  (arm-in-caller))))
+           (remaining
+            nil)
+           (t
+            (arm-in-caller)))))))))
+
+;;; Show a step stop which belongs to a location sharing the
+;;; instruction the stepper is stopped at (see SET-STEP-BREAKPOINT):
+;;; the same output as stopping at a breakpoint, printed in place,
+;;; since resuming cannot reach its instruction again.
+(defun present-step-in-place ()
+  (format *debug-io* "~2&*Step*")
+  (terpri *debug-io*)
+  (terpri *debug-io*)
+  (print-frame-call *current-frame* *debug-io* :print-frame-source t))
 
 (defun step-internal (function form)
   (when (typep function 'interpreted-function)
@@ -2474,9 +2543,16 @@ forms that explicitly control this kind of evaluation.")
 
 ;;; Step to the next code-location.
 (!def-debug-command "STEP*" ()
-  (set-step-breakpoint *current-frame* (read-if-available 1))
-  (continue *debug-condition*)
-  (error "couldn't continue"))
+  (let ((in-place (set-step-breakpoint *current-frame* (read-if-available 1))))
+    (cond (in-place
+           ;; The next location names the same instruction this frame
+           ;; is stopped at, so its breakpoint could never fire again;
+           ;; show the stop for it here instead of continuing.
+           (push in-place *presented-in-place-steps*)
+           (present-step-in-place))
+          (t
+           (continue *debug-condition*)
+           (error "couldn't continue")))))
 
 ;;; Step into the function called at the current :call-site location.
 (!def-debug-command "STEP-INTO*" ()
