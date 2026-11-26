@@ -474,11 +474,6 @@
     ;; qualities and the like are not ours, nor are the functions the host
     ;; can't compile.
     :host-definitions
-    ;; meaning: This file is PCL proper, whose classes, generic functions
-    ;; and methods host PCL makes from what the cross-compiler records of
-    ;; them (src/cold/host-pcl-defs.lisp).  Loaded into the host, they are
-    ;; nothing.
-    :pcl-proper
     ;; meaning: The #'COMPILE-STEM argument :TRACE-FILE should be T.
     ;; When the compiler is SBCL's COMPILE-FILE or something like it,
     ;; compiling "foo.lisp" will generate "foo.trace" which contains lots
@@ -863,9 +858,9 @@
              (search "src/code/final" stem)
              (search "src/code/format" stem)
              (search "src/code/solist" stem))))
-    ;; PCL's macros need PCL's functions on the host (src/cold/host-pcl-defs.lisp)
+    ;; host PCL, as the cross-compiler compiles PCL (src/cold/host-pcl-dispatch.lisp)
     (when (fboundp 'host-pcl-before-target-compile)
-      (funcall 'host-pcl-before-target-compile stem))
+      (funcall 'host-pcl-before-target-compile stem flags))
     (funcall *in-target-compilation-mode-fn*
            (lambda ()
              (progv (list (intern "*SOURCE-NAMESTRING*" "SB-C")

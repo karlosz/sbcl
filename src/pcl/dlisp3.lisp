@@ -26,7 +26,7 @@
 ;;; Rather than compiling the constructors here, just tickle the range
 ;;; of shapes defined above, leaving the generation of the
 ;;; constructors to precompile-dfun-constructors.
-(!precompute
+(!capturing ; (code the build makes, on the host)
 (let ((checking-or-caching-list
         '((t nil (class) nil)
           (t nil (class class) nil)

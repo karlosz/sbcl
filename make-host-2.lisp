@@ -11,7 +11,6 @@
 (load "src/cold/set-up-cold-packages.lisp")
 (load "src/cold/defun-load-or-cload-xcompiler.lisp")
 (load-or-cload-xcompiler #'host-load-stem)
-(load "src/cold/host-pcl-defs.lisp")
 
 ;; Supress function/macro redefinition warnings under clisp.
 #+clisp (setf custom:*suppress-check-redefinition* t)

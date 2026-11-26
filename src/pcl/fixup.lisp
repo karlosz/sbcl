@@ -29,7 +29,7 @@
                    (vars (mapcar (lambda (x) (if (consp x) (car x) x))
                                  (ldiff lambda-list (member-if (lambda (x) (member x '(&rest &key)))
                                                                lambda-list)))))
-               `(defmethod ,name ,@qualifiers ,lambda-list
+               `(def!method ,name ,@qualifiers ,lambda-list
                   ,(if rest
                        `(apply #',function ,@(remove '&optional vars) ,(second rest))
                        `(,function ,@(remove '&optional vars)))))))
@@ -127,7 +127,6 @@
 
 ;;; Replaces the early definition in slots-boot.lisp (by name, as genesis
 ;;; installs every DEFUN up front).
-(!capturing
 (defun real-ensure-accessor (fun-name) ; Make FUN-NAME exist as a GF if it doesn't
   (destructuring-bind (slot-name method) (cddr fun-name)
     (let ((reader-specializers (load-time-value (list (find-class 'slot-object)) t))
@@ -172,17 +171,21 @@
                                         fallback-initargs doc :slot-name slot-name))
           (add-method gf (make-a-method method-class ()
                                         lambda-list specializers
-                                        initargs doc :slot-name slot-name))))))))
-(!host-only (setf (fdefinition 'ensure-accessor) #'real-ensure-accessor))
+                                        initargs doc :slot-name slot-name)))))))
+#+sb-xc-host (setf (fdefinition 'ensure-accessor) #'real-ensure-accessor)
 
-(!after-classes
+;;; PCL proper's classes, generic functions and methods so far, on the host
+;;; (where the target's PCL, booted, would fix its early generic functions)
+#+sb-xc-host (host-pcl-build-proper)
+
+#+sb-xc-host
 (dolist (gf-name *!temporary-ensure-accessor-functions*)
   ; (format t "~&Genericizing ~S~%" gf-name)
   (fmakunbound gf-name)
-  (ensure-accessor gf-name)))
+  (ensure-accessor gf-name))
 
 (!after-pcl-bootstrap (setq sb-kernel::*defstruct-hooks* '(ensure-defstruct-class)))
-(!after-classes (compute-standard-slot-locations))
+#+sb-xc-host (compute-standard-slot-locations)
 (!after-pcl-bootstrap
 (dolist (s '(condition function structure-object))
   (sb-kernel::do-subclassoids ((k v) (find-classoid s))
@@ -204,20 +207,58 @@
 
 ;;; CLASS-PROTOTYPE for FUNCTION should not use ALLOCATE-INSTANCE.
 ;;;
-(!after-classes
+#+sb-xc-host
 (let ((class (find-class 'function)))
-  (setf (slot-value class 'prototype) #'identity)))
+  (setf (slot-value class 'prototype) #'identity))
+
+;;; The standard and OR method combinations (defcombin.lisp): genesis
+;;; writes their info, which host PCL makes
+#+sb-xc-host
+(progn
+(setf (gethash 'standard (method-combinations))
+      (make-method-combination-info
+       :constructor (standard-method-combination-constructor)
+       :cache (list (cons nil *standard-method-combination*))))
+(let ((info (gethash 'or (method-combinations))))
+  (aver info)
+  (aver (null (method-combination-info-cache info)))
+  (setf (method-combination-info-cache info)
+        (list (cons '(:most-specific-first) *or-method-combination*))))
+(add-to-weak-hashset #'make-specializer-form-using-class
+                     (method-combination-gf-set *or-method-combination*)))
+
+;;; (methods.lisp)
+#+sb-xc-host
+(mapc
+ #'!proclaim-incompatible-superclasses
+ '(;; superclass class
+   (system-class std-class structure-class) ; direct subclasses of pcl-class
+   (standard-class funcallable-standard-class)
+   ;; superclass metaobject
+   (class eql-specializer class-eq-specializer method method-combination
+    generic-function slot-definition)
+   ;; metaclass built-in-class
+   (number sequence character           ; direct subclasses of t, but not array
+    standard-object structure-object)   ;                        or symbol
+   (number array character symbol       ; direct subclasses of t, but not
+    standard-object structure-object)   ;                        sequence
+   (complex float rational)             ; direct subclasses of number
+   (integer ratio)                      ; direct subclasses of rational
+   (list vector)                        ; direct subclasses of sequence
+   (cons null)                          ; direct subclasses of list
+   (string bit-vector)                  ; direct subclasses of vector
+   ))
 
 ;;; consistency check: all our standard SLOT-VALUE-USING-CLASS methods are available
 ;;; and distinct from each other.
-(!after-classes
+#+sb-xc-host
 (let (set)
   (dolist (type '(reader writer boundp makunbound))
     (dolist (fun '(standard-svuc-method structure-svuc-method condition-svuc-method))
       (pushnew (funcall fun type) set)))
-  (assert (= (length set) 12))))
+  (assert (= (length set) 12)))
 
-(!target-only
+#-sb-xc-host
 (dolist (symbol '(add-method allocate-instance class-name compute-applicable-methods
                   ensure-generic-function make-instance method-qualifiers
                   remove-method add-dependent add-direct-method add-direct-subclass
@@ -259,16 +300,16 @@
                   standard-reader-method standard-slot-definition
                   standard-writer-method update-dependent validate-superclass
                   writer-method-class))
-  (sb-impl::deprecate-export *package* symbol :late "2.0.7")))
+  (sb-impl::deprecate-export *package* symbol :late "2.0.7"))
 
 (in-package "SB-KERNEL")
 (defun slot-object-p (x) (typep x '(or structure-object standard-object condition)))
 
-(sb-pcl::!target-only
+#-sb-xc-host
 (flet ((set-predicate (classoid-name pred)
          (let ((c (find-classoid classoid-name)))
            (%instance-set c (get-dsd-index built-in-classoid predicate)
                  pred))))
   (set-predicate 't #'constantly-t)
   (set-predicate 'random-class #'constantly-nil)
-  (set-predicate 'sb-pcl::slot-object #'slot-object-p)))
+  (set-predicate 'sb-pcl::slot-object #'slot-object-p))

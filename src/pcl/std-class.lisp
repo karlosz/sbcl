@@ -23,7 +23,7 @@
 
 (in-package "SB-PCL")
 
-(defmethod slot-accessor-function ((slotd effective-slot-definition) type)
+(def!method slot-accessor-function ((slotd effective-slot-definition) type)
   (let ((info (the slot-info (slot-definition-info slotd))))
     (ecase type
       (reader (slot-info-reader info))
@@ -31,7 +31,7 @@
       (boundp (slot-info-boundp info))
       (makunbound (slot-info-makunbound info)))))
 
-(defmethod (setf slot-accessor-function) (function
+(def!method (setf slot-accessor-function) (function
                                           (slotd effective-slot-definition)
                                           type)
   (let ((info (the slot-info (slot-definition-info slotd))))
@@ -47,7 +47,7 @@
 (defconstant +slotd-makunbound-function-std-p+ 8)
 (defconstant +slotd-all-function-std-p+ 15)
 
-(defmethod slot-accessor-std-p ((slotd effective-slot-definition) type)
+(def!method slot-accessor-std-p ((slotd effective-slot-definition) type)
   (let ((flags (slot-value slotd 'accessor-flags)))
     (declare (type fixnum flags))
     (if (eq type 'all)
@@ -58,7 +58,7 @@
                         (boundp +slotd-boundp-function-std-p+)
                         (makunbound +slotd-makunbound-function-std-p+))))))
 
-(defmethod (setf slot-accessor-std-p) (value
+(def!method (setf slot-accessor-std-p) (value
                                        (slotd effective-slot-definition)
                                        type)
   (let ((mask (ecase type
@@ -72,7 +72,7 @@
           (logior (logandc2 flags mask) (if value mask 0))))
   value)
 
-(defmethod initialize-internal-slot-functions
+(def!method initialize-internal-slot-functions
     ((slotd effective-slot-definition))
   (let* ((name (slot-value slotd 'name)) ; flushable? (is it ever unbound?)
          (class (slot-value slotd '%class)))
@@ -102,7 +102,7 @@
                 (let ((fun (compute-slot-accessor-info slotd type gf)))
                   (apply fun args))))))))
 
-(defmethod finalize-internal-slot-functions ((slotd effective-slot-definition))
+(def!method finalize-internal-slot-functions ((slotd effective-slot-definition))
   (dolist (type '(reader writer boundp makunbound))
     (let* ((gf-name (ecase type
                       (reader 'slot-value-using-class)
@@ -126,7 +126,7 @@
 ;;;
 ;;; FIXME: Change the function name to COMPUTE-SVUC-SLOTD-FUNCTION,
 ;;; or some such.
-(defmethod compute-slot-accessor-info ((slotd effective-slot-definition)
+(def!method compute-slot-accessor-info ((slotd effective-slot-definition)
                                        type gf)
   (let* ((name (slot-value slotd 'name)) ; flushable?
          (class (slot-value slotd '%class)))
@@ -138,13 +138,13 @@
       (setf (slot-accessor-std-p slotd type) std-p)
       (setf (slot-accessor-function slotd type) function))))
 
-(defmethod slot-definition-allocation ((slotd structure-slot-definition))
+(def!method slot-definition-allocation ((slotd structure-slot-definition))
   :instance)
 
 ;;;; various class accessors that are a little more complicated than can be
 ;;;; done with automatically generated reader methods
 
-(defmethod class-prototype :before ((class pcl-class))
+(def!method class-prototype :before ((class pcl-class))
   (unless (class-finalized-p class)
     (error "~@<~S is not finalized.~:@>" class)))
 
@@ -152,7 +152,7 @@
 ;;; breaks PCL bootstrapping, so just generate it with a macrolet for
 ;;; all.
 (macrolet ((def (class)
-             `(defmethod class-prototype ((class ,class))
+             `(def!method class-prototype ((class ,class))
                 (declare (notinline allocate-instance))
                 (with-slots (prototype) class
                   (or prototype
@@ -164,21 +164,21 @@
 
 ;;; Genesis leaves it unbound (src/cold/host-pcl-dump.lisp): it is the
 ;;; target's own object, made in cold init (*BUILT-IN-CLASSES*).
-(defmethod class-prototype ((class built-in-class))
+(def!method class-prototype ((class built-in-class))
   (if (slot-boundp class 'prototype)
       (slot-value class 'prototype)
       (setf (slot-value class 'prototype)
             (fifth (assoc (class-name class) *built-in-classes*)))))
 
-(defmethod class-direct-default-initargs ((class slot-class))
+(def!method class-direct-default-initargs ((class slot-class))
   (plist-value class 'direct-default-initargs))
 
-(defmethod class-default-initargs ((class slot-class))
+(def!method class-default-initargs ((class slot-class))
   (plist-value class 'default-initargs))
 
-(defmethod class-slot-cells ((class std-class))
+(def!method class-slot-cells ((class std-class))
   (plist-value class 'class-slot-cells))
-(defmethod (setf class-slot-cells) (new-value (class std-class))
+(def!method (setf class-slot-cells) (new-value (class std-class))
   (setf (plist-value class 'class-slot-cells) new-value))
 
 ;;;; class accessors that are even a little bit more complicated than those
@@ -187,7 +187,7 @@
 
 ;;; Maintaining the direct subclasses backpointers. The update methods are
 ;;; here, the values are read by an automatically generated reader method.
-(defmethod add-direct-subclass ((class class) (subclass class))
+(def!method add-direct-subclass ((class class) (subclass class))
   (with-slots (direct-subclasses) class
     (with-world-lock ()
       (pushnew subclass direct-subclasses :test #'eq)
@@ -198,7 +198,7 @@
               (sb-kernel::add-subclassoid (layout-classoid super-layout)
                                           classoid layout))))))
     subclass))
-(defmethod remove-direct-subclass ((class class) (subclass class))
+(def!method remove-direct-subclass ((class class) (subclass class))
   (with-slots (direct-subclasses) class
     (with-world-lock ()
       (setq direct-subclasses (remove subclass direct-subclasses))
@@ -229,19 +229,19 @@
 ;;; function using the same lock.
 (define-load-time-global *specializer-lock* (sb-thread:make-mutex :name "Specializer lock"))
 
-(defmethod add-direct-method :around ((specializer specializer) (method method))
+(def!method add-direct-method :around ((specializer specializer) (method method))
   ;; All the actions done under this lock are done in an order
   ;; that is safe to unwind at any point.
   (sb-thread::with-recursive-system-lock (*specializer-lock*)
     (call-next-method)))
 
-(defmethod remove-direct-method :around ((specializer specializer) (method method))
+(def!method remove-direct-method :around ((specializer specializer) (method method))
   ;; All the actions done under this lock are done in an order
   ;; that is safe to unwind at any point.
   (sb-thread::with-recursive-system-lock (*specializer-lock*)
     (call-next-method)))
 
-(defmethod add-direct-method ((specializer specializer) (method method))
+(def!method add-direct-method ((specializer specializer) (method method))
   ;; Method "list" storage is a simple-vector. A hashset would probably be best,
   ;; or a list that upgrades to a hashset. But a vector is already an improvement
   ;; over a list because it can be examined faster. Quite often GFs gain
@@ -271,7 +271,7 @@
             (car cell) (adjoin-to (car cell)))))
     method)
 
-(defmethod remove-direct-method ((specializer specializer) (method method))
+(def!method remove-direct-method ((specializer specializer) (method method))
   (flet ((remove-from (collection)
            (when collection
              (awhen (position method (the simple-vector collection) :test #'eq)
@@ -285,11 +285,11 @@
             (car cell) (remove-from (car cell)))))
   method)
 
-(defmethod specializer-direct-methods ((specializer specializer))
+(def!method specializer-direct-methods ((specializer specializer))
   (let ((collection (car (specializer-method-holder specializer nil))))
     (coerce (remove 0 collection) 'list)))
 
-(defmethod specializer-direct-generic-functions ((specializer specializer))
+(def!method specializer-direct-generic-functions ((specializer specializer))
   (let ((cell (specializer-method-holder specializer nil)))
     ;; If an ADD/REMOVE-METHOD is in progress, no matter: either
     ;; we behave as if we got just first or just after -- it's just
@@ -306,7 +306,7 @@
                         (pushnew (method-generic-function m) collect
                                  :test #'eq))))))))))
 
-(defmethod specializer-method-holder ((self specializer) &optional create)
+(def!method specializer-method-holder ((self specializer) &optional create)
   ;; CREATE can be ignored, because instances of SPECIALIZER
   ;; other than CLASS-EQ-SPECIALIZER have their DIRECT-METHODS slot
   ;; preinitialized with (NIL . NIL).
@@ -316,7 +316,7 @@
 ;; Same as for CLASS but the only ancestor it shares is SPECIALIZER.
 ;; If this were defined on SPECIALIZER-WITH-OBJECT then it would
 ;; apply as well to CLASS-EQ specializers which we don't want.
-(defmethod specializer-method-holder ((self eql-specializer) &optional create)
+(def!method specializer-method-holder ((self eql-specializer) &optional create)
   (declare (ignore create))
   (slot-value self 'direct-methods))
 
@@ -342,10 +342,10 @@
   (!genesis-table '*class-eq-specializer-methods*
                   (make-hash-table :test 'eq :synchronized t)))
 
-(defmethod specializer-method-table ((specializer class-eq-specializer))
+(def!method specializer-method-table ((specializer class-eq-specializer))
   (class-eq-specializer-methods))
 
-(defmethod specializer-method-holder ((self specializer-with-object)
+(def!method specializer-method-holder ((self specializer-with-object)
                                       &optional (create t))
   (let ((table (specializer-method-table self))
         (object (specializer-object self)))
@@ -380,13 +380,13 @@
                             (funcall function gf))))))
   nil)
 
-(defmethod shared-initialize :after ((specl class-eq-specializer)
+(def!method shared-initialize :after ((specl class-eq-specializer)
                                      slot-names
                                      &key)
   (declare (ignore slot-names))
   (setf (slot-value specl '%type) `(class-eq ,(specializer-class specl))))
 
-(defmethod shared-initialize :after ((specl eql-specializer) slot-names &key)
+(def!method shared-initialize :after ((specl eql-specializer) slot-names &key)
   (declare (ignore slot-names))
   (setf (slot-value specl '%type)
         `(eql ,(specializer-object specl))))
@@ -404,7 +404,7 @@
             'safe-p safe-p
             other))))
 
-(!host-only (setf (fdefinition 'load-defclass) #'real-load-defclass))
+#+sb-xc-host (setf (fdefinition 'load-defclass) #'real-load-defclass)
 
 (defun ensure-class (name &rest args)
   (with-world-lock ()
@@ -467,13 +467,13 @@
                        (setf (find-class name) class)))))))
     class))
 
-(defmethod ensure-class-using-class ((class null) name &rest args &key)
+(def!method ensure-class-using-class ((class null) name &rest args &key)
   (call-with-ensure-class-context
    class name args (lambda (class name metaclass initargs)
                      (declare (ignore class))
                      (apply #'make-instance metaclass :name name initargs))))
 
-(defmethod ensure-class-using-class ((class pcl-class) name &rest args &key)
+(def!method ensure-class-using-class ((class pcl-class) name &rest args &key)
   (call-with-ensure-class-context
    class name args (lambda (class name metaclass initargs)
                      (aver (eq name (class-name class)))
@@ -493,7 +493,7 @@
           (error 'type-error :expected-type type :datum value))))
     value))
 
-(defmethod shared-initialize :after
+(def!method shared-initialize :after
     ((class std-class) slot-names &key
      (direct-superclasses nil direct-superclasses-p)
      (direct-slots nil direct-slots-p)
@@ -563,14 +563,14 @@
                (and (typep superclass 'standard-class)
                     'validate-superclass))))))
 
-(defmethod invalid-superclass ((class class) (superclass class))
+(def!method invalid-superclass ((class class) (superclass class))
   (error 'invalid-superclass :class class :superclass superclass
          :references `((:amop :generic-function validate-superclass)
                        ,@(when (typep superclass 'built-in-class)
                            '((:ansi-cl :system-class built-in-class)
                              (:ansi-cl :section (4 3 7)))))))
 
-(defmethod shared-initialize :after ((class forward-referenced-class)
+(def!method shared-initialize :after ((class forward-referenced-class)
                                      slot-names &key &allow-other-keys)
   (declare (ignore slot-names))
   (make-preliminary-layout class))
@@ -604,7 +604,7 @@
         (mapc #'make-preliminary-layout (class-direct-subclasses class))))))
 
 
-(defmethod shared-initialize :before ((class class) slot-names &key name)
+(def!method shared-initialize :before ((class class) slot-names &key name)
   (declare (ignore slot-names name))
   ;; FIXME: Could this just be CLASS instead of `(CLASS ,CLASS)? If not,
   ;; why not? (See also similar expression in !BOOTSTRAP-INITIALIZE-CLASS.)
@@ -612,20 +612,20 @@
   (setf (slot-value class 'class-eq-specializer)
         (make-instance 'class-eq-specializer :class class)))
 
-(defmethod reinitialize-instance :before ((class slot-class) &key direct-superclasses)
+(def!method reinitialize-instance :before ((class slot-class) &key direct-superclasses)
   (check-superclass-cycle class direct-superclasses)
   (dolist (old-super (set-difference (class-direct-superclasses class) direct-superclasses))
     (remove-direct-subclass old-super class))
   (remove-slot-accessors class (class-direct-slots class)))
 
-(defmethod reinitialize-instance :after ((class slot-class)
+(def!method reinitialize-instance :after ((class slot-class)
                                          &rest initargs
                                          &key)
   (map-dependents class
                   (lambda (dependent)
                     (apply #'update-dependent class dependent initargs))))
 
-(defmethod reinitialize-instance :after ((class condition-class) &key)
+(def!method reinitialize-instance :after ((class condition-class) &key)
   (let* ((name (class-name class))
          (classoid (find-classoid name))
          (slots (condition-classoid-slots classoid))
@@ -646,7 +646,7 @@
            (add-source-location
             (sb-kernel::install-condition-slot-writer writer name slot-name))))))))
 
-(defmethod shared-initialize :after ((class condition-class) slot-names
+(def!method shared-initialize :after ((class condition-class) slot-names
                                      &key direct-slots direct-superclasses)
   (declare (ignore slot-names))
   (let ((classoid (find-classoid (slot-value class 'name))))
@@ -685,21 +685,21 @@
   ;; was meant to happen?  -- CSR, 2005-11-18
   )
 
-(defmethod direct-slot-definition-class ((class condition-class)
+(def!method direct-slot-definition-class ((class condition-class)
                                          &rest initargs)
   (declare (ignore initargs))
   (find-class 'condition-direct-slot-definition))
 
-(defmethod effective-slot-definition-class ((class condition-class)
+(def!method effective-slot-definition-class ((class condition-class)
                                             &rest initargs)
   (declare (ignore initargs))
   (find-class 'condition-effective-slot-definition))
 
-(defmethod finalize-inheritance ((class condition-class))
+(def!method finalize-inheritance ((class condition-class))
   (aver (slot-value class 'finalized-p))
   nil)
 
-(defmethod compute-effective-slot-definition
+(def!method compute-effective-slot-definition
     ((class condition-class) slot-name dslotds)
   (let* ((slotd (call-next-method))
          (info (slot-definition-info slotd)))
@@ -721,12 +721,12 @@
             (condition-slot-makunbound x slot-name)))
     slotd))
 
-(defmethod compute-slots :around ((class condition-class))
+(def!method compute-slots :around ((class condition-class))
   (let ((eslotds (call-next-method)))
     (mapc #'finalize-internal-slot-functions eslotds)
     eslotds))
 
-(defmethod shared-initialize :after
+(def!method shared-initialize :after
     ((slotd structure-slot-definition) slot-names &key
      (allocation :instance) allocation-class)
   (declare (ignore slot-names allocation-class))
@@ -828,7 +828,7 @@
                    (layout-dd (class-wrapper class)) nil)))
            (funcall (setf (slot-value class 'defstruct-constructor) f))))))))
 
-(defmethod shared-initialize :after
+(def!method shared-initialize :after
     ((class structure-class) slot-names &key
      (direct-superclasses nil direct-superclasses-p)
      (direct-slots nil direct-slots-p)
@@ -900,11 +900,11 @@
     (setf (slot-value class 'finalized-p) t)
     (add-slot-accessors class direct-slots)))
 
-(defmethod direct-slot-definition-class ((class structure-class) &rest initargs)
+(def!method direct-slot-definition-class ((class structure-class) &rest initargs)
   (declare (ignore initargs))
   (find-class 'structure-direct-slot-definition))
 
-(defmethod finalize-inheritance ((class structure-class))
+(def!method finalize-inheritance ((class structure-class))
   nil) ; always finalized
 
 (defun add-slot-accessors (class dslotds)
@@ -945,10 +945,10 @@
     (unless (memq class (class-direct-subclasses class))
       (add-direct-subclass super class))))
 
-(defmethod finalize-inheritance ((class std-class))
+(def!method finalize-inheritance ((class std-class))
   (update-class class t))
 
-(defmethod finalize-inheritance ((class forward-referenced-class))
+(def!method finalize-inheritance ((class forward-referenced-class))
   ;; FIXME: should we not be thinking a bit about what kinds of error
   ;; we're throwing?  Maybe we need a clos-error type to mix in?  Or
   ;; possibly a forward-referenced-class-error, though that's
@@ -960,12 +960,12 @@
 
 
 ;;; (host PCL has its own: src/cold/host-pcl.lisp)
-(!target-only
+#-sb-xc-host
 (defun class-has-a-forward-referenced-superclass-p (class)
   (or (when (forward-referenced-class-p class)
         class)
       (some #'class-has-a-forward-referenced-superclass-p
-            (class-direct-superclasses class)))))
+            (class-direct-superclasses class))))
 
 (defun check-superclass-cycle (class new-superclasses)
   (loop for superclass in new-superclasses
@@ -1196,14 +1196,14 @@
                    (update-gf-dfun class gf))
                  gf-table)))))
 
-(defmethod compute-default-initargs ((class slot-class))
+(def!method compute-default-initargs ((class slot-class))
   (let ((initargs (loop for c in (class-precedence-list class)
                         append (class-direct-default-initargs c))))
     (delete-duplicates initargs :test #'eq :key #'car :from-end t)))
 
 ;;;; protocols for constructing direct and effective slot definitions
 
-(defmethod direct-slot-definition-class ((class std-class) &rest initargs)
+(def!method direct-slot-definition-class ((class std-class) &rest initargs)
   (declare (ignore initargs))
   (find-class 'standard-direct-slot-definition))
 
@@ -1241,13 +1241,13 @@
             (nreverse name-dslotds-alist))))
 
 ;; It seems to me that this should be one method defined on SLOT-CLASS.
-(defmethod compute-slots ((class standard-class))
+(def!method compute-slots ((class standard-class))
   (std-compute-slots class))
-(defmethod compute-slots ((class funcallable-standard-class))
+(def!method compute-slots ((class funcallable-standard-class))
   (std-compute-slots class))
-(defmethod compute-slots ((class structure-class))
+(def!method compute-slots ((class structure-class))
   (std-compute-slots class))
-(defmethod compute-slots ((class condition-class))
+(def!method compute-slots ((class condition-class))
   (std-compute-slots class))
 
 (defun std-compute-slots-around (class eslotds)
@@ -1291,32 +1291,32 @@
               (slot-info-location info) (slot-definition-location eslotd)))
       (initialize-internal-slot-functions eslotd))))
 
-(defmethod compute-slots :around ((class standard-class))
+(def!method compute-slots :around ((class standard-class))
   (let ((eslotds (call-next-method)))
     (std-compute-slots-around class eslotds)))
-(defmethod compute-slots :around ((class funcallable-standard-class))
+(def!method compute-slots :around ((class funcallable-standard-class))
   (let ((eslotds (call-next-method)))
     (std-compute-slots-around class eslotds)))
-(defmethod compute-slots :around ((class structure-class))
+(def!method compute-slots :around ((class structure-class))
   (let ((eslotds (call-next-method)))
     (mapc #'finalize-internal-slot-functions eslotds)
     eslotds))
 
-(defmethod compute-effective-slot-definition ((class slot-class) name dslotds)
+(def!method compute-effective-slot-definition ((class slot-class) name dslotds)
   (let* ((initargs (compute-effective-slot-definition-initargs class dslotds))
          (class (apply #'effective-slot-definition-class class initargs))
          (slotd (apply #'make-instance class initargs)))
     slotd))
 
-(defmethod effective-slot-definition-class ((class std-class) &rest initargs)
+(def!method effective-slot-definition-class ((class std-class) &rest initargs)
   (declare (ignore initargs))
   (find-class 'standard-effective-slot-definition))
 
-(defmethod effective-slot-definition-class ((class structure-class) &rest initargs)
+(def!method effective-slot-definition-class ((class structure-class) &rest initargs)
   (declare (ignore initargs))
   (find-class 'structure-effective-slot-definition))
 
-(defmethod compute-effective-slot-definition-initargs
+(def!method compute-effective-slot-definition-initargs
     ((class slot-class) direct-slotds)
   (let ((name nil)
         (initfunction nil)
@@ -1369,7 +1369,7 @@
           :class class
           :documentation documentation)))
 
-(defmethod compute-effective-slot-definition-initargs :around
+(def!method compute-effective-slot-definition-initargs :around
     ((class structure-class) direct-slotds)
   (let* ((slotd (car direct-slotds))
          (accessor (slot-definition-defstruct-accessor-symbol slotd)))
@@ -1385,11 +1385,11 @@
 ;;; NOTE: For bootstrapping considerations, these can't use MAKE-INSTANCE
 ;;;       to make the method object. They have to use make-a-method which
 ;;;       is a specially bootstrapped mechanism for making standard methods.
-(defmethod reader-method-class ((class slot-class) direct-slot &rest initargs)
+(def!method reader-method-class ((class slot-class) direct-slot &rest initargs)
   (declare (ignore direct-slot initargs))
   (find-class 'standard-reader-method))
 
-(defmethod add-reader-method ((class slot-class) generic-function slot-name slot-documentation source-location)
+(def!method add-reader-method ((class slot-class) generic-function slot-name slot-documentation source-location)
   (add-method generic-function
               (make-a-method 'standard-reader-method
                              ()
@@ -1402,11 +1402,11 @@
                              :method-class-function #'reader-method-class
                              'source source-location)))
 
-(defmethod writer-method-class ((class slot-class) direct-slot &rest initargs)
+(def!method writer-method-class ((class slot-class) direct-slot &rest initargs)
   (declare (ignore direct-slot initargs))
   (find-class 'standard-writer-method))
 
-(defmethod add-writer-method ((class slot-class) generic-function slot-name slot-documentation source-location)
+(def!method add-writer-method ((class slot-class) generic-function slot-name slot-documentation source-location)
   (add-method generic-function
               (make-a-method 'standard-writer-method
                              ()
@@ -1419,13 +1419,13 @@
                              :method-class-function #'writer-method-class
                              'source source-location)))
 
-(defmethod remove-reader-method ((class slot-class) generic-function)
+(def!method remove-reader-method ((class slot-class) generic-function)
   (let ((method
           (and (= (length (arg-info-metatypes (gf-arg-info generic-function))) 1)
                (get-method generic-function () (list class) nil))))
     (when method (remove-method generic-function method))))
 
-(defmethod remove-writer-method ((class slot-class) generic-function)
+(def!method remove-writer-method ((class slot-class) generic-function)
   (let ((method
          (and (= (length (arg-info-metatypes (gf-arg-info generic-function))) 2)
               (get-method generic-function () (list *the-class-t* class) nil))))
@@ -1445,16 +1445,16 @@
 ;;; *** have to give the OPTIMIZE-SLOT-VALUE method the user might have
 ;;; *** defined for this metaclass a chance to run.
 
-(defmethod make-reader-method-function ((class slot-class) slot-name)
+(def!method make-reader-method-function ((class slot-class) slot-name)
   (make-std-reader-method-function class slot-name))
 
-(defmethod make-writer-method-function ((class slot-class) slot-name)
+(def!method make-writer-method-function ((class slot-class) slot-name)
   (make-std-writer-method-function class slot-name))
 
-(defmethod compatible-meta-class-change-p (class proto-new-class)
+(def!method compatible-meta-class-change-p (class proto-new-class)
   (eq (class-of class) (class-of proto-new-class)))
 
-(defmethod validate-superclass ((class class) (superclass class))
+(def!method validate-superclass ((class class) (superclass class))
   (or (eq (class-of class) (class-of superclass))
       (and (eq (class-of superclass) *the-class-standard-class*)
            (eq (class-of class) *the-class-funcallable-standard-class*))
@@ -1513,7 +1513,7 @@
 ;;; MAKE-INSTANCES-OBSOLETE can be called by user code. It will cause
 ;;; the next access to the instance (as defined in 88-002R) to trap
 ;;; through the UPDATE-INSTANCE-FOR-REDEFINED-CLASS mechanism.
-(defmethod make-instances-obsolete ((class std-class))
+(def!method make-instances-obsolete ((class std-class))
   (with-world-lock ()
     (let* ((owrapper (class-wrapper class))
            (nwrapper (make-wrapper (layout-length owrapper)
@@ -1529,7 +1529,7 @@
       (%invalidate-wrapper owrapper :obsolete nwrapper)
       class)))
 
-(defmethod make-instances-obsolete ((class symbol))
+(def!method make-instances-obsolete ((class symbol))
   (make-instances-obsolete (find-class class))
   ;; ANSI wants the class name when called with a symbol.
   class)
@@ -1806,13 +1806,13 @@
 (defmacro with-temporary-instance ((var) &body body)
   `(dx-let ((,var (%make-instance (1+ sb-vm:instance-data-start))))
      ,@body))
-(defmethod change-class ((instance standard-object) (new-class standard-class)
+(def!method change-class ((instance standard-object) (new-class standard-class)
                          &rest initargs)
   (check-new-class-not-metaobject new-class)
   (with-temporary-instance (temp)
     (%change-class temp instance new-class initargs)))
 
-(defmethod change-class ((instance forward-referenced-class)
+(def!method change-class ((instance forward-referenced-class)
                          (new-class standard-class) &rest initargs)
   (with-world-lock ()
     (dolist (class (class-precedence-list
@@ -1826,7 +1826,7 @@
     (with-temporary-instance (temp)
       (%change-class temp instance new-class initargs))))
 
-(defmethod change-class ((instance t)
+(def!method change-class ((instance t)
                          (new-class forward-referenced-class) &rest initargs)
   (declare (ignore initargs))
   (change-class-to-metaobject-violation
@@ -1842,14 +1842,14 @@
                  (error-no-implementation-function ,var)))
        (setf (%funcallable-instance-fun ,var) #'signal-error)
        ,@body)))
-(defmethod change-class ((instance funcallable-standard-object)
+(def!method change-class ((instance funcallable-standard-object)
                          (new-class funcallable-standard-class)
                          &rest initargs)
   (check-new-class-not-metaobject new-class)
   (with-temporary-funinstance (temp)
     (%change-class temp instance new-class initargs)))
 
-(defmethod change-class ((instance standard-object)
+(def!method change-class ((instance standard-object)
                          (new-class funcallable-standard-class)
                          &rest initargs)
   (declare (ignore initargs))
@@ -1857,7 +1857,7 @@
           because it isn't already an instance with metaclass ~S."
          instance new-class 'funcallable-standard-class))
 
-(defmethod change-class ((instance funcallable-standard-object)
+(def!method change-class ((instance funcallable-standard-object)
                          (new-class standard-class)
                          &rest initargs)
   (declare (ignore initargs))
@@ -1865,7 +1865,7 @@
           because it isn't already an instance with metaclass ~S."
          instance new-class 'standard-class))
 
-(defmethod change-class ((instance t) (new-class-name symbol) &rest initargs)
+(def!method change-class ((instance t) (new-class-name symbol) &rest initargs)
   (apply #'change-class instance (find-class new-class-name) initargs))
 
 ;;;; The metaclasses SYSTEM-CLASS and BUILT-IN-CLASS
@@ -1882,7 +1882,7 @@
 ;;;; SYSTEM-CLASS here.
 
 (macrolet ((def (name args control)
-             `(defmethod ,name ,args
+             `(def!method ,name ,args
                 (declare (ignore initargs))
                 (error 'metaobject-initialization-violation
                        :format-control ,(format nil "~~@<~A~~@:>" control)
@@ -1893,38 +1893,38 @@
   (def reinitialize-instance ((class system-class) &rest initargs)
     "Cannot reinitialize an instance of ~S."))
 
-(macrolet ((def (name) `(defmethod ,name ((class system-class)) nil)))
+(macrolet ((def (name) `(def!method ,name ((class system-class)) nil)))
   (def class-direct-slots)
   (def class-slots)
   (def class-direct-default-initargs)
   (def class-default-initargs))
 
-(defmethod validate-superclass ((c class) (s system-class))
+(def!method validate-superclass ((c class) (s system-class))
   t)
-(defmethod validate-superclass ((c class) (s built-in-class))
+(def!method validate-superclass ((c class) (s built-in-class))
   nil)
 
 ;;; Some necessary methods for FORWARD-REFERENCED-CLASS
-(defmethod class-direct-slots ((class forward-referenced-class)) ())
-(defmethod class-direct-default-initargs ((class forward-referenced-class)) ())
+(def!method class-direct-slots ((class forward-referenced-class)) ())
+(def!method class-direct-default-initargs ((class forward-referenced-class)) ())
 (macrolet ((def (method)
-             `(defmethod ,method ((class forward-referenced-class))
+             `(def!method ,method ((class forward-referenced-class))
                 (error "~@<~I~S was called on a forward referenced class:~2I~_~S~:>"
                        ',method class))))
   (def class-default-initargs)
   (def class-precedence-list)
   (def class-slots))
 
-(defmethod validate-superclass ((c slot-class) (f forward-referenced-class))
+(def!method validate-superclass ((c slot-class) (f forward-referenced-class))
   t)
 
-(defmethod add-dependent ((metaobject dependent-update-mixin) dependent)
+(def!method add-dependent ((metaobject dependent-update-mixin) dependent)
   (pushnew dependent (plist-value metaobject 'dependents) :test #'eq))
 
-(defmethod remove-dependent ((metaobject dependent-update-mixin) dependent)
+(def!method remove-dependent ((metaobject dependent-update-mixin) dependent)
   (setf (plist-value metaobject 'dependents)
         (delete dependent (plist-value metaobject 'dependents))))
 
-(defmethod map-dependents ((metaobject dependent-update-mixin) function)
+(def!method map-dependents ((metaobject dependent-update-mixin) function)
   (dolist (dependent (plist-value metaobject 'dependents))
     (funcall function dependent)))

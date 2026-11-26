@@ -56,13 +56,13 @@
 ;;;; STANDARD-INSTANCE-ACCESS
 
 ;;; ((CAS ...) functions are the target's only)
-(!target-only
+#-sb-xc-host
 (declaim (inline standard-instance-access
                  (setf standard-instance-access)
                  (cas stadard-instance-access)
                  funcallable-standard-instance-access
                  (setf funcallable-standard-instance-access)
-                 (cas funcallable-standard-instance-access))))
+                 (cas funcallable-standard-instance-access)))
 
 (defun standard-instance-access (instance location)
   (clos-slots-ref (std-instance-slots instance) location))
@@ -70,10 +70,10 @@
 (defun (setf standard-instance-access) (new-value instance location)
   (setf (clos-slots-ref (std-instance-slots instance) location) new-value))
 
-(!target-only
+#-sb-xc-host
 (defun (cas standard-instance-access) (old-value new-value instance location)
   ;; FIXME: Maybe get rid of CLOS-SLOTS-REF entirely?
-  (cas (svref (std-instance-slots instance) location) old-value new-value)))
+  (cas (svref (std-instance-slots instance) location) old-value new-value))
 
 (defun funcallable-standard-instance-access (instance location)
   (clos-slots-ref (fsc-instance-slots instance) location))
@@ -81,10 +81,10 @@
 (defun (setf funcallable-standard-instance-access) (new-value instance location)
   (setf (clos-slots-ref (fsc-instance-slots instance) location) new-value))
 
-(!target-only
+#-sb-xc-host
 (defun (cas funcallable-standard-instance-access) (old-value new-value instance location)
   ;; FIXME: Maybe get rid of CLOS-SLOTS-REF entirely?
-  (cas (svref (fsc-instance-slots instance) location) old-value new-value)))
+  (cas (svref (fsc-instance-slots instance) location) old-value new-value))
 
 ;;;; SLOT-VALUE, (SETF SLOT-VALUE), SLOT-BOUNDP, SLOT-MAKUNBOUND
 
@@ -184,7 +184,7 @@
 (defun safe-set-slot-value (object slot-name new-value)
   (set-slot-value object slot-name new-value))
 
-(!target-only
+#-sb-xc-host
 (defun (cas slot-value) (old-value new-value object slot-name)
   (let* ((wrapper (valid-wrapper-of object))
          (cell (or (find-slot-cell wrapper slot-name)
@@ -210,7 +210,7 @@
                       (bug "Bogus slot-cell in (CAS SLOT-VALUE): ~S" cell)))))
       (if (and (unbound-marker-p old) (neq old old-value))
           (slot-unbound (wrapper-class wrapper) object slot-name)
-          old)))))
+          old))))
 
 (defun slot-boundp (object slot-name)
   (let* ((wrapper (valid-wrapper-of object))
@@ -272,7 +272,7 @@
          ((fsc-instance-p ,x) (fsc-instance-slots ,x))
          (t (bug "unrecognized instance type in ~S" ',method-name))))
 
-(defmethod slot-value-using-class ((class std-class)
+(def!method slot-value-using-class ((class std-class)
                                    (object standard-object)
                                    (slotd standard-effective-slot-definition))
   ;; FIXME: Do we need this? SLOT-VALUE checks for obsolete
@@ -293,7 +293,7 @@
         (values (slot-unbound class object (slot-definition-name slotd)))
         value)))
 
-(defmethod (setf slot-value-using-class)
+(def!method (setf slot-value-using-class)
            (new-value (class std-class)
                       (object standard-object)
                       (slotd standard-effective-slot-definition))
@@ -317,7 +317,7 @@
        (instance-structure-protocol-error
         slotd '(setf slot-value-using-class))))))
 
-(defmethod slot-boundp-using-class
+(def!method slot-boundp-using-class
            ((class std-class)
             (object standard-object)
             (slotd standard-effective-slot-definition))
@@ -336,7 +336,7 @@
              (instance-structure-protocol-error slotd
                                                 'slot-boundp-using-class)))))))
 
-(defmethod slot-makunbound-using-class
+(def!method slot-makunbound-using-class
            ((class std-class)
             (object standard-object)
             (slotd standard-effective-slot-definition))
@@ -354,14 +354,14 @@
                                           'slot-makunbound-using-class))))
   object)
 
-(defmethod slot-value-using-class
+(def!method slot-value-using-class
     ((class condition-class)
      (object condition)
      (slotd condition-effective-slot-definition))
   (let ((fun (slot-info-reader (slot-definition-info slotd))))
     (funcall fun object)))
 
-(defmethod (setf slot-value-using-class)
+(def!method (setf slot-value-using-class)
     (new-value
      (class condition-class)
      (object condition)
@@ -369,21 +369,21 @@
   (let ((fun (slot-info-writer (slot-definition-info slotd))))
     (funcall fun new-value object)))
 
-(defmethod slot-boundp-using-class
+(def!method slot-boundp-using-class
     ((class condition-class)
      (object condition)
      (slotd condition-effective-slot-definition))
   (let ((fun (slot-info-boundp (slot-definition-info slotd))))
     (funcall fun object)))
 
-(defmethod slot-makunbound-using-class
+(def!method slot-makunbound-using-class
     ((class condition-class)
      (object condition)
      (slotd condition-effective-slot-definition))
   (let ((fun (slot-info-makunbound (slot-definition-info slotd))))
     (funcall fun object)))
 
-(defmethod slot-value-using-class
+(def!method slot-value-using-class
     ((class structure-class)
      (object structure-object)
      (slotd structure-effective-slot-definition))
@@ -394,7 +394,7 @@
         (values (slot-unbound class object (slot-definition-name slotd)))
         value)))
 
-(defmethod (setf slot-value-using-class)
+(def!method (setf slot-value-using-class)
     (new-value (class structure-class)
                (object structure-object)
                (slotd structure-effective-slot-definition))
@@ -402,7 +402,7 @@
     (declare (type function function))
     (funcall function new-value object)))
 
-(defmethod slot-boundp-using-class
+(def!method slot-boundp-using-class
     ((class structure-class)
      (object structure-object)
      (slotd structure-effective-slot-definition))
@@ -411,7 +411,7 @@
     (declare (type function function))
     (not (unbound-marker-p value))))
 
-(defmethod slot-makunbound-using-class
+(def!method slot-makunbound-using-class
     ((class structure-class)
      (object structure-object)
      (slotd structure-effective-slot-definition))
@@ -421,7 +421,7 @@
         (declare (type function function))
         (funcall function sb-pcl:+slot-unbound+ object))))
 
-(defmethod slot-missing
+(def!method slot-missing
            ((class t) instance slot-name operation &optional new-value)
   (error 'missing-slot
          :name slot-name
@@ -448,7 +448,7 @@
                            (slot-definition-name slot)
                            slot-name))))))
 
-(defmethod slot-unbound ((class t) instance slot-name)
+(def!method slot-unbound ((class t) instance slot-name)
   (restart-case
       (error 'unbound-slot :name slot-name :instance instance)
     (use-value (v)
@@ -479,29 +479,29 @@
 ;;; FIXME: AMOP says that allocate-instance implies finalize-inheritance
 ;;; if the class is not yet finalized, but we don't seem to be taking
 ;;; care of this for non-standard-classes.
-(defmethod allocate-instance ((class standard-class) &rest initargs)
+(def!method allocate-instance ((class standard-class) &rest initargs)
   (declare (ignore initargs)
            (inline ensure-class-finalized))
   (allocate-standard-instance
    (class-wrapper (ensure-class-finalized class))))
 
-(defmethod allocate-instance ((class structure-class) &rest initargs)
+(def!method allocate-instance ((class structure-class) &rest initargs)
   (declare (ignore initargs))
   (let ((constructor (class-defstruct-constructor class)))
     (if constructor
         (funcall constructor)
         (error "Don't know how to allocate ~S" class))))
 
-(defmethod allocate-instance ((class condition-class) &rest initargs)
+(def!method allocate-instance ((class condition-class) &rest initargs)
   (declare (ignore initargs))
   (values (allocate-condition (class-name class))))
 
-(defmethod allocate-instance ((class system-class) &rest initargs)
+(def!method allocate-instance ((class system-class) &rest initargs)
   (declare (ignore initargs))
   (error "Cannot allocate an instance of ~S." class))
 
 ;;; AMOP says that CLASS-SLOTS signals an error for unfinalized classes.
-(defmethod class-slots :before ((class slot-class))
+(def!method class-slots :before ((class slot-class))
   (unless (class-finalized-p class)
     (error 'simple-reference-error
            :format-control "~S called on ~S, which is not yet finalized."

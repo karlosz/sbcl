@@ -110,9 +110,7 @@
 ;;; After the metabraid has been setup, and the protocol for defining
 ;;; classes has been defined, the real definition of LOAD-DEFCLASS is
 ;;; installed by the file std-class.lisp
-(sb-xc:defmacro defclass (&whole form &environment env name direct-superclasses direct-slots
-                          &rest options)
-  (!definition (:class form)
+(sb-xc:defmacro defclass (&environment env name direct-superclasses direct-slots &rest options)
   (check-class-name name nil)
   (let ((expansion-state (make-array 4 :initial-element nil)))
     ;; FIXME: It would be nice to collect all errors from the
@@ -192,7 +190,7 @@
                     ',*readers-for-this-defclass*
                     ',*writers-for-this-defclass*
                     ',*slot-names-for-this-defclass*))
-                 ,defclass-form))))))))
+                 ,defclass-form)))))))
 
 (defun canonize-defclass-options (expansion-state class-name options)
   (declare (type (simple-vector 4) expansion-state))

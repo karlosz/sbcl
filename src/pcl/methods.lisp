@@ -49,7 +49,7 @@
          :references references))
 
 (macrolet ((def (name args control)
-               `(defmethod ,name ,args
+               `(def!method ,name ,args
                  (declare (ignore initargs))
                  (error 'metaobject-initialization-violation
                         :format-control ,(format nil "~~@<~A~~@:>" control)
@@ -147,7 +147,7 @@
                     (length frcs) frcs)))))
 ) ; end MACROLET
 
-(defmethod shared-initialize :before
+(def!method shared-initialize :before
     ((method standard-method) slot-names &key
      qualifiers lambda-list specializers function documentation)
   (declare (ignore slot-names))
@@ -164,23 +164,22 @@
   (check-method-function method function)
   (check-documentation method documentation))
 
-(defmethod shared-initialize :before
+(def!method shared-initialize :before
     ((method standard-accessor-method) slot-names &key
      slot-name slot-definition)
   (declare (ignore slot-names))
   (unless slot-definition
     (check-slot-name method slot-name)))
 
-(defmethod shared-initialize :after ((method standard-method) slot-names
+(def!method shared-initialize :after ((method standard-method) slot-names
                                      &rest initargs &key ((method-cell method-cell)))
   (declare (ignore slot-names method-cell))
   (initialize-method-function initargs method))
 
-(!capturing
 (define-load-time-global *the-class-standard-generic-function*
-  (find-class 'standard-generic-function)))
+  (find-class 'standard-generic-function))
 
-(defmethod shared-initialize :before
+(def!method shared-initialize :before
            ((generic-function standard-generic-function)
             slot-names
             &key (lambda-list () lambda-list-p)
@@ -283,7 +282,7 @@
                      ~:S.~@:>"
                       generic-function qualifiers specializers)))))))
 
-(defmethod find-method ((generic-function standard-generic-function)
+(def!method find-method ((generic-function standard-generic-function)
                         qualifiers specializers &optional (errorp t))
   ;; ANSI about FIND-METHOD: "The specializers argument contains the
   ;; parameter specializers for the method. It must correspond in
@@ -319,7 +318,7 @@
 ;;;       a list of the positions of the arguments this generic-function
 ;;;       specializes (e.g. for a classical generic-function this is the
 ;;;       list: (1)).
-(defmethod compute-discriminating-function-arglist-info
+(def!method compute-discriminating-function-arglist-info
            ((generic-function standard-generic-function))
   ;;(declare (values number-of-required-arguments &rest-argument-p
   ;;             specialized-argument-postions))
@@ -367,17 +366,17 @@
                 (and number-of-requireds (/= number-of-requireds requireds)))
             specialized-argument-positions)))
 
-(defmethod generic-function-argument-precedence-order
+(def!method generic-function-argument-precedence-order
     ((gf standard-generic-function))
   (loop with arg-info = (gf-arg-info gf)
         with lambda-list = (arg-info-lambda-list arg-info)
         for argument-position in (arg-info-precedence arg-info)
         collect (nth argument-position lambda-list)))
 
-(defmethod generic-function-lambda-list ((gf generic-function))
+(def!method generic-function-lambda-list ((gf generic-function))
   (gf-lambda-list gf))
 
-(defmethod gf-fast-method-function-p ((gf standard-generic-function))
+(def!method gf-fast-method-function-p ((gf standard-generic-function))
   (gf-info-fast-mf-p (slot-value gf 'arg-info)))
 
 (defun add-to-weak-hashset (key set)
@@ -389,7 +388,7 @@
   (with-system-mutex ((hashset-mutex set))
     (hashset-find set key)))
 
-(defmethod initialize-instance :after ((gf standard-generic-function)
+(def!method initialize-instance :after ((gf standard-generic-function)
                                        &key (lambda-list nil lambda-list-p)
                                        argument-precedence-order)
   ;; FIXME: Because ARG-INFO is a STRUCTURE-OBJECT, it does not get
@@ -408,7 +407,7 @@
     (when (arg-info-valid-p (slot-value gf 'arg-info))
       (update-dfun gf))))
 
-(defmethod reinitialize-instance :around
+(def!method reinitialize-instance :around
     ((gf standard-generic-function) &rest args &key
      (lambda-list nil lambda-list-p) (argument-precedence-order nil apo-p))
   (let* ((old-mc (generic-function-method-combination gf))
@@ -454,7 +453,7 @@
       (list '(:sbcl :node "Metaobject Protocol")
             '(:amop :generic-function (setf slot-value-using-class)))))
 
-(defgeneric values-for-add-method (gf method)
+(def!generic values-for-add-method (gf method)
   (:method ((gf standard-generic-function) (method standard-method))
     ;; KLUDGE: Just a single generic dispatch, and everything else
     ;; comes from permutation vectors. Would be nicer to define
@@ -526,7 +525,8 @@
            ;; don't, however this branch should never be reached because the
            ;; info only stores :GENERIC-FUNCTION when methods are loaded.
            ;; Maybe AVER that it does not happen?
-           (sb-c::ftype-from-definition name)))))
+           #+sb-xc-host (specifier-type 'function) ; (the default's, which has no definition)
+           #-sb-xc-host (sb-c::ftype-from-definition name)))))
 
 (defun real-add-method (generic-function method &optional skip-dfun-update-p)
   (flet ((similar-lambda-lists-p (old-method new-lambda-list)
@@ -665,13 +665,13 @@
            generic-function
            (types-from-args generic-function arguments 'eql))))
 
-(defmethod compute-applicable-methods
+(def!method compute-applicable-methods
     ((generic-function generic-function) arguments)
   (values (compute-applicable-methods-using-types
            generic-function
            (types-from-args generic-function arguments 'eql))))
 
-(defmethod compute-applicable-methods-using-classes
+(def!method compute-applicable-methods-using-classes
     ((generic-function generic-function) classes)
   (compute-applicable-methods-using-types
    generic-function
@@ -696,37 +696,17 @@
         (when (memq ic cpl2)
           (return-from superclasses-compatible-p nil))))))
 
-(!after-classes
-(mapc
- #'!proclaim-incompatible-superclasses
- '(;; superclass class
-   (system-class std-class structure-class) ; direct subclasses of pcl-class
-   (standard-class funcallable-standard-class)
-   ;; superclass metaobject
-   (class eql-specializer class-eq-specializer method method-combination
-    generic-function slot-definition)
-   ;; metaclass built-in-class
-   (number sequence character           ; direct subclasses of t, but not array
-    standard-object structure-object)   ;                        or symbol
-   (number array character symbol       ; direct subclasses of t, but not
-    standard-object structure-object)   ;                        sequence
-   (complex float rational)             ; direct subclasses of number
-   (integer ratio)                      ; direct subclasses of rational
-   (list vector)                        ; direct subclasses of sequence
-   (cons null)                          ; direct subclasses of list
-   (string bit-vector)                  ; direct subclasses of vector
-   )))
 
-(defmethod same-specializer-p ((specl1 specializer) (specl2 specializer))
+(def!method same-specializer-p ((specl1 specializer) (specl2 specializer))
   (eql specl1 specl2))
 
-(defmethod same-specializer-p ((specl1 class) (specl2 class))
+(def!method same-specializer-p ((specl1 class) (specl2 class))
   (eq specl1 specl2))
 
-(defmethod specializer-class ((specializer class))
+(def!method specializer-class ((specializer class))
   specializer)
 
-(defmethod same-specializer-p ((specl1 class-eq-specializer)
+(def!method same-specializer-p ((specl1 class-eq-specializer)
                                (specl2 class-eq-specializer))
   (eq (specializer-class specl1) (specializer-class specl2)))
 
@@ -736,12 +716,12 @@
 ;; that EQL-specializers are interned, then the comparator should be EQL.
 ;; But if you *do* know that they're interned, then why does this method
 ;; exist at all? The method on SPECIALIZER works fine.
-(defmethod same-specializer-p ((specl1 eql-specializer)
+(def!method same-specializer-p ((specl1 eql-specializer)
                                (specl2 eql-specializer))
   ;; A bit of deception to confuse the enemy?
   (eq (specializer-object specl1) (specializer-object specl2)))
 
-(defmethod specializer-class ((specializer eql-specializer))
+(def!method specializer-class ((specializer eql-specializer))
   (class-of (slot-value specializer 'object)))
 
 (defun specializer-class-or-nil (specializer)
@@ -1672,13 +1652,13 @@
             (function (cdar encs)))
         (lambda (&rest args)
           (apply function inner args)))))
-(defmethod compute-discriminating-function ((gf standard-generic-function))
+(def!method compute-discriminating-function ((gf standard-generic-function))
   (standard-compute-discriminating-function gf))
-(defmethod compute-discriminating-function :around ((gf standard-generic-function))
+(def!method compute-discriminating-function :around ((gf standard-generic-function))
   (maybe-encapsulate-discriminating-function
    gf (generic-function-encapsulations gf) (call-next-method)))
 
-(defmethod (setf class-name) (new-value class)
+(def!method (setf class-name) (new-value class)
   (let ((classoid (layout-classoid (class-wrapper class))))
     (if (and new-value (symbolp new-value))
         (setf (classoid-name classoid) new-value)
@@ -1686,11 +1666,11 @@
   (reinitialize-instance class :name new-value)
   new-value)
 
-(defmethod (setf generic-function-name) (new-value generic-function)
+(def!method (setf generic-function-name) (new-value generic-function)
   (reinitialize-instance generic-function :name new-value)
   new-value)
 
-(defmethod function-keywords ((method standard-method))
+(def!method function-keywords ((method standard-method))
   (multiple-value-bind (llks nreq nopt keywords)
       (analyze-lambda-list (method-lambda-list method))
     (declare (ignore nreq nopt))
@@ -1705,7 +1685,7 @@
 ;;; The compiler uses this for type-checking that callers pass acceptable
 ;;; keywords, so don't make this do anything fancy like looking at effective
 ;;; methods without also fixing the compiler.
-(defmethod generic-function-pretty-arglist ((gf standard-generic-function) &optional methods-in-compilation-unit)
+(def!method generic-function-pretty-arglist ((gf standard-generic-function) &optional methods-in-compilation-unit)
   (let ((gf-lambda-list (generic-function-lambda-list gf))
         (methods (generic-function-methods gf)))
     (flet ((lambda-list (m)

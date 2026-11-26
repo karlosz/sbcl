@@ -629,7 +629,7 @@ possibly temporarily, because it might be used internally.")
    ;; the cross-compilation host compiler's environment and
    ;; in the cross-compiler's environment
 
-   "DEF!STRUCT" "DEF!TYPE"
+   "DEF!STRUCT" "DEF!TYPE" "DEF!METHOD" "DEF!GENERIC"
    "*!REMOVABLE-SYMBOLS*"
 
    ;; bootstrapping macro whose effect is to delay until warm load.

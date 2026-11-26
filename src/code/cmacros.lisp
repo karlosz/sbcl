@@ -88,3 +88,5 @@
             (push (list var (pop keys)) bind))))))
 
 (defmacro def!struct (&rest args) `(defstruct ,@args))
+(defmacro def!method (&rest args) `(defmethod ,@args))
+(defmacro def!generic (&rest args) `(defgeneric ,@args))

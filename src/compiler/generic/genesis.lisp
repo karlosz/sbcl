@@ -401,7 +401,7 @@
 (defun descriptor-byte-offset (des)
   (- (descriptor-base-address des) (gspace-byte-address (descriptor-gspace des))))
 
-(defmethod print-object ((des descriptor) stream)
+(cl:defmethod cl:print-object ((des descriptor) stream)
   (print-unreadable-object (des stream :type t)
     (let ((lowtag (descriptor-lowtag des))
           (bits (descriptor-bits des)))
@@ -1237,7 +1237,7 @@ core and return a descriptor to it."
   ;; "why not just call sb-c::symbol-name-hash?" you ask? because: no symbol.
   (let* ((name-hash (sb-c::calc-symbol-name-hash name (length name)))
          ;; of the name, not the address, so that the cross-compiler knows
-         ;; the target's SYMBOL-HASH (SB-C::TARGET-SYMBOL-HASH)
+         ;; the target's SYMBOL-HASH (cross-sxhash.lisp)
          (salt (sb-c::symbol-hash-salt name-hash package-name))
          (prng-byte sb-impl::symbol-hash-prng-byte))
     ;; 64-bit: Low 4 bytes to high 4 bytes of slot
@@ -4514,8 +4514,8 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
            (*cold-layout-by-addr* (make-hash-table :test 'eql)) ; addr -> cold-layout
            (*tls-index-to-symbol* nil)
            (*cold-early-methods* nil)
-           (*pcl-cold-toplevels* nil)
            (*cold-method-records* (make-hash-table :test 'equal))
+           (*pcl-cold-toplevels* nil)
            (*!cold-toplevels* nil)
            *asm-routine-alist*
            *assembler-routines*

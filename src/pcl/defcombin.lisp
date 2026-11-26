@@ -27,9 +27,8 @@
 ;;; in the long syntax. But it clearly does not, because if you write
 ;;; (&WHOLE v) then you get (LAMBDA (&WHOLE V ...) ...) which is illegal
 ;;;
-(defmacro define-method-combination (&whole form name . args)
+(sb-xc:defmacro define-method-combination (&whole form name . args)
   (declare (ignore args))
-  (!definition (:method-combination form)
   (check-designator name 'define-method-combination)
   `(progn
      (with-single-package-locked-error
@@ -46,7 +45,7 @@
                               :documentation 'define-method-combination))
             `(load-short-defcombin ',type-name ',operator ',ioa
                                    ,(unless (unbound-marker-p doc) doc)
-                                   (sb-c:source-location)))))))
+                                   (sb-c:source-location))))))
 
 (defstruct method-combination-info
   (lambda-list nil :type list)
@@ -59,7 +58,7 @@
 (define-lazy-table method-combinations **method-combinations**
   (!genesis-table '**method-combinations** (make-hash-table :test 'eql)))
 
-(defmethod find-method-combination ((generic-function generic-function)
+(def!method find-method-combination ((generic-function generic-function)
                                     name options)
   (let ((info (gethash name (method-combinations))))
     (when info
@@ -74,13 +73,8 @@
     (when options
       (method-combination-error "STANDARD method combination accepts no options."))
     *standard-method-combination*))
-(!after-classes
-(setf (gethash 'standard (method-combinations))
-      (make-method-combination-info
-       :constructor (standard-method-combination-constructor)
-       :cache (list (cons nil *standard-method-combination*)))))
 
-(defmethod compute-primary-methods ((gf generic-function)
+(def!method compute-primary-methods ((gf generic-function)
                                     (combin (eql *standard-method-combination*))
                                     applicable-methods)
   (remove-if #'method-qualifiers applicable-methods))
@@ -168,7 +162,7 @@
                  'source source-location
                  :documentation doc))
 
-(defmethod invalid-qualifiers ((gf generic-function)
+(def!method invalid-qualifiers ((gf generic-function)
                                (combin short-method-combination)
                                method)
   (let* ((qualifiers (method-qualifiers method))
@@ -192,7 +186,7 @@
       either ~{the single qualifier ~S~^ or ~}.~@:>"
      method gf why type-name (short-method-combination-qualifiers type-name))))
 
-(defmethod compute-primary-methods ((gf generic-function)
+(def!method compute-primary-methods ((gf generic-function)
                                     (combin short-method-combination)
                                     applicable-methods)
   (let ((type-name (method-combination-type-name combin)))
@@ -251,7 +245,7 @@
   (setf (random-documentation type-name 'method-combination) doc)
   type-name)
 
-(defmethod compute-effective-method ((generic-function generic-function)
+(def!method compute-effective-method ((generic-function generic-function)
                                      (combin long-method-combination)
                                      applicable-methods)
   (funcall (gethash (method-combination-type-name combin)
@@ -578,12 +572,3 @@
 
 ;;; we made OR (:MOST-SPECIFIC-FIRST) earlier in the build; hook it in
 (define-method-combination or     :identity-with-one-argument t)
-(!after-classes
-(let ((info (gethash 'or (method-combinations))))
-  (aver info)
-  (aver (null (method-combination-info-cache info)))
-  (setf (method-combination-info-cache info)
-        (list (cons '(:most-specific-first) *or-method-combination*)))))
-(!after-classes
-(add-to-weak-hashset #'make-specializer-form-using-class
-                     (method-combination-gf-set *or-method-combination*)))

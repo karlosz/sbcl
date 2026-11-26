@@ -35,9 +35,25 @@
          (find-symbol (symbol-name name) "CL"))
         ((consp name) (mapcar #'uncross-pcl-name name))
         (t name))))
+;;; PCL proper's definitions and the toplevel forms that wait for them
+;;; (pre-warm.lisp's markers), as the host loads PCL proper's files: queued
+;;; until host PCL is built (fixup.lisp: src/cold/host-pcl.lisp), as
+;;; DEF!STRUCT's structures are, and then run as they load
+(defvar sb-cold::*host-pcl-record* nil) ; (kind package form), last first
+(defun sb-pcl::!host-load-record (kind form)
+  `(sb-cold::host-pcl-load-definition ',kind ',form))
+(defun sb-cold::host-pcl-load-definition (kind form)
+  (if (symbol-value 'sb-pcl::*host-pcl-ready*)
+      (funcall 'sb-pcl::host-pcl-define kind form)
+      (push (list kind *package* form) sb-cold::*host-pcl-record*)))
+;;; DEF!METHOD and DEF!GENERIC define PCL proper's methods and generic
+;;; functions: for host PCL, which makes them, they are recorded
+(defmacro def!method (&rest args)
+  (sb-pcl::!host-load-record :method `(sb-xc:defmethod ,@args)))
+(defmacro def!generic (&rest args)
+  (sb-pcl::!host-load-record :generic-function `(sb-xc:defgeneric ,@args)))
+;;; SB-XC:DEFMETHOD is host code's
 (defmacro sb-xc:defmethod (name &rest rest)
-  (when sb-pcl::*loading-pcl-proper* ; (pre-warm.lisp)
-    (return-from sb-xc:defmethod nil))
   (let* ((qualifiers (loop while (and rest (atom (car rest))) collect (pop rest)))
          (lambda-list (pop rest)))
     `(cl:defmethod ,(uncross-pcl-name name) ,@qualifiers
@@ -69,8 +85,13 @@
 
 (defmacro define-load-time-global (&rest args) `(defvar ,@args))
 
-;;; (PCL proper's: nothing, pre-warm.lisp's !DEFINITION)
-(defmacro sb-xc:defgeneric (&rest args) (declare (ignore args)) nil)
+;;; (host code's are its methods' implicit generic functions)
+(defmacro sb-xc:defgeneric (&rest args)
+  (declare (ignore args)))
+;;; (PCL proper's only)
+(defmacro sb-xc:define-method-combination (&whole form &rest args)
+  (declare (ignore args))
+  (sb-pcl::!host-load-record :method-combination form))
 
 (defmacro sb-xc:defconstant (&rest args)
   `(eval-when (:compile-toplevel :load-toplevel :execute)

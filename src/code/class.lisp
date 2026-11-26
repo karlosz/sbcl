@@ -21,7 +21,13 @@
 
 (in-package "SB-PCL")
 
-(declaim (#+sb-xc-host special #-sb-xc-host global *the-class-t*
+;;; and the cross-compiler's: host PCL's meta-braid sets them as it boots
+;;; with the cross-compiler (class-init.lisp)
+(macrolet ((declare-class-variables (&rest names)
+             `(progn (declaim (#+sb-xc-host special #-sb-xc-host global ,@names))
+                     #+sb-xc-host
+                     (dolist (name ',names) (setf (sb-int:info :variable :kind name) :global)))))
+  (declare-class-variables *the-class-t*
                   *the-class-slot-object*
                   *the-class-structure-object*
                   *the-class-standard-object*

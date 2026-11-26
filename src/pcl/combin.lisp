@@ -251,9 +251,8 @@
               (append *global-effective-method-gensyms* (list new)))
         new)))
 
-(!precompute
 (let ((*rebound-effective-method-gensyms* ()))
-  (dotimes-fixnum (i 10) (get-effective-method-gensym))))
+  (dotimes-fixnum (i 10) (get-effective-method-gensym)))
 
 (defun expand-effective-method-function (gf effective-method &optional env)
   (declare (ignore env))

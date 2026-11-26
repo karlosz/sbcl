@@ -74,7 +74,7 @@
 ;;;    any point. If there is more than one, the specified tiebreaker
 ;;;    rule is used to choose among them.
 
-(defmethod compute-class-precedence-list ((root class))
+(def!method compute-class-precedence-list ((root class))
   (compute-std-cpl root (class-direct-superclasses root)))
 
 (defstruct (class-precedence-description

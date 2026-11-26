@@ -9,7 +9,6 @@
 ;;; cross-compiler as make-host-2 leaves it: so the target files' compile-time
 ;;; effects again, without writing object files (compile-cold-sbcl.lisp with
 ;;; no file to compile)
-(load "src/cold/host-pcl-defs.lisp")
 (defvar cl-user::*compile-files* '())
 (load "src/cold/compile-cold-sbcl.lisp")
 (load "src/cold/genesis-2.lisp")

@@ -96,6 +96,15 @@ which can be found at <http://sbcl.sourceforge.net/>.~:@>"
                      (duplicate-definition-name c))))
   (:default-initargs :references '((:ansi-cl :section (3 2 2 3)))))
 
+;;; target-error.lisp's, which host PCL signals as it builds with the
+;;; cross-compiler (HOST-PCL-BUILD-PROPER)
+(define-condition redefinition-warning (style-warning)
+  ((name :initarg :name) (new-location :initarg :new-location)))
+(define-condition redefinition-with-defgeneric (redefinition-warning) ())
+(define-condition redefinition-with-defmethod (redefinition-warning)
+  ((qualifiers :initarg :qualifiers) (specializers :initarg :specializers)
+   (old-method :initarg :old-method)))
+
 ;;; These should never be instantiated before the real definitions
 ;;; come in.
 (deftype package-lock-violation () nil)

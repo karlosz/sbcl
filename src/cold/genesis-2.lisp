@@ -14,16 +14,10 @@
 (load "src/cold/host-pcl-dump.lisp")
 (setq sb-fasl::*cold-load-finish-hook*
       (lambda ()
-        ;; host PCL's hashes are the target's from here on, the dump's
-        ;; lookups included
-        (setq sb-c::*symbol-hash-hook* #'sb-c::target-symbol-hash)
-        (let ((sb-pcl::*host-pcl-cold-compile*
-                ;; whose own tables have the cross-compiler's hashes
-                (lambda (form)
-                  (let ((sb-c::*symbol-hash-hook* nil))
-                    (sb-fasl::cold-compile form)))))
-          (handler-bind ((style-warning #'muffle-warning))
-            (funcall (intern "HOST-PCL-BUILD" "SB-PCL"))))))
+        (handler-bind ((style-warning #'muffle-warning))
+          (funcall (intern "HOST-PCL-BUILD" "SB-PCL"))
+          ;; what it compiled, which the dump refers to
+          (sb-fasl::cold-compile-host-pcl))))
 
 (let (object-file-names foptrace-file-names)
   (do-stems-and-flags (stem flags 2)
@@ -43,6 +37,3 @@
            ;; The map file is not needed by the system, but can be
            ;; very handy when debugging cold init problems.
            :map-file-name "output/cold-sbcl.map"))
-
-;;; Genesis is over: COLD-SYMBOL-HASH no longer works (after-xc.core).
-(setq sb-c::*symbol-hash-hook* nil)

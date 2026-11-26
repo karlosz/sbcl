@@ -33,16 +33,16 @@
 
 (in-package "SB-PCL")
 
-(defmethod allocate-instance ((class funcallable-standard-class) &rest initargs)
+(def!method allocate-instance ((class funcallable-standard-class) &rest initargs)
   (declare (inline ensure-class-finalized))
   (allocate-standard-funcallable-instance
    (class-wrapper (ensure-class-finalized class))
    (getf initargs :name)))
 
-(defmethod make-reader-method-function ((class funcallable-standard-class)
+(def!method make-reader-method-function ((class funcallable-standard-class)
                                         slot-name)
   (make-std-reader-method-function class slot-name))
 
-(defmethod make-writer-method-function ((class funcallable-standard-class)
+(def!method make-writer-method-function ((class funcallable-standard-class)
                                         slot-name)
   (make-std-writer-method-function class slot-name))

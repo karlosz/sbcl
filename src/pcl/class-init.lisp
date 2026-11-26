@@ -27,33 +27,6 @@
 
 (in-package "SB-PCL")
 
-;;; The classoids of the meta-braid's classes, as the cross-compiler sees
-;;; them once defs.lisp has made their early definitions: their names are
-;;; types it knows, with their superclasses, for TYPEP and type inference.
-;;; Host PCL gives them their classes and layouts (src/cold/host-pcl.lisp).
-#+sb-xc-host
-(labels ((layout-named (name)
-           (let ((classoid (find-classoid name nil)))
-             (if classoid
-                 (classoid-layout classoid)
-                 (let* ((supers (mapcar #'layout-named
-                                        (ecd-superclass-names (!early-class-definition name))))
-                        (inherits (remove-duplicates
-                                   (loop for super in supers
-                                         append (coerce (layout-inherits super) 'list)
-                                         collect super)
-                                   :from-end t))
-                        (classoid (make-standard-classoid :name name))
-                        (layout (make-layout (hash-layout-name name) classoid
-                                             :depthoid -1 :length 0 :invalid nil
-                                             :inherits (coerce inherits 'simple-vector))))
-                   (register-layout layout :invalidate nil) ; (its subclassoids)
-                   (setf (classoid-cell-classoid (find-classoid-cell name :create t)) classoid
-                         (info :type :kind name) :instance)
-                   layout)))))
-  (dolist (ecd *!early-class-definitions*)
-    (layout-named (ecd-class-name ecd))))
-
 (declaim (list **standard-method-classes**))
 (define-load-time-global **standard-method-classes** nil)
 
@@ -64,6 +37,13 @@
     global-boundp-method
     global-makunbound-method)
   #'equal)
+
+#+sb-xc-host ; (the meta-braid's boot: genesis writes it)
+(define-load-time-global *sgf-wrapper*
+  (!boot-make-wrapper (!early-class-size 'standard-generic-function)
+                      'standard-generic-function
+                      sb-kernel::funinstance-layout-bitmap))
+
 
 (defun allocate-standard-instance (wrapper)
   (let* ((instance (%new-instance wrapper (1+ sb-vm:instance-data-start)))
@@ -84,6 +64,7 @@
                            ~S has not been set.~@:>"
           :format-arguments (list ,fin)))
 
+#-sb-xc-host ; (host PCL's: src/cold/host-pcl.lisp)
 (defun allocate-standard-funcallable-instance (wrapper name)
   (declare (layout wrapper))
   (declare (ignore name))
@@ -147,7 +128,8 @@
 
 ;;; The meta-braid: host PCL's (src/cold/host-pcl.lisp), whose classes
 ;;; genesis writes
-(!host-only
+#+sb-xc-host
+(progn
 (macrolet
     ((with-initial-classes-and-wrappers ((&rest classes) &body body)
        `(let* ((*create-classes-from-internal-structure-definitions-p* nil)
@@ -382,12 +364,14 @@
 ;;; (ALLOCATE-INSTANCE (FIND-CLASS 'HASH-TABLE)).
 ;;; Anyway, see below in !BOOTSTRAP-INITIALIZE-CLASS where we refer to
 ;;; the name of this seemingly useless constructor function.
+#-sb-xc-host ; (host PCL's: src/cold/host-pcl.lisp)
 (defun |STRUCTURE-OBJECT class constructor| ()
   (sb-kernel:%make-structure-instance
    #.(sb-kernel:find-defstruct-description 'structure-object)
    nil))
 
-(!host-only
+#+sb-xc-host
+(progn
 ;;; Initialize a class metaobject.
 (defun !bootstrap-initialize-class
        (metaclass-name class name
@@ -840,7 +824,7 @@
         do (setf (gethash key table) value))
   table)
 ;;; Toplevel forms of PCL proper, as compiled for a dumped braid
-;;; (src/cold/host-pcl-defs.lisp): the host ran this one; this one runs at
+;;; (!XC-DEFINITION, src/cold/host-pcl-dispatch.lisp): the host ran this one; this one runs at
 ;;; the end of PCL's bootstrap (!FINISH-GENESIS-BRAID).
 (defun !host-form (function) (declare (ignore function)))
 (define-load-time-global *!target-forms* nil)
@@ -882,3 +866,10 @@
         (funcall (cdr form))))
     (!settle-lazy-tables)
     (funcall '!make-method-combination-gf-sets))) ; defcombin.lisp's
+
+;;;; initialize the initial class hierarchy
+
+#+sb-xc-host ; (the target's is genesis's: src/cold/host-pcl.lisp)
+(progn
+(!bootstrap-meta-braid)
+(!bootstrap-built-in-classes))

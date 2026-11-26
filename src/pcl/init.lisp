@@ -25,10 +25,10 @@
 
 (in-package "SB-PCL")
 
-(defmethod make-instance ((class symbol) &rest initargs)
+(def!method make-instance ((class symbol) &rest initargs)
   (apply #'make-instance (find-class class) initargs))
 
-(defmethod make-instance ((class class) &rest initargs)
+(def!method make-instance ((class class) &rest initargs)
   (declare (inline ensure-class-finalized))
   (let ((instance-or-nil (maybe-call-ctor class initargs)))
     (when instance-or-nil
@@ -51,10 +51,10 @@
         finally
           (return (append supplied-initargs default-initargs))))
 
-(defmethod initialize-instance ((instance slot-object) &rest initargs)
+(def!method initialize-instance ((instance slot-object) &rest initargs)
   (apply #'shared-initialize instance t initargs))
 
-(defmethod reinitialize-instance ((instance slot-object) &rest initargs)
+(def!method reinitialize-instance ((instance slot-object) &rest initargs)
   ;; the ctor machinery allows us to track when memoization of
   ;; validity of initargs should be cleared.
   (check-ri-initargs instance initargs)
@@ -131,7 +131,7 @@
                        'slot-definition initarg
                        datum expected-type)))))
 
-(defmethod initialize-instance :before ((slotd slot-definition)
+(def!method initialize-instance :before ((slotd slot-definition)
                                         &key (name nil namep)
                                           (initform nil initformp)
                                           (initfunction nil initfunp)
@@ -173,7 +173,7 @@
     (unless (typep documentation '(or null string))
       (error 'slotd-initialization-type-error :initarg :documentation :datum documentation :expected-type '(or null string)))))
 
-(defmethod initialize-instance :before ((dslotd direct-slot-definition)
+(def!method initialize-instance :before ((dslotd direct-slot-definition)
                                         &key
                                           (readers nil readersp)
                                           (writers nil writersp))
@@ -196,16 +196,16 @@
     (check readers readersp)
     (check writers writersp)))
 
-(defmethod initialize-instance :after ((slotd effective-slot-definition) &key)
+(def!method initialize-instance :after ((slotd effective-slot-definition) &key)
   (let ((info (make-slot-info :slotd slotd)))
     (generate-slotd-typecheck slotd info)
     (setf (slot-definition-info slotd) info)))
 
 ;;; FIXME: Do we need (SETF SLOT-DEFINITION-TYPE) at all?
-(defmethod (setf slot-definition-type) :after (new-type (slotd effective-slot-definition))
+(def!method (setf slot-definition-type) :after (new-type (slotd effective-slot-definition))
   (generate-slotd-typecheck slotd (slot-definition-info slotd)))
 
-(defmethod update-instance-for-different-class
+(def!method update-instance-for-different-class
     ((previous standard-object) (current standard-object) &rest initargs)
   ;; First we must compute the newly added slots. The spec defines
   ;; newly added slots as "those local slots for which no slot of
@@ -226,7 +226,7 @@
         (check-initargs-1 (class-of current) initargs call-list)))
     (apply #'shared-initialize current added-slots initargs)))
 
-(defmethod update-instance-for-redefined-class
+(def!method update-instance-for-redefined-class
     ((instance standard-object) added-slots discarded-slots property-list
      &rest initargs)
   (when initargs
@@ -237,7 +237,7 @@
            (list* 'shared-initialize instance added-slots initargs))))
   (apply #'shared-initialize instance added-slots initargs))
 
-(defmethod shared-initialize ((instance slot-object) slot-names &rest initargs)
+(def!method shared-initialize ((instance slot-object) slot-names &rest initargs)
   (flet ((initialize-slot-from-initarg (class instance slotd)
            (let ((slot-initargs (slot-definition-initargs slotd)))
              (doplist (initarg value) initargs

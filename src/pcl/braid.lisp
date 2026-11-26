@@ -193,7 +193,8 @@
         (when (and name (symbolp name) (eq name (classoid-name classoid)))
           (setf (find-classoid name) classoid))))))
 
-(!host-only
+#+sb-xc-host
+(!capturing
 (loop for (name . x)
       in (let (classoid-cells)
            (do-all-symbols (s classoid-cells)
@@ -249,7 +250,7 @@
   (:default-initargs
    :problem "There is no applicable method"
    :references '((:ansi-cl :section (7 6 6)))))
-(defmethod no-applicable-method (generic-function &rest args)
+(def!method no-applicable-method (generic-function &rest args)
   (error 'no-applicable-method-error
          :generic-function generic-function
          :args args))
@@ -259,7 +260,7 @@
   (:default-initargs
    :problem "There is no next method"
    :references '((:ansi-cl :section (7 6 6 2)))))
-(defmethod no-next-method ((generic-function standard-generic-function)
+(def!method no-next-method ((generic-function standard-generic-function)
                            (method standard-method) &rest args)
   (error 'no-next-method-error
          :generic-function generic-function
@@ -275,13 +276,13 @@
   (:default-initargs
    :problem "There is no primary method"
    :references '((:ansi-cl :section (7 6 6 2)))))
-(defmethod no-primary-method (generic-function &rest args)
+(def!method no-primary-method (generic-function &rest args)
   (error 'no-primary-method-error
          :generic-function generic-function
          :args args))
 
 ;; FIXME shouldn't this specialize on STANDARD-METHOD-COMBINATION?
-(defmethod invalid-qualifiers ((gf generic-function)
+(def!method invalid-qualifiers ((gf generic-function)
                                combin
                                method)
   (let* ((qualifiers (method-qualifiers method))
@@ -303,7 +304,7 @@
       qualifier at all.~@:>"
      method gf why type-name +standard-method-combination-qualifiers+)))
 
-(defmethod compute-primary-methods ((gf generic-function)
+(def!method compute-primary-methods ((gf generic-function)
                                     combin
                                     applicable-methods)
   applicable-methods)

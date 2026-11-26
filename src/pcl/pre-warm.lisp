@@ -34,56 +34,36 @@
 ;;; cross-compiler expands PCL's macros as it compiles PCL, so their code
 ;;; does not count on classes.
 #+sb-xc-host (defvar *host-pcl-ready* nil)
+;;; ... and while it runs PCL's definitions (CALL-WITH-HOST-PCL-CLOS-MACROS)
+#+sb-xc-host (defvar *host-pcl-evaluating* nil)
 (defmacro pcl-ready-p () #+sb-xc-host '*host-pcl-ready* #-sb-xc-host t)
 
 ;;; Toplevel forms of PCL's files that host PCL, which builds the classes
 ;;; and generic functions genesis writes (src/cold/host-pcl.lisp), doesn't
-;;; run: the target's only, where they are, or once PCL's bootstrap is over
-;;; (when the braid genesis wrote is linked: !FINISH-GENESIS-BRAID)
-;;; Cross-compiled, the markers below tell host PCL what to run when: their
-;;; forms are recorded (src/cold/host-pcl-defs.lisp, whose functions these are).
-;;; Loaded into the host from PCL proper (:PCL-PROPER), they are nothing, as
-;;; host PCL runs what was recorded.
-#+sb-xc-host (declaim (ftype function !xc-record !xc-definition))
+;;; run where they are, but once PCL's bootstrap is over (when the braid
+;;; genesis wrote is linked: !FINISH-GENESIS-BRAID)
+;;; The markers below tell host PCL what to run when: their forms are
+;;; recorded, as the host loads PCL proper's files (before it builds host
+;;; PCL: !HOST-LOAD-RECORD, src/code/cross-early.lisp), or as the cross-compiler
+;;; compiles the others (src/cold/host-pcl-dispatch.lisp).
+#+sb-xc-host (declaim (ftype function !host-load-record))
+#+sb-xc-host (defvar *host-pcl-making-methods*)
 (defmacro !cross-compiling-p () '(member :sb-xc sb-xc:*features*))
-(defmacro !loading-pcl-proper-p () #+sb-xc-host '*loading-pcl-proper* #-sb-xc-host nil)
-(defmacro !target-only (&body forms) (unless (!loading-pcl-proper-p) `(progn ,@forms)))
+;;; (as the host loads PCL's files, rather than host PCL running them)
+(defmacro !loading-pcl-proper-p ()
+  #+sb-xc-host '(not (or (!cross-compiling-p) *host-pcl-evaluating*)) #-sb-xc-host nil)
 (defmacro !after-pcl-bootstrap (&body forms)
   (unless (!loading-pcl-proper-p) `(!target-form (lambda () ,@forms))))
-;;; ... that the target runs as well (code PCL precomputes), and that host PCL
-;;; runs once PCL's generic functions are made (LOAD-TIME-VALUE of one)
-(defmacro !precompute (&whole form &body forms)
-  (cond ((!cross-compiling-p) (!xc-record :pass-2 form `(progn ,@forms)))
-        ((!loading-pcl-proper-p) nil)
-        (t `(progn ,@forms))))
+;;; ... that host PCL runs as it makes PCL's generic functions, once they
+;;; exist and before they are initialized: LOAD-TIME-VALUE of one,
+;;; braid.lisp's links of classoids to their classes, which initializing
+;;; them needs, and dlisp3.lisp's dfun constructors, which are code
 (defmacro !capturing (&whole form &body forms)
-  (cond ((!cross-compiling-p) (!xc-record :capturing form `(progn ,@forms)))
-        ((!loading-pcl-proper-p) nil)
-        (t `(progn ,@forms))))
-;;; ... that host PCL runs once PCL's classes and generic functions are made
-;;; (the toplevel effects of PCL proper's files: the rest are definitions)
-(defmacro !after-classes (&whole form &body forms)
-  (cond ((!cross-compiling-p) (!xc-record :pass-2 form nil))
-        ((!loading-pcl-proper-p) nil)
-        (t `(progn ,@forms))))
-;;; ... and that the target never runs, which host PCL runs where it is (the
-;;; cross-compiler's copy of PCL's files), or in PCL proper where it runs
-;;; !CAPTURING's (braid.lisp's links of classoids to their classes, which
-;;; initializing PCL's generic functions needs, the real LOAD-DEFCLASS ...)
-(defmacro !host-only (&whole form &body forms)
-  (cond ((!cross-compiling-p) (!xc-record :capturing form nil))
-        ((!loading-pcl-proper-p) nil)
-        (t `(progn ,@forms))))
-;;; DEFCLASS, DEFGENERIC, DEFMETHOD and DEFINE-METHOD-COMBINATION: genesis
-;;; writes the classes, generic functions, methods and method combinations
-;;; that host PCL makes, and cross-compiled each is recorded for host PCL
-;;; and has only its compile-time effects (src/cold/host-pcl-defs.lisp)
-(defmacro !definition ((kind form) &body body)
-  `(let ((expansion (progn ,@body)))
-     (cond ((!cross-compiling-p) (!xc-definition ,kind ,form expansion))
-           ((!loading-pcl-proper-p) nil)
-           (t expansion))))
-
+  #-sb-xc-host (declare (ignore form))
+  #+sb-xc-host
+  (when (!loading-pcl-proper-p)
+    (return-from !capturing (!host-load-record :capturing form)))
+  `(progn ,@forms))
 ;;; method function stuff.
 ;;;
 ;;; PCL historically included a so-called method-fast-function, which

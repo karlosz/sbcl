@@ -74,45 +74,32 @@
               (logxor (%sxhash-simple-string string) most-positive-fixnum)))))
 
 ;;; This is merely a slot-reader in real life, but since cross-compiling
-;;; doesn't have a slot, simply recompute the answer as if it were stored.
-;;; This hash contains *MORE* significant bits than SYMBOL-NAME-HASH.
-;;; %MAKE-SYMBOL will (eventually) stuff in some pseudo-random bits.
-;;; However, for cross-compiling, it's OK to forgo randomizing, because
-;;; we don't have many (if any) STRING= symbols that would benefit from
-;;; having distinct hashes.
-;;; The target's, while the host's PCL builds the target's slot tables and
-;;; caches (src/cold/genesis-2.lisp)
-(defvar *symbol-hash-hook* nil)
-;;; The random bits of the hash of a symbol that genesis makes, of its name's
-;;; hash and its package's name (genesis's SYMHASH-BITS): the target's
-;;; SYMBOL-HASH of a symbol of the cold core, which the target's %MAKE-SYMBOL
-;;; salts by its address
+;;; doesn't have a slot, simply recompute the answer as if it were stored:
+;;; the target's of a symbol that genesis makes, which it salts by the hashes
+;;; of the symbol's name and package name (SYMHASH-BITS).  The target's
+;;; %MAKE-SYMBOL salts the hashes of the symbols it makes by their address.
 (defun symbol-hash-salt (name-hash package-name)
   (sb-impl::murmur3-fmix-word
    (logxor name-hash (if package-name (%sxhash-simple-string package-name) 0))))
-(defun target-symbol-hash (symbol)
-  #-64-bit (error "TARGET-SYMBOL-HASH of ~S" symbol)
-  #+64-bit
-  (let* ((name (symbol-name symbol))
-         (name-hash (calc-symbol-name-hash name (length name)))
-         (package (sb-xc:symbol-package symbol))
-         (prng-byte sb-impl::symbol-hash-prng-byte))
-    (ash (logior (ash name-hash (+ (byte-size prng-byte) (byte-position prng-byte)))
-                 (mask-field prng-byte
-                             (symbol-hash-salt name-hash
-                                               (and package (sb-xc:package-name package)))))
-         (- sb-vm::n-symbol-hash-discard-bits))))
 (defun symbol-hash (symbol)
-  (if *symbol-hash-hook*
-      (funcall *symbol-hash-hook* symbol)
-      (let ((name (symbol-name symbol)))
-        (calc-symbol-name-hash name (length name)))))
+  (let* ((name (symbol-name symbol))
+         (name-hash (calc-symbol-name-hash name (length name))))
+    #-64-bit name-hash
+    #+64-bit
+    (let ((package (sb-xc:symbol-package symbol))
+          (prng-byte sb-impl::symbol-hash-prng-byte))
+      (ash (logior (ash name-hash (+ (byte-size prng-byte) (byte-position prng-byte)))
+                   (mask-field prng-byte
+                               (symbol-hash-salt name-hash
+                                                 (and package (sb-xc:package-name package)))))
+           (- sb-vm::n-symbol-hash-discard-bits)))))
 
 ;;; This is also theoretically a slot-reader which for 32-bit is identical
 ;;; to symbol-hash, or 64-bit is a zero-extending 4-byte load that grabs
 ;;; only 32 bits.
 (defun symbol-name-hash (symbol)
-  (ldb (byte 32 0) (symbol-hash symbol)))
+  (let ((name (symbol-name symbol)))
+    (calc-symbol-name-hash name (length name))))
 
 (defun hash-as-if-symbol-name (x)
   (aver (symbolp x))

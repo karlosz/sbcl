@@ -175,6 +175,7 @@
  ;; Called by cross-compiled PCL proper.  Non-toplevel definitions in PCL
  ;; and error.lisp, or defined in warm load.
  (sb-pcl::accessor-set-slot-value
+  sb-pcl::accessor-slot-boundp
   sb-pcl::accessor-slot-value
   sb-kernel:condition-slot-boundp
   sb-kernel:condition-slot-makunbound
@@ -201,9 +202,10 @@
   sb-pcl::real-specializer-type-specifier/structure-class
   sb-pcl::real-specializer-type-specifier/system-class
   sb-pcl::standard-compute-discriminating-function
-  ;; the cross-compiler's only (src/cold/host-pcl-defs.lisp)
-  sb-pcl::!xc-record
-  sb-pcl::!xc-definition
   ;; their early versions are host PCL's only; genesis installs these
   sb-pcl::ensure-accessor
-  sb-pcl::load-defclass))
+  sb-pcl::load-defclass
+  ;; MAKE-SLOT-TABLE's BOOTSTRAP case, host PCL's only (ecd.lisp)
+  sb-pcl::early-slot-definition-info
+  sb-pcl::early-slot-definition-location
+  sb-pcl::early-slot-definition-name))

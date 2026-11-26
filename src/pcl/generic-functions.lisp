@@ -10,273 +10,273 @@
 
 ;;;; readers
 
-(defgeneric accessor-method-slot-definition (standard-accessor-method))
+(def!generic accessor-method-slot-definition (standard-accessor-method))
 
-(defgeneric class-can-precede-list (pcl-class))
+(def!generic class-can-precede-list (pcl-class))
 
-(defgeneric class-defstruct-constructor (structure-class))
+(def!generic class-defstruct-constructor (structure-class))
 
-(defgeneric class-defstruct-form (structure-class))
+(def!generic class-defstruct-form (structure-class))
 
-(defgeneric class-direct-subclasses (class))
+(def!generic class-direct-subclasses (class))
 
-(defgeneric class-direct-superclasses (class))
+(def!generic class-direct-superclasses (class))
 
-(defgeneric class-eq-specializer (class))
+(def!generic class-eq-specializer (class))
 
-(defgeneric class-incompatible-superclass-list (pcl-class))
+(def!generic class-incompatible-superclass-list (pcl-class))
 
-(defgeneric class-name (class))
+(def!generic class-name (class))
 
-(defgeneric class-precedence-list (pcl-class))
+(def!generic class-precedence-list (pcl-class))
 
-(defgeneric class-wrapper (pcl-class))
+(def!generic class-wrapper (pcl-class))
 
-(defgeneric definition-source (definition-source-mixin))
+(def!generic definition-source (definition-source-mixin))
 
-(defgeneric eql-specializer-object (eql-specializer))
+(def!generic eql-specializer-object (eql-specializer))
 
-(defgeneric generic-function-declarations (generic-function))
+(def!generic generic-function-declarations (generic-function))
 
-(defgeneric generic-function-method-class (generic-function))
+(def!generic generic-function-method-class (generic-function))
 
-(defgeneric generic-function-method-combination (generic-function))
+(def!generic generic-function-method-combination (generic-function))
 
-(defgeneric generic-function-methods (generic-function))
+(def!generic generic-function-methods (generic-function))
 
-(defgeneric generic-function-name (generic-function))
+(def!generic generic-function-name (generic-function))
 
-(defgeneric gf-arg-info (standard-generic-function))
+(def!generic gf-arg-info (standard-generic-function))
 
-(defgeneric gf-dfun-state (standard-generic-function))
+(def!generic gf-dfun-state (standard-generic-function))
 
-(defgeneric generic-function-initial-methods (standard-generic-function))
+(def!generic generic-function-initial-methods (standard-generic-function))
 
-(defgeneric long-method-combination-function (long-method-combination))
+(def!generic long-method-combination-function (long-method-combination))
 
-(defgeneric method-combination-documentation (standard-method-combination))
+(def!generic method-combination-documentation (standard-method-combination))
 
-(defgeneric method-combination-options (standard-method-combination))
+(def!generic method-combination-options (standard-method-combination))
 
-(defgeneric method-combination-type-name (standard-method-combination))
+(def!generic method-combination-type-name (standard-method-combination))
 
-(defgeneric method-generic-function (standard-method))
+(def!generic method-generic-function (standard-method))
 
-(defgeneric object-plist (plist-mixin))
+(def!generic object-plist (plist-mixin))
 
-(defgeneric short-combination-identity-with-one-argument
+(def!generic short-combination-identity-with-one-argument
   (short-method-combination))
 
-(defgeneric short-combination-operator (short-method-combination))
+(def!generic short-combination-operator (short-method-combination))
 
-(defgeneric slot-definition-class (slot-definition))
+(def!generic slot-definition-class (slot-definition))
 
-(defgeneric slot-definition-defstruct-accessor-symbol
+(def!generic slot-definition-defstruct-accessor-symbol
   (structure-slot-definition))
 
-(defgeneric slot-definition-initargs (slot-definition))
+(def!generic slot-definition-initargs (slot-definition))
 
-(defgeneric slot-definition-initform (slot-definition))
+(def!generic slot-definition-initform (slot-definition))
 
-(defgeneric slot-definition-initfunction (slot-definition))
+(def!generic slot-definition-initfunction (slot-definition))
 
-(defgeneric slot-definition-internal-reader-function
+(def!generic slot-definition-internal-reader-function
   (structure-slot-definition))
 
-(defgeneric slot-definition-internal-writer-function
+(def!generic slot-definition-internal-writer-function
   (structure-slot-definition))
 
-(defgeneric slot-definition-location (standard-effective-slot-definition))
+(def!generic slot-definition-location (standard-effective-slot-definition))
 
-(defgeneric slot-definition-name (slot-definition))
+(def!generic slot-definition-name (slot-definition))
 
-(defgeneric slot-definition-info (effective-slot-definition))
+(def!generic slot-definition-info (effective-slot-definition))
 
-(defgeneric slot-definition-readers (slot-definition))
+(def!generic slot-definition-readers (slot-definition))
 
-(defgeneric slot-definition-type (slot-definition))
+(def!generic slot-definition-type (slot-definition))
 
-(defgeneric slot-definition-writers (slot-definition))
+(def!generic slot-definition-writers (slot-definition))
 
-(defgeneric specializer-object (class-eq-specializer))
+(def!generic specializer-object (class-eq-specializer))
 
-(defgeneric specializer-type (specializer))
+(def!generic specializer-type (specializer))
 
 ;;;; writers
 
-(defgeneric (setf class-defstruct-constructor) (new-value structure-class))
+(def!generic (setf class-defstruct-constructor) (new-value structure-class))
 
-(defgeneric (setf class-defstruct-form) (new-value structure-class))
+(def!generic (setf class-defstruct-form) (new-value structure-class))
 
-(defgeneric (setf class-direct-slots) (new-value slot-class))
+(def!generic (setf class-direct-slots) (new-value slot-class))
 
-(defgeneric (setf class-incompatible-superclass-list) (new-value pcl-class))
+(def!generic (setf class-incompatible-superclass-list) (new-value pcl-class))
 
-(defgeneric (setf class-name) (new-value class))
+(def!generic (setf class-name) (new-value class))
 
-(defgeneric (setf class-slots) (new-value slot-class))
+(def!generic (setf class-slots) (new-value slot-class))
 
-(defgeneric (setf generic-function-method-class) (new-value
+(def!generic (setf generic-function-method-class) (new-value
                                                   standard-generic-function))
 
-(defgeneric (setf generic-function-method-combination)
+(def!generic (setf generic-function-method-combination)
   (new-value standard-generic-function))
 
-(defgeneric (setf generic-function-declarations) (new-value
+(def!generic (setf generic-function-declarations) (new-value
                                                   standard-generic-function))
 
-(defgeneric (setf generic-function-methods) (new-value
+(def!generic (setf generic-function-methods) (new-value
                                              standard-generic-function))
 
-(defgeneric (setf generic-function-name) (new-value standard-generic-function))
+(def!generic (setf generic-function-name) (new-value standard-generic-function))
 
-(defgeneric (setf gf-dfun-state) (new-value standard-generic-function))
+(def!generic (setf gf-dfun-state) (new-value standard-generic-function))
 
-(defgeneric (setf generic-function-initial-methods)
+(def!generic (setf generic-function-initial-methods)
   (new-value standard-generic-function))
 
-(defgeneric (setf method-generic-function) (new-value standard-method))
+(def!generic (setf method-generic-function) (new-value standard-method))
 
-(defgeneric (setf object-plist) (new-value plist-mixin))
+(def!generic (setf object-plist) (new-value plist-mixin))
 
-(defgeneric (setf slot-definition-allocation) (new-value
+(def!generic (setf slot-definition-allocation) (new-value
                                                standard-slot-definition))
 
-(defgeneric (setf slot-definition-class) (new-value slot-definition))
+(def!generic (setf slot-definition-class) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-defstruct-accessor-symbol)
+(def!generic (setf slot-definition-defstruct-accessor-symbol)
   (new-value structure-slot-definition))
 
-(defgeneric (setf slot-definition-initargs) (new-value slot-definition))
+(def!generic (setf slot-definition-initargs) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-initform) (new-value slot-definition))
+(def!generic (setf slot-definition-initform) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-initfunction) (new-value slot-definition))
+(def!generic (setf slot-definition-initfunction) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-internal-reader-function)
+(def!generic (setf slot-definition-internal-reader-function)
   (new-value structure-slot-definition))
 
-(defgeneric (setf slot-definition-internal-writer-function)
+(def!generic (setf slot-definition-internal-writer-function)
   (new-value structure-slot-definition))
 
-(defgeneric (setf slot-definition-location)
+(def!generic (setf slot-definition-location)
   (new-value standard-effective-slot-definition))
 
-(defgeneric (setf slot-definition-name) (new-value slot-definition))
+(def!generic (setf slot-definition-name) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-info) (new-value effective-slot-definition))
+(def!generic (setf slot-definition-info) (new-value effective-slot-definition))
 
-(defgeneric (setf slot-definition-readers) (new-value slot-definition))
+(def!generic (setf slot-definition-readers) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-type) (new-value slot-definition))
+(def!generic (setf slot-definition-type) (new-value slot-definition))
 
-(defgeneric (setf slot-definition-writer-function)
+(def!generic (setf slot-definition-writer-function)
   (new-value effective-slot-definition))
 
-(defgeneric (setf slot-definition-writers) (new-value slot-definition))
+(def!generic (setf slot-definition-writers) (new-value slot-definition))
 
 ;;;; 1 argument
 
-(defgeneric accessor-method-slot-name (m))
+(def!generic accessor-method-slot-name (m))
 
-(defgeneric class-default-initargs (class))
+(def!generic class-default-initargs (class))
 
-(defgeneric class-direct-default-initargs (class))
+(def!generic class-direct-default-initargs (class))
 
-(defgeneric class-direct-slots (class))
+(def!generic class-direct-slots (class))
 
-(defgeneric class-finalized-p (class))
+(def!generic class-finalized-p (class))
 
-(defgeneric class-prototype (class))
+(def!generic class-prototype (class))
 
-(defgeneric class-slot-cells (class))
+(def!generic class-slot-cells (class))
 
-(defgeneric class-slots (class))
+(def!generic class-slots (class))
 
-(defgeneric compute-class-precedence-list (root))
+(def!generic compute-class-precedence-list (root))
 
-(defgeneric compute-default-initargs (class))
+(def!generic compute-default-initargs (class))
 
-(defgeneric compute-discriminating-function (gf))
+(def!generic compute-discriminating-function (gf))
 
-(defgeneric compute-discriminating-function-arglist-info (generic-function))
+(def!generic compute-discriminating-function-arglist-info (generic-function))
 
-(defgeneric compute-slots (class))
+(def!generic compute-slots (class))
 
-(defgeneric finalize-inheritance (class))
+(def!generic finalize-inheritance (class))
 
-(defgeneric function-keywords (method))
+(def!generic function-keywords (method))
 
-(defgeneric generic-function-argument-precedence-order (generic-function))
+(def!generic generic-function-argument-precedence-order (generic-function))
 
-(defgeneric generic-function-lambda-list (generic-function))
+(def!generic generic-function-lambda-list (generic-function))
 
-(defgeneric generic-function-pretty-arglist (generic-function &optional current-defmethod))
+(def!generic generic-function-pretty-arglist (generic-function &optional current-defmethod))
 
-(defgeneric gf-fast-method-function-p (gf))
+(def!generic gf-fast-method-function-p (gf))
 
-(defgeneric initialize-internal-slot-functions (slotd))
+(def!generic initialize-internal-slot-functions (slotd))
 
-(defgeneric make-instances-obsolete (class))
+(def!generic make-instances-obsolete (class))
 
-(defgeneric method-function (method))
+(def!generic method-function (method))
 
-(defgeneric method-lambda-list (m))
+(def!generic method-lambda-list (m))
 
-(defgeneric method-qualifiers (m))
+(def!generic method-qualifiers (m))
 
-(defgeneric method-specializers (m))
+(def!generic method-specializers (m))
 
-(defgeneric slot-definition-allocation (slotd))
+(def!generic slot-definition-allocation (slotd))
 
-(defgeneric specializer-class (specializer))
+(def!generic specializer-class (specializer))
 
-(defgeneric specializer-direct-generic-functions (specializer))
+(def!generic specializer-direct-generic-functions (specializer))
 
-(defgeneric specializer-direct-methods (specializer))
+(def!generic specializer-direct-methods (specializer))
 
-(defgeneric specializer-method-table (specializer))
+(def!generic specializer-method-table (specializer))
 
-(defgeneric specializer-method-holder (specializer &optional create))
+(def!generic specializer-method-holder (specializer &optional create))
 
-(defgeneric update-constructors (class))
+(def!generic update-constructors (class))
 
 ;;;; 2 arguments
 
-(defgeneric add-dependent (metaobject dependent))
+(def!generic add-dependent (metaobject dependent))
 
-(defgeneric add-direct-method (specializer method))
+(def!generic add-direct-method (specializer method))
 
-(defgeneric add-direct-subclass (class subclass))
+(def!generic add-direct-subclass (class subclass))
 
-(defgeneric add-method (generic-function method))
+(def!generic add-method (generic-function method))
 
-(defgeneric (setf class-slot-cells) (new-value class))
+(def!generic (setf class-slot-cells) (new-value class))
 
-(defgeneric class-slot-value (class slot-name))
+(def!generic class-slot-value (class slot-name))
 
-(defgeneric compatible-meta-class-change-p (class proto-new-class))
+(def!generic compatible-meta-class-change-p (class proto-new-class))
 
-(defgeneric compute-applicable-methods (generic-function arguments))
+(def!generic compute-applicable-methods (generic-function arguments))
 
-(defgeneric compute-applicable-methods-using-classes
+(def!generic compute-applicable-methods-using-classes
   (generic-function classes))
 
-(defgeneric compute-effective-slot-definition-initargs (class direct-slotds))
+(def!generic compute-effective-slot-definition-initargs (class direct-slotds))
 
-(defgeneric describe-object (object stream))
+(def!generic describe-object (object stream))
 
-(defgeneric direct-slot-definition-class (class &rest initargs))
+(def!generic direct-slot-definition-class (class &rest initargs))
 
-(defgeneric effective-slot-definition-class (class &rest initargs))
+(def!generic effective-slot-definition-class (class &rest initargs))
 
-(defgeneric make-reader-method-function (class slot-name))
+(def!generic make-reader-method-function (class slot-name))
 
-(defgeneric make-writer-method-function (class slot-name))
+(def!generic make-writer-method-function (class slot-name))
 
-(defgeneric map-dependents (metaobject function))
+(def!generic map-dependents (metaobject function))
 
-(defgeneric parse-specializer-using-class (generic-function specializer-name)
+(def!generic parse-specializer-using-class (generic-function specializer-name)
   (:documentation
    "Parse SPECIALIZER-NAME into a specializer object suitable for GENERIC-FUNCTION.
 
@@ -298,37 +298,37 @@ evaluated (in contrast to DEFMETHOD's behavior).
 NOTE: This generic function is part of an SBCL-specific experimental
 protocol. Interface subject to change."))
 
-(defgeneric remove-dependent (metaobject dependent))
+(def!generic remove-dependent (metaobject dependent))
 
-(defgeneric remove-direct-method (specializer method))
+(def!generic remove-direct-method (specializer method))
 
-(defgeneric remove-direct-subclass (class subclass))
+(def!generic remove-direct-subclass (class subclass))
 
-(defgeneric remove-method (generic-function method))
+(def!generic remove-method (generic-function method))
 
-(defgeneric remove-reader-method (class generic-function))
+(def!generic remove-reader-method (class generic-function))
 
-(defgeneric remove-writer-method (class generic-function))
+(def!generic remove-writer-method (class generic-function))
 
-(defgeneric same-specializer-p (specl1 specl2))
+(def!generic same-specializer-p (specl1 specl2))
 
-(defgeneric slot-accessor-function (slotd type))
+(def!generic slot-accessor-function (slotd type))
 
-(defgeneric slot-accessor-std-p (slotd type))
+(def!generic slot-accessor-std-p (slotd type))
 
 ;;; This controls DESCRIBE-OBJECT (SLOT-OBJECT STREAM) behavior.
-(defgeneric slots-to-inspect (class object))
+(def!generic slots-to-inspect (class object))
 
-(defgeneric unparse-specializer-using-class (generic-function specializer))
+(def!generic unparse-specializer-using-class (generic-function specializer))
 
-(defgeneric validate-superclass (class superclass))
+(def!generic validate-superclass (class superclass))
 
-(defgeneric invalid-superclass (class superclass))
+(def!generic invalid-superclass (class superclass))
 
 
 ;;;; 3 arguments
 
-(defgeneric (setf class-slot-value) (nv class slot-name))
+(def!generic (setf class-slot-value) (nv class slot-name))
 
 ;;; CMUCL comment (from Gerd Moellmann/Pierre Mai, 2002-10-19):
 ;;;
@@ -338,33 +338,33 @@ protocol. Interface subject to change."))
 ;;; remember what the second value was supposed to be.  So, PCL's
 ;;; COMPUTE-EFFECTIVE-METHOD returns one value as do Allegro and
 ;;; Lispworks.
-(defgeneric compute-effective-method
+(def!generic compute-effective-method
     (generic-function combin applicable-methods))
 
-(defgeneric compute-primary-methods
+(def!generic compute-primary-methods
     (generic-function combin applicable-methods))
 
-(defgeneric compute-effective-slot-definition (class name dslotds))
+(def!generic compute-effective-slot-definition (class name dslotds))
 
-(defgeneric compute-slot-accessor-info (slotd type gf))
+(def!generic compute-slot-accessor-info (slotd type gf))
 
-(defgeneric find-method-combination (generic-function type options))
+(def!generic find-method-combination (generic-function type options))
 
-(defgeneric invalid-qualifiers (generic-function combin method))
+(def!generic invalid-qualifiers (generic-function combin method))
 
-(defgeneric (setf slot-accessor-function) (function slotd type))
+(def!generic (setf slot-accessor-function) (function slotd type))
 
-(defgeneric (setf slot-accessor-std-p) (value slotd type))
+(def!generic (setf slot-accessor-std-p) (value slotd type))
 
-(defgeneric slot-boundp-using-class (class object slotd))
+(def!generic slot-boundp-using-class (class object slotd))
 
-(defgeneric slot-makunbound-using-class (class object slotd))
+(def!generic slot-makunbound-using-class (class object slotd))
 
-(defgeneric slot-unbound (class instance slot-name))
+(def!generic slot-unbound (class instance slot-name))
 
-(defgeneric slot-value-using-class (class object slotd))
+(def!generic slot-value-using-class (class object slotd))
 
-(defgeneric specializer-type-specifier
+(def!generic specializer-type-specifier
     (proto-generic-function proto-method specializer)
   (:documentation
    "Return a type specifier for SPECIALIZER, a non-parsed specializer
@@ -392,10 +392,10 @@ protocol. Interface subject to change."))
 
 ;;;; 4 arguments
 
-(defgeneric make-method-lambda
+(def!generic make-method-lambda
     (proto-generic-function proto-method lambda-expression environment))
 
-(defgeneric make-method-specializers-form
+(def!generic make-method-specializers-form
     (proto-generic-function proto-method specializer-names environment))
 
 ;;; MAKE-SPECIALIZER-FORM-USING-CLASS
@@ -427,7 +427,7 @@ protocol. Interface subject to change."))
 ;;; class and eql specializers and eventually reach an error signaling
 ;;; method for invalid specializers.
 
-(defgeneric make-specializer-form-using-class
+(def!generic make-specializer-form-using-class
     (proto-generic-function proto-method specializer-name environment)
   (:method-combination or)
   (:documentation
@@ -442,21 +442,21 @@ inspected.
 NOTE: This generic function is part of an SBCL-specific experimental
 protocol. Interface subject to change."))
 
-(defgeneric (setf slot-value-using-class) (new-value class object slotd))
+(def!generic (setf slot-value-using-class) (new-value class object slotd))
 
 ;;;; 5 arguments
 
-(defgeneric add-reader-method (class generic-function slot-name slot-documentation source-location))
+(def!generic add-reader-method (class generic-function slot-name slot-documentation source-location))
 
-(defgeneric add-writer-method (class generic-function slot-name slot-documentation source-location))
+(def!generic add-writer-method (class generic-function slot-name slot-documentation source-location))
 
-(defgeneric make-method-initargs-form
+(def!generic make-method-initargs-form
     (proto-generic-function proto-method lambda-expression lambda-list
      environment))
 
 ;;;; 6 arguments
 
-(defgeneric make-method-lambda-using-specializers
+(def!generic make-method-lambda-using-specializers
     (proto-generic-function proto-method qualifiers specializers
      method-lambda environment)
   (:documentation
@@ -481,17 +481,17 @@ protocol. Interface subject to change."))
 
 ;;;; optional arguments
 
-(defgeneric get-method (generic-function
+(def!generic get-method (generic-function
                         qualifiers
                         specializers
                         &optional errorp))
 
-(defgeneric find-method (generic-function
+(def!generic find-method (generic-function
                          qualifiers
                          specializers
                          &optional errorp))
 
-(defgeneric slot-missing (class
+(def!generic slot-missing (class
                           instance
                           slot-name
                           operation
@@ -501,46 +501,46 @@ protocol. Interface subject to change."))
 
 ;;; FIXME: make the declared &KEY arguments here agree with those that
 ;;; AMOP specifies.
-(defgeneric allocate-instance (class &rest initargs))
+(def!generic allocate-instance (class &rest initargs))
 
-(defgeneric ensure-class-using-class (class
+(def!generic ensure-class-using-class (class
                                       name
                                       &rest args
                                       &key &allow-other-keys))
 
-(defgeneric ensure-generic-function-using-class (generic-function
+(def!generic ensure-generic-function-using-class (generic-function
                                                  fun-name
                                                  &key &allow-other-keys))
 
-(defgeneric initialize-instance (instance &rest initargs &key &allow-other-keys))
+(def!generic initialize-instance (instance &rest initargs &key &allow-other-keys))
 
-(defgeneric make-instance (class &rest initargs &key &allow-other-keys))
+(def!generic make-instance (class &rest initargs &key &allow-other-keys))
 
-(defgeneric change-class (instance new-class-name &rest initargs &key &allow-other-keys))
+(def!generic change-class (instance new-class-name &rest initargs &key &allow-other-keys))
 
-(defgeneric no-applicable-method (generic-function &rest args))
+(def!generic no-applicable-method (generic-function &rest args))
 
-(defgeneric no-next-method (generic-function method &rest args))
+(def!generic no-next-method (generic-function method &rest args))
 
-(defgeneric no-primary-method (generic-function &rest args))
+(def!generic no-primary-method (generic-function &rest args))
 
-(defgeneric reader-method-class (class direct-slot &rest initargs))
+(def!generic reader-method-class (class direct-slot &rest initargs))
 
-(defgeneric reinitialize-instance (instance &rest initargs &key &allow-other-keys))
+(def!generic reinitialize-instance (instance &rest initargs &key &allow-other-keys))
 
-(defgeneric shared-initialize (instance slot-names &rest initargs
+(def!generic shared-initialize (instance slot-names &rest initargs
                                &key &allow-other-keys))
 
-(defgeneric update-dependent (metaobject dependent &rest initargs))
+(def!generic update-dependent (metaobject dependent &rest initargs))
 
-(defgeneric update-instance-for-different-class (previous
+(def!generic update-instance-for-different-class (previous
                                                  current
                                                  &rest initargs))
 
-(defgeneric update-instance-for-redefined-class (instance
+(def!generic update-instance-for-redefined-class (instance
                                                  added-slots
                                                  discarded-slots
                                                  property-list
                                                  &rest initargs))
 
-(defgeneric writer-method-class (class direct-slot &rest initargs))
+(def!generic writer-method-class (class direct-slot &rest initargs))

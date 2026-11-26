@@ -100,7 +100,7 @@ distinct from the global value. Can also be SETF."
               (and (char= (schar string 0) #\N)
                    (char= (schar string 1) #\I)
                    (char= (schar string 2) #\L)))))
-     #.(symbol-hash 'nil)) ; utilize the host's function
+     #.(symbol-name-hash 'nil)) ; utilize the host's function
     (t
      ;; Flip the bits so that a symbol hashes differently from its print name,
      ;; and extract the lesser of 32 or N-POSITIVE-FIXNUM-BITS significant bits.

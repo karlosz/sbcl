@@ -72,9 +72,8 @@ bootstrapping.
                     ensure-generic-function-using-class
                     add-method remove-method))
 
-(sb-xc:defmacro defgeneric (&whole form fun-name lambda-list &body options)
+(sb-xc:defmacro defgeneric (fun-name lambda-list &body options)
   (declare (type list lambda-list))
-  (!definition (:generic-function form)
   (check-designator fun-name 'defgeneric #'legal-fun-name-p "function name")
   (with-current-source-form (lambda-list)
     (check-gf-lambda-list lambda-list))
@@ -164,7 +163,7 @@ bootstrapping.
          ,@(when methods
              `((set-initial-methods (list ,@(mapcar #'expand-method-definition methods))
                                     (fdefinition ',fun-name))))
-         (fdefinition ',fun-name))))))
+         (fdefinition ',fun-name)))))
 
 (defun set-initial-methods (methods gf)
   (sb-thread::with-recursive-system-lock ((gf-lock gf))
@@ -309,8 +308,7 @@ bootstrapping.
 ;;; and we don't do much other than to make the function known to be defined,
 ;;; which means that checking of callers' arglists can only occur after called
 ;;; methods are actually loaded.
-(sb-xc:defmacro defmethod (&whole form name &rest args)
-  (!definition (:method form)
+(sb-xc:defmacro defmethod (name &rest args)
   (check-designator name 'defmethod #'legal-fun-name-p "function name")
   (multiple-value-bind (qualifiers lambda-list body)
       (parse-defmethod args)
@@ -348,7 +346,7 @@ bootstrapping.
        (eval-when (:load-toplevel)
          (%defmethod-expander ,name ,qualifiers ,lambda-list ,body))
        (eval-when (:execute)
-         (%defmethod-expander ,name ,qualifiers ,lambda-list ,body))))))
+         (%defmethod-expander ,name ,qualifiers ,lambda-list ,body)))))
 
 (define-source-context defmethod (name &rest stuff)
   (let ((arg-pos (position-if #'listp stuff)))
@@ -2001,7 +1999,7 @@ bootstrapping.
 ;;; class and deal with it as appropriate.  In fact we probably don't
 ;;; need it anyway because we only use this for METHOD-SPECIALIZERS on
 ;;; the standard reader method for METHOD-SPECIALIZERS.  Probably.
-(!host-only
+#+sb-xc-host
 (dolist (s '(specializers %function))
   (aver (= (symbol-value (intern (format nil "+SM-~A-INDEX+" s)))
            (!bootstrap-slot-index 'standard-reader-method s)
@@ -2009,7 +2007,7 @@ bootstrapping.
            (!bootstrap-slot-index 'global-reader-method s)
            (!bootstrap-slot-index 'global-writer-method s)
            (!bootstrap-slot-index 'global-boundp-method s)
-           (!bootstrap-slot-index 'global-makunbound-method s)))))
+           (!bootstrap-slot-index 'global-makunbound-method s))))
 
 (defun safe-method-specializers (method)
   (if (member (class-of method) **standard-method-classes** :test #'eq)

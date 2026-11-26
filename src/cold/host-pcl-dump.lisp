@@ -21,7 +21,6 @@
 (defparameter *host-pcl-genesis-tables*
   '(sb-pcl::*eql-specializer-table* sb-pcl::*class-eq-specializer-methods*
     sb-pcl::**method-combinations**))
-(defvar *cold-compile-count* 0)   ; COLD-COMPILE's, below
 ;;; Call one of host PCL's functions, by the target's name
 (defmacro host-call (name &rest args)
   `(funcall ',name ,@args))
@@ -572,39 +571,15 @@
     (format t "~&; host PCL dumped: ~D objects, ~D generic functions~%"
             (hash-table-count *host-pcl-memo*) (length gfs))
     (format t "~&; host PCL: ~D functions cross-compiled (SB-XC:COMPILE), ~D of them written~%"
-            *cold-compile-count* *host-pcl-cold-compiled-written*)))
+            (length sb-pcl::*host-pcl-cold-compiles*) *host-pcl-cold-compiled-written*)))
 
 ;;;; SB-XC:COMPILE
 
-;;; SB-XC:COMPILE of host PCL (*HOST-PCL-COLD-COMPILE*): cross-compile FORM,
-;;; a lambda, and load it into the cold core now.  FOP-TEMPLATE-CLOSURE tells
-;;; genesis of its function, named (TEMPLATE :COLD-COMPILE n), and, if FORM is
-;;; a generator (LAMBDA parameters ... #'(LAMBDA ...)), of the function of
-;;; its closures, (TEMPLATE :COLD-COMPILE n :CLOSURE).  The fasl only carries
-;;; the code from the dumper to genesis's loader.
-(defun cold-compile (form)
-  (let* ((n (incf *cold-compile-count*))
-         (name `(sb-pcl::template :cold-compile ,n))
-         (parameters nil)
-         (closure-name nil))
-    (when (eq (car form) 'named-lambda)      ; its name is NAME
-      (setq form `(lambda ,@(cddr form))))
-    (aver (eq (car form) 'lambda))
-    (setq parameters (second form))
-    (let* ((body (cddr form))
-           (inner (car (last body)))
-           ;; the closure it makes: (FUNCTION (LAMBDA ...)), or (LAMBDA ...) or
-           ;; (NAMED-LAMBDA ...) (fngen.lisp's)
-           (lambda (if (typep inner '(cons (eql function) (cons cons null))) (second inner) inner)))
-      (when (typep lambda '(cons (member lambda named-lambda)))
-        (progn
-          (setq closure-name (append name '(:closure)))
-          (setq form `(lambda ,(second form)
-                        ,@(butlast body)
-                        (function (named-lambda ,closure-name
-                                    ,@(if (eq (car lambda) 'lambda)
-                                          (cdr lambda)
-                                          (cddr lambda)))))))))
+;;; What host PCL compiled (SB-PCL::*HOST-PCL-COLD-COMPILES*), cross-compiled
+;;; into the cold core: FOP-TEMPLATE-CLOSURE tells genesis of each function,
+;;; by the name host PCL gave it.  The fasl only carries the code from the
+;;; dumper to genesis's loader.
+(defun cold-compile (name form)
     (let ((fasl (sb-cold::stem-object-path "output/cold-compile" nil :target-compile)))
       (ensure-directories-exist fasl)
       (funcall sb-cold::*in-target-compilation-mode-fn*
@@ -633,6 +608,8 @@
                      (sb-c::close-fasl-output output abort-p))
                    (when abort-p (error "host PCL: failed to cross-compile ~S" form)))))
       (let ((*cold-load-functions-only* t))
-        (cold-load fasl nil nil)))
-    (values name closure-name parameters)))
+        (cold-load fasl nil nil))))
+(defun cold-compile-host-pcl ()
+  (loop for (name . form) in (reverse sb-pcl::*host-pcl-cold-compiles*)
+        do (cold-compile name form)))
 

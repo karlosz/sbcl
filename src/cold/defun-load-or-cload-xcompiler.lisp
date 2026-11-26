@@ -107,9 +107,6 @@
 ;;; cross-compiler, which the host's PCL (src/cold/host-pcl.lisp) defines
 ;;; again
 (defvar *pcl-host-definitions* (make-hash-table :test 'eq))
-;;; while loading a file of PCL proper (:PCL-PROPER), whose definitions are
-;;; nothing (pre-warm.lisp)
-(defvar sb-pcl::*loading-pcl-proper* nil)
 (defun pcl-symbol-defined-p (s)
   (or (fboundp s) (fboundp `(setf ,s)) (boundp s)))
 (defun call-noting-pcl-host-definitions (fn)
@@ -179,11 +176,10 @@
          (unless (find :not-host flags)
            ;; Enforce naming convention: target-* files are not for make-host-1
            (assert (not (search "code/target-" stem)))
-           (let ((sb-pcl::*loading-pcl-proper* (find :pcl-proper flags)))
-             (if (find :host-definitions flags)
-                 (call-noting-pcl-host-definitions
-                  (lambda () (funcall load-or-cload-stem stem flags)))
-                 (funcall load-or-cload-stem stem flags)))
+           (if (find :host-definitions flags)
+               (call-noting-pcl-host-definitions
+                (lambda () (funcall load-or-cload-stem stem flags)))
+               (funcall load-or-cload-stem stem flags))
            (when (member :sb-show sb-xc:*features*)
              (funcall 'warn-when-cl-snapshot-diff *cl-snapshot*))))))
 
