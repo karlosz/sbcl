@@ -87,24 +87,28 @@
                           (t 0))))
               (if (= mod 3)
                   (context-register context rm)
-                  (+ (cond ((and (= mod 0) (= rm 5))
-                            ;; absolute, no base
-                            0)
-                           ((and has-sib (= mod 0)
-                                 (= (ldb (byte 3 0) sib) 5))
-                            0)
-                           (t (context-register
-                               context
-                               (if has-sib
-                                   (ldb (byte 3 0) sib)
-                                   rm))))
-                     (if (and has-sib
-                              (/= (ldb (byte 3 3) sib) 4))
-                         (ash (context-register
-                               context (ldb (byte 3 3) sib))
-                              (ldb (byte 2 6) sib))
-                         0)
-                     disp)))))
+                  ;; A memory operand holds the raw entry point.
+                  (sap-ref-word
+                   (int-sap
+                    (+ (cond ((and (= mod 0) (= rm 5))
+                              ;; absolute, no base
+                              0)
+                             ((and has-sib (= mod 0)
+                                   (= (ldb (byte 3 0) sib) 5))
+                              0)
+                             (t (context-register
+                                 context
+                                 (if has-sib
+                                     (ldb (byte 3 0) sib)
+                                     rm))))
+                       (if (and has-sib
+                                (/= (ldb (byte 3 3) sib) 4))
+                           (ash (context-register
+                                 context (ldb (byte 3 3) sib))
+                                (ldb (byte 2 6) sib))
+                           0)
+                       disp))
+                   0)))))
           (t
            (error "Unrecognized call instruction: ~x, pc: ~x"
                   opcode pc)))))))
