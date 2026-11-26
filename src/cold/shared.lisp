@@ -105,6 +105,9 @@
 ;;; :COMPILE-TOPLEVEL forms, not to produce an output file.
 ;;; This is part of the implementation of parallelized make-host-2.
 (defvar *compile-for-effect-only* nil)
+;;; Whether loading the cross-compiler builds host PCL: not for genesis
+;;; (make-genesis-2.lisp), which loads what make-host-2 built
+(defvar *build-host-pcl* t)
 
 ;;; prefixes for filename stems when cross-compiling. These are quite arbitrary
 ;;; (although of course they shouldn't collide with anything we don't want to
@@ -462,11 +465,6 @@
     ;; SBCL. ("not target code" -- but still presumably host code,
     ;; used to support the cross-compilation process)
     :not-target
-    ;; meaning: This file's classes, generic functions and methods are
-    ;; made by PCL on the host (src/cold/host-pcl.lisp), the methods'
-    ;; bodies being the target's only; the rest of it is ordinary target
-    ;; code.
-    :pcl-target-only
     ;; meaning: This file's definitions are the cross-compiler's (PCL's
     ;; macros and the functions they call as they expand), but the rest
     ;; of it is target code: when building the cross-compiler, its
@@ -869,9 +867,7 @@
                           system-tlab-p)
                (loop
                 (with-simple-restart (recompile "Recompile")
-                  (return (compile-stem stem flags :target-compile)))))))
-    (when (fboundp 'host-pcl-after-target-compile)
-      (funcall 'host-pcl-after-target-compile stem flags))))
+                  (return (compile-stem stem flags :target-compile)))))))))
 (compile 'target-compile-stem)
 
 ;;; (This function is not used by the build process, but is intended

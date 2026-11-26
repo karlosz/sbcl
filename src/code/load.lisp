@@ -1173,13 +1173,10 @@
 (define-fop 74 :not-host (fop-fset (name fn) nil)
   (declare (ignore name fn)))
 
-;;; Like FOP-FSET, but for method definitions.
-(define-fop 75 :not-host (fop-mset (name qualifiers specializer fn) nil)
-  (declare (ignore name qualifiers specializer fn)))
-
-;;; When cross-compiling: the function of a TEMPLATE-LAMBDA (see PCL's
-;;; low.lisp), and the variables in its closure's slots, for genesis.
-(define-fop 85 :not-host (fop-template-closure (name vars fn) nil)
+;;; When cross-compiling: a function that host PCL's objects name, a
+;;; method's or a TEMPLATE-LAMBDA's (see PCL's low.lisp), and the variables
+;;; in its closure's slots, for genesis.
+(define-fop 85 :not-host (fop-pcl-function (name vars fn) nil)
   (declare (ignore name vars fn)))
 ;;; A closure of such a function, over the values of N of the template's
 ;;; variables (on the stack after TEMPLATE and NAME, each after its
@@ -1187,6 +1184,13 @@
 (define-fop 86 :not-host (fop-closure ((:operands n) template name))
   (declare (ignore template name))
   (bug "FOP-CLOSURE (of ~D values) is only for genesis" n))
+;;; What host PCL built (src/cold/host-pcl-dump.lisp): an operation of
+;;; genesis's on the N values on the stack, the first its name, whose value
+;;; is pushed, or (FOP-HOST-PCL-EFFECT) not.
+(define-fop 87 :not-host (fop-host-pcl ((:operands n)))
+  (bug "FOP-HOST-PCL (of ~D values) is only for genesis" n))
+(define-fop 91 :not-host (fop-host-pcl-effect ((:operands n)) nil)
+  (bug "FOP-HOST-PCL-EFFECT (of ~D values) is only for genesis" n))
 
 ;;; Modify a slot of the code boxed constants.
 (define-fop 20 (fop-alter-code ((:operands index) code value) nil)

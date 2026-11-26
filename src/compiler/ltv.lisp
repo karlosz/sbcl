@@ -14,7 +14,7 @@
 (defknown %load-time-value (t) t (flushable movable))
 
 ;;; True while host PCL's code is cross-compiled for genesis to write
-;;; (COLD-COMPILE in src/cold/host-pcl-dump.lisp): it can run before cold
+;;; (src/pcl/host-pcl-objects.lisp): it can run before cold
 ;;; init's toplevel forms, which compute load-time values, so a global's
 ;;; load-time value is read when needed (LAYOUT-OF's
 ;;; **PRIMITIVE-OBJECT-LAYOUTS**, which genesis fills in).

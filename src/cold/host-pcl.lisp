@@ -22,9 +22,6 @@
 
 (in-package "SB-PCL")
 
-;;; genesis's (FOP-MSET), and what INSTALL-HOST-PCL-OPERATORS defines
-(declaim (ftype function host-real-load-defmethod))
-
 ;;; Non-PCL target functions that PCL's macro expanders call.
 (unless (fboundp 'sb-int:interned-symbol-p)
   (defun sb-int:interned-symbol-p (x) (and (symbolp x) (cl:symbol-package x) t)))
@@ -41,12 +38,12 @@
 
 ;;;; Proxies (their structures are the cross-compiler's: cross-pcl.lisp)
 
-;;; On, generic functions called on the host are dispatched by the host's CLOS
-;;; (host-pcl-dispatch.lisp); their functions are for the target only.
-(defvar *host-dispatch-routing* nil)
+;;; Once host PCL is ready, generic functions called on the host are
+;;; dispatched by the host's CLOS (host-pcl-dispatch.lisp); their functions
+;;; are for the target only.
 (defun host-make-funcallable (record)
   (let ((closure (lambda (&rest args)
-                   (apply (or (and *host-dispatch-routing* (host-fin-p record)
+                   (apply (or (and *host-pcl-ready* (host-fin-p record)
                                    (dispatch-route record))
                               (host-funcallable-function record)
                               (error "host PCL: funcallable object without a function"))
@@ -270,9 +267,7 @@
         (fdefinition 'pcl-compile) #'host-pcl-compile
         (fdefinition '(setf slot-value)) #'host-set-slot-value
         (fdefinition 'class-has-a-forward-referenced-superclass-p)
-        #'host-class-has-a-forward-referenced-superclass-p
-        (fdefinition 'host-real-load-defmethod) #'load-defmethod
-        (fdefinition 'load-defmethod) #'host-load-defmethod))
+        #'host-class-has-a-forward-referenced-superclass-p))
 
 ;;;; Target operators that the host lacks
 
@@ -410,45 +405,10 @@
                           (make-host-recipe '!built-in-class-prototype name))))
                 *built-in-classes*)))
 
-;;; boot.lisp's: the methods that host PCL makes, of which genesis gives those
-;;; of the cross-compiled methods their plists (FIX-HOST-PCL-METHOD-PLISTS)
-(defvar *host-pcl-methods* nil)
-(defun host-load-defmethod (&rest args)
-  (let ((method (apply #'host-real-load-defmethod args)))
-    (push method *host-pcl-methods*)
-    method))
-;;; The plists of the cross-compiled methods, which the cross-compiler noted
-;;; (METHOD-INFO): methods built on the host get these, as they go
-;;; with the cross-compiled functions genesis gives them.  The host walks their bodies as host code
-;;; (HOST-WALK-FORM), which tells nothing of their slot accesses: their
-;;; :SLOT-NAME-LISTS, of which the method's pv table is made.
-(defun fix-host-pcl-method-plists (&aux (method-info (make-hash-table :test 'equal)))
-  (dolist (record (method-info)) ; (the last of a name's)
-    (setf (gethash (first record) method-info) record))
-  (dolist (method *host-pcl-methods*)
-    (let* ((mf (!bootstrap-get-slot 'standard-method method '%function))
-           (ff (and (%method-function-p mf) (%method-function-fast-function mf)))
-           (name (and ff (gethash ff *host-fun-names*)))
-           (info (and (typep name '(cons (eql fast-method)))
-                      (gethash name method-info))))
-      (when info
-        (let* ((plist (copy-list (host-pcl-canonical (getf (fifth info) 'plist))))
-               (snl (getf plist :slot-name-lists)))
-          (!bootstrap-set-slot 'standard-method method 'plist
-                               (if snl
-                                   (list* :pv-table (intern-pv-table :slot-name-lists snl) plist)
-                                   plist)))))))
 
-
-(defun host-pcl-target-only-stems ()
-  (let ((stems nil))
-    (sb-cold::do-stems-and-flags (stem flags 2)
-      (when (member :pcl-target-only flags)
-        (push stem stems)))
-    (nreverse stems)))
-
-;;; The classes of the files whose methods' bodies are the target's only
-(defvar *target-only-class-names* nil)
+;;; The classes that host PCL defines as the cross-compiler compiles them
+;;; (HOST-PCL-DEFINE)
+(defvar *compile-time-class-names* nil)
 
 ;;; These (cache.lisp's etc., before boot.lisp defines DEFMETHOD) are the
 ;;; target's: they are cold methods, which warm load installs
@@ -520,83 +480,73 @@
     (setf (cl:macro-function name) (lambda (form env) (funcall expander form env)))))
 ;;; ... while host PCL runs PCL's DEFMETHODs, DEFGENERICs and
 ;;; DEFINE-METHOD-COMBINATIONs: on the host otherwise they are host code's,
-;;; or queue PCL proper's (cross-early.lisp)
-(defun call-with-host-pcl-clos-macros (fun &aux (*host-pcl-evaluating* t))
+;;; or queue PCL proper's (cross-early.lisp).
+;;; FUNCTION's call as host PCL, not the cross-compiler (!CROSS-COMPILING-P),
+;;; whenever host PCL runs: what the host compiles of it warns as host code,
+;;; not as the file's being cross-compiled, and the code host PCL makes has
+;;; its own gensyms (SB-XC:GENSYM)
+(defun call-as-host-pcl (function &aux (*host-pcl-evaluating* t))
   (let* ((names '(sb-xc:defmethod sb-xc:defgeneric sb-xc:define-method-combination))
          (saved (mapcar #'macro-function names)))
     (mapc #'host-pcl-clos-macro names)
-    (unwind-protect (funcall fun)
+    (unwind-protect
+         (handler-bind ((warning #'muffle-warning))
+           (cl:with-compilation-unit (:override t) ; (the host's)
+             (let ((sb-xc:*features* (remove :sb-xc sb-xc:*features*)))
+               (funcall function))))
       (loop for name in names for f in saved
             do (setf (macro-function name) f)))))
-;;; SB-XC:GENSYM's symbols are all named alike (cross-misc.lisp), but genesis
-;;; tells the variables that the closures of SB-XC:COMPILE's code close over
-;;; by their names (FOP-TEMPLATE-CLOSURE): while host PCL makes code they are
-;;; numbered, by a count of its own.
-(defvar *host-gensym-count* 0)
-(defun call-with-host-gensyms (fun)
-  (let ((xc-gensym (fdefinition 'sb-xc:gensym)))
-    (setf (fdefinition 'sb-xc:gensym)
-          (lambda (&optional (thing "G"))
-            (make-symbol (format nil "~A~D" thing (incf *host-gensym-count*)))))
-    (unwind-protect (funcall fun)
-      (setf (fdefinition 'sb-xc:gensym) xc-gensym))))
 ;;; The variables of SB-PCL bound before host PCL boots (class-init.lisp),
 ;;; but for those of the cross-compiler's copy of PCL's files, which are host
 ;;; PCL's: genesis dumps those of the others that hold PCL objects
 (defvar *host-pcl-variables-before*) ; (symbol . value)
 (defun host-pcl-variables ()
   (let (l)
-    (dolist (package '("SB-PCL") l)
-      (do-symbols (s package)
-        (when (and (boundp s) (not (gethash s sb-cold::*pcl-host-definitions*)))
-          (push (cons s (symbol-value s)) l))))))
+    (do-symbols (s "SB-PCL" l)
+      (when (and (boundp s) (not (gethash s sb-cold::*pcl-host-definitions*)))
+        (push (cons s (symbol-value s)) l)))))
 ;;; PCL proper's classes, generic functions and methods, as the cross-compiler
 ;;; is built (fixup.lisp, once PCL proper has defined them).  What the host
 ;;; compiles of them warns as host code: their methods' bodies are the
 ;;; cross-compiler's.
 (defun host-pcl-build-proper ()
-  (handler-bind ((warning #'muffle-warning))
-    (cl:with-compilation-unit (:override t) ; (the host's)
-      (host-pcl-build-proper-1))))
-(defun host-pcl-build-proper-1 ()
-  (call-with-host-gensyms
-   (lambda (&aux ;; the cross-compiler's, as make-host-2 sets it, which PCL's
-                 ;; code consults (REAL-ADD-METHOD ...)
-                 (sb-c::*policy*
-                  (sb-c::make-policy (loop for i below sb-c::n-policy-primary-qualities
-                                           sum (ash #b01 (* i 2))))))
-     (dolist (ecd (reverse *!early-class-definitions*)) ; (in defs.lisp's order)
-       (note-dispatch-form
-        :class
-        `(defclass ,(ecd-class-name ecd) ,(ecd-superclass-names ecd)
-           ,(loop for slot in (ecd-canonical-slots ecd)
-                  collect `(,(getf slot :name)
-                            ,@(loop for reader in (getf slot :readers) append `(:reader ,reader))
-                            ,@(loop for writer in (getf slot :writers) append `(:writer ,writer)))))))
-     (register-ecd-functions)
-     ;; what loading PCL proper's files recorded
-     (take-pass-2-forms)
-     (setq sb-cold::*host-pcl-record* nil)
-     (install-host-pcl-operators)
-     (call-with-host-pcl-clos-macros #'run-pass-2-proper)
-     (make-structure-classes-so-far))))
+  (call-as-host-pcl #'host-pcl-build-proper-1))
+(defun host-pcl-build-proper-1
+    (&aux ;; the cross-compiler's, as make-host-2 sets it, which PCL's
+          ;; code consults (REAL-ADD-METHOD ...)
+          (sb-c::*policy*
+           (sb-c::make-policy (loop for i below sb-c::n-policy-primary-qualities
+                                    sum (ash #b01 (* i 2))))))
+  (dolist (ecd (reverse *!early-class-definitions*)) ; (in defs.lisp's order)
+    (note-dispatch-form
+     :class
+     `(defclass ,(ecd-class-name ecd) ,(ecd-superclass-names ecd)
+        ,(loop for slot in (ecd-canonical-slots ecd)
+               collect `(,(getf slot :name)
+                         ,@(loop for reader in (getf slot :readers) append `(:reader ,reader))
+                         ,@(loop for writer in (getf slot :writers) append `(:writer ,writer)))))))
+  (register-ecd-functions)
+  ;; what loading PCL proper's files recorded
+  (take-pass-2-forms)
+  (setq sb-cold::*host-pcl-record* nil)
+  (install-host-pcl-operators)
+  (pass-2-definitions t)
+  (make-structure-classes nil))
 
-;;; The rest of PCL's bootstrap, in genesis, which writes it out
+;;; The rest of PCL's bootstrap, as make-host-2 ends (make-host-2.lisp)
 (defun host-pcl-build ()
-  (call-with-host-gensyms #'host-pcl-build-1))
+  (call-as-host-pcl #'host-pcl-build-1))
 (defun host-pcl-build-1 ()
   (let ((before *host-pcl-variables-before*))
-    (fix-host-pcl-method-plists)
-    (call-with-host-pcl-clos-macros #'run-pass-2)
+    (run-pass-2)
     ;; Dump the globals that hold PCL objects.  The rest (pure data, and the
     ;; host's own caches and compiled functions) the target computes itself.
-    (dolist (package '("SB-PCL"))
-     (do-symbols (s package)
-      (when (and (member (cl:symbol-package s) (list (find-package "SB-PCL")))
+    (do-symbols (s "SB-PCL")
+      (when (and (eq (cl:symbol-package s) (find-package "SB-PCL"))
                  (boundp s) (not (constantp s))
                  (not (assoc s before))
                  (host-pcl-dumped-global-p (symbol-value s)))
-        (pushnew s *host-pcl-globals*))))
+        (pushnew s *host-pcl-globals*)))
     (format t "~&; host PCL: ~D classes, ~D wrappers, ~D globals, ~D compiles~%"
             (length (host-pcl-classes)) (hash-table-count *host-wrappers*)
             (length *host-pcl-globals*) *host-pcl-compile-count*)))

@@ -224,39 +224,41 @@
 
 ;;; functions, macros, and special forms
 
-(flet ((maybe-function-documentation (name)
-         (cond
-           ((not (legal-fun-name-p name))
-            nil)
-           ((random-documentation name 'function))
-           ;; Nothing under the name, check the function object.
-           ((fboundp name)
-            (fun-doc (cond
-                       ((and (symbolp name) (special-operator-p name))
-                        (fdefinition name))
-                       ((and (symbolp name) (macro-function name)))
-                       ((fdefinition name)
-                        (sb-ext:unencapsulated-function name))))))))
+;;; (Not a local function of the methods: their DEFMETHODs are top level
+;;; forms, so that host PCL makes them, src/cold/host-pcl-dispatch.lisp.)
+(defun maybe-function-documentation (name)
+  (cond
+    ((not (legal-fun-name-p name))
+     nil)
+    ((random-documentation name 'function))
+    ;; Nothing under the name, check the function object.
+    ((fboundp name)
+     (fun-doc (cond
+                ((and (symbolp name) (special-operator-p name))
+                 (fdefinition name))
+                ((and (symbolp name) (macro-function name)))
+                ((fdefinition name)
+                 (sb-ext:unencapsulated-function name)))))))
 
-  (defmethod documentation ((x function) (doc-type (eql 't)))
-    (fun-doc x))
+(defmethod documentation ((x function) (doc-type (eql 't)))
+  (fun-doc x))
 
-  (defmethod documentation ((x function) (doc-type (eql 'function)))
-    (fun-doc x))
+(defmethod documentation ((x function) (doc-type (eql 'function)))
+  (fun-doc x))
 
-  (defmethod documentation ((x list) (doc-type (eql 'compiler-macro)))
-    (awhen (compiler-macro-function x)
-      (documentation it t)))
+(defmethod documentation ((x list) (doc-type (eql 'compiler-macro)))
+  (awhen (compiler-macro-function x)
+    (documentation it t)))
 
-  (defmethod documentation ((x list) (doc-type (eql 'function)))
-    (maybe-function-documentation x))
+(defmethod documentation ((x list) (doc-type (eql 'function)))
+  (maybe-function-documentation x))
 
-  (defmethod documentation ((x symbol) (doc-type (eql 'function)))
-    (maybe-function-documentation x))
+(defmethod documentation ((x symbol) (doc-type (eql 'function)))
+  (maybe-function-documentation x))
 
-  (defmethod documentation ((x symbol) (doc-type (eql 'compiler-macro)))
-    (awhen (compiler-macro-function x)
-      (documentation it t))))
+(defmethod documentation ((x symbol) (doc-type (eql 'compiler-macro)))
+  (awhen (compiler-macro-function x)
+    (documentation it t)))
 
 (defmethod (setf documentation) (new-value (x function) (doc-type (eql 't)))
   (setf (fun-doc x) new-value))

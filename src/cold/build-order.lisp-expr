@@ -604,10 +604,12 @@
  ("src/pcl/defs" :host-definitions)
  ("src/pcl/wrapper" :host-definitions)
  ;; PCL on the host, over the cross-compiler's copy of PCL's files, which
- ;; boots its meta-braid (class-init.lisp) and which genesis has build the
- ;; rest of the class hierarchy (src/cold/genesis-2.lisp)
+ ;; boots its meta-braid (class-init.lisp), builds the class hierarchy
+ ;; (fixup.lisp, and make-host-2.lisp's end), and writes it for genesis
+ ;; (src/cold/host-pcl-dump.lisp)
  ("src/cold/host-pcl" :not-target)
  ("src/cold/host-pcl-dispatch" :not-target)
+ ("src/cold/host-pcl-dump" :not-target) ; (genesis's half is genesis.lisp's)
  ("src/pcl/class-init" :host-definitions)
 
  ("src/code/cold-init" :not-host) ; needs (SETF EXTERN-ALIEN) macroexpansion
@@ -651,13 +653,16 @@
  ("src/pcl/defcombin" :host-definitions)
  ("src/pcl/fixup" :host-definitions)
  ;; definitions the rest of the system calls from the start
- ("src/pcl/call-next-method" :not-host :pcl-target-only)
- ("src/pcl/env" :not-host :pcl-target-only)
- ("src/pcl/documentation" :not-host :pcl-target-only)
- ("src/pcl/print-object" :not-host :pcl-target-only)
- ("src/pcl/gray-streams-class" :not-host :pcl-target-only)
- ("src/pcl/gray-streams" :not-host :pcl-target-only)
- ("src/pcl/sequence" :not-host :pcl-target-only))
+ ("src/pcl/call-next-method" :not-host)
+ ("src/pcl/env" :not-host)
+ ("src/pcl/documentation" :not-host)
+ ("src/pcl/print-object" :not-host)
+ ("src/pcl/gray-streams-class" :not-host)
+ ("src/pcl/gray-streams" :not-host)
+ ("src/pcl/sequence" :not-host)
+ ;; what host PCL built, which genesis writes (src/cold/host-pcl-dump.lisp):
+ ;; the last of the cold files
+ ("src/pcl/host-pcl-objects" :not-host))
 
 ;;; make-target-2 build steps
 (("src/code/room" ; for MAP-ALLOCATED-OBJECTS

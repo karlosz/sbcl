@@ -139,7 +139,7 @@
 ;;; actually create classes, we can't switch over.  So we refrain
 ;;; from installing the DEFSTRUCT-HOOK until there are no more
 ;;; defstruct forms to execute within PCL itself.
-(!after-pcl-bootstrap (pushnew 'ensure-deffoo-class sb-kernel::*define-condition-hooks*))
+;;; (!HOOK-PCL-INTO-SYSTEM, fixup.lisp)
 
 (define-load-time-global *simple-stream-root-classoid* :unknown)
 

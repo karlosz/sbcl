@@ -359,6 +359,8 @@
       ;; The cross-compiler wants to dump CTYPE instances as leaves,
       ;; but CLASSOIDs are excluded since they have a MAKE-LOAD-FORM method.
       #+sb-xc-host (cl:typep obj '(and ctype (not classoid)))
+      ;; ... and its constants that it dumps by a function of its own
+      #+sb-xc-host (deferred-dump-p obj)
       (eq obj sb-lockless:+tail+)))
 
 ;;; Grovel over CONSTANT checking for any sub-parts that need to be

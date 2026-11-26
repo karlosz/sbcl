@@ -3233,32 +3233,32 @@ table itself."
 
 ;;; Return a list of keyword args and values to use for MAKE-HASH-TABLE
 ;;; when reconstructing HASH-TABLE.
-(flet ((%hash-table-ctor (hash-table &aux (test (hash-table-test hash-table)))
-         (when (or (not (logtest (hash-table-flags hash-table) hash-table-userfun-flag))
-                   ;; If it has a named test function - it wasn't a lambda expression -
-                   ;; and the table's hash-function is identical to the hash function
-                   ;; dictated by *USER-HASH-TABLE-TESTS* for that test, we're OK.
-                   ;; And it's not worth the risk of trying to reverse-engineer the hash
-                   ;; function if all we have is a name.
-                   (and test (eq (third (assoc test *user-hash-table-tests*))
-                                 (hash-table-hash-fun hash-table))))
-           `(make-hash-table
-             ,@(loop for (key accessor default)
-                     in
-                     (load-time-value
-                      `((:test ,#'hash-table-test eql)
-                        (:size ,#'hash-table-size ,+min-hash-table-size+)
-                        (:rehash-size ,#'hash-table-rehash-size ,default-rehash-size)
-                        (:rehash-threshold ,#'hash-table-rehash-threshold 1.0)
-                        (:synchronized ,#'hash-table-synchronized-p nil)
-                        (:weakness ,#'hash-table-weakness nil)))
-                     for value = (funcall accessor hash-table)
-                     unless (eql value default)
-                     collect key
-                     and
-                     collect (if (self-evaluating-p value)
-                                 value
-                                 `',value))))))
+(defun %hash-table-ctor (hash-table &aux (test (hash-table-test hash-table)))
+  (when (or (not (logtest (hash-table-flags hash-table) hash-table-userfun-flag))
+            ;; If it has a named test function - it wasn't a lambda expression -
+            ;; and the table's hash-function is identical to the hash function
+            ;; dictated by *USER-HASH-TABLE-TESTS* for that test, we're OK.
+            ;; And it's not worth the risk of trying to reverse-engineer the hash
+            ;; function if all we have is a name.
+            (and test (eq (third (assoc test *user-hash-table-tests*))
+                          (hash-table-hash-fun hash-table))))
+    `(make-hash-table
+      ,@(loop for (key accessor default)
+              in
+              (load-time-value
+               `((:test ,#'hash-table-test eql)
+                 (:size ,#'hash-table-size ,+min-hash-table-size+)
+                 (:rehash-size ,#'hash-table-rehash-size ,default-rehash-size)
+                 (:rehash-threshold ,#'hash-table-rehash-threshold 1.0)
+                 (:synchronized ,#'hash-table-synchronized-p nil)
+                 (:weakness ,#'hash-table-weakness nil)))
+              for value = (funcall accessor hash-table)
+              unless (eql value default)
+              collect key
+              and
+              collect (if (self-evaluating-p value)
+                          value
+                          `',value)))))
 
 (defmethod print-object ((hash-table hash-table) stream)
   (declare (type stream stream))
@@ -3293,7 +3293,6 @@ table itself."
                 (unless (zerop (hash-table-count hash-table))
                   `(%stuff-hash-table ,hash-table ',(%hash-table-alist hash-table))))
         (error "~S is not externalizable" hash-table))))
-)
 
 ;;; This assignment has to occur some time after the defstruct.
 ;;; We don't call EQUALP on hash-table, so as late as possible is fine.

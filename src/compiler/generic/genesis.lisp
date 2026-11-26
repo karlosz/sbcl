@@ -720,11 +720,6 @@
 (declaim (special *!cold-toplevels*))
 ;;; names of layouts of PCL classes, written by src/cold/host-pcl-dump.lisp
 (defvar *cold-pcl-wrapper-names* nil)
-;;; (name qualifier* specializers) of a method -> its cold function
-(defvar *cold-pcl-method-functions* (make-hash-table :test 'equal))
-;;; True while loading code for its functions only (COLD-COMPILE in
-;;; src/cold/host-pcl-dump.lisp): its toplevel forms are not cold init's.
-(defvar *cold-load-functions-only* nil)
 ;;; True while loading a PCL file
 (defvar *cold-loading-pcl-file* nil)
 ;;; The load-time values, fixups and named constants of PCL's code and of
@@ -735,7 +730,7 @@
 ;;; they are.
 (defvar *pcl-cold-toplevels*)
 (defun cold-push-load-time (toplevel)
-  (if (or *cold-load-functions-only* *cold-loading-pcl-file*)
+  (if *cold-loading-pcl-file*
       (push toplevel *pcl-cold-toplevels*)
       (push toplevel *!cold-toplevels*)))
 
@@ -1225,8 +1220,7 @@ core and return a descriptor to it."
 ;;; Compute bits to store into the HASH slot (as opposed to what the hash is
 ;;; logically) of a symbol. For x86-64 this means XORing with some of NIL's bits
 ;;; - just the ones that overlap the hash - so that linkage index reads as 0.
-(defun symhash-bits (name descriptor package-name)
-  (declare (ignore descriptor))
+(defun symhash-bits (name package-name)
   ;; "why not just call sb-c::symbol-name-hash?" you ask? because: no symbol.
   (let* ((name-hash (sb-c::calc-symbol-name-hash name (length name)))
          ;; of the name, not the address, so that the cross-compiler knows
@@ -1262,7 +1256,7 @@ core and return a descriptor to it."
              (pkg-id (if cold-package
                          (descriptor-fixnum (read-slot cold-package :id))
                          sb-impl::+package-id-none+)))
-        (write-wordindexed/raw symbol sb-vm:symbol-hash-slot (symhash-bits name symbol package-name))
+        (write-wordindexed/raw symbol sb-vm:symbol-hash-slot (symhash-bits name package-name))
         (write-wordindexed symbol sb-vm:symbol-value-slot *unbound-marker*)
         (write-wordindexed symbol sb-vm:symbol-info-slot *nil-descriptor*)
         (set-symbol-pkgid symbol pkg-id)
@@ -1930,7 +1924,7 @@ core and return a descriptor to it."
         (write-wordindexed nil-val 1 nil-val)
         ;; Assign HASH if and only if NIL's hash is address-insensitive
         #-64-bit ; 64-bit depends on address
-        (write-wordindexed/raw des (+ 1 sb-vm:symbol-hash-slot) (symhash-bits "NIL" des "COMMON-LISP"))
+        (write-wordindexed/raw des (+ 1 sb-vm:symbol-hash-slot) (symhash-bits "NIL" "COMMON-LISP"))
         (write-wordindexed des (+ 1 sb-vm:symbol-info-slot) initial-info)
         (set-symbol-pkgid des +package-id-lisp+ 1)
         (write-wordindexed des (+ 1 sb-vm:symbol-name-slot) name)))
@@ -2259,7 +2253,9 @@ core and return a descriptor to it."
      (ash sb-vm:simple-fun-insts-offset sb-vm:word-shift)))
 
 (defun cold-fset (name function)
-  (aver (= (descriptor-widetag function) sb-vm:simple-fun-widetag))
+  ;; a simple-fun, or one of host PCL's generic functions and closures
+  ;; (src/cold/host-pcl-dump.lisp), which the closure trampoline calls
+  (aver (= (descriptor-lowtag function) sb-vm:fun-pointer-lowtag))
   #-linkage-space
   (let ((fdefn (ensure-cold-fdefn
                 ;; (SETF f) was descriptorized when dumped, symbols were not.
@@ -2272,11 +2268,14 @@ core and return a descriptor to it."
     (write-wordindexed fdefn sb-vm:fdefn-fun-slot function)
     (write-wordindexed/raw
      fdefn sb-vm:fdefn-raw-addr-slot
-     (or #+(or sparc arm riscv loongarch64) ; raw addr is the function descriptor
-         (descriptor-bits function)
-         ;; For all others raw addr is the starting address
-         (+ (descriptor-base-address function)
-            (ash sb-vm:simple-fun-insts-offset sb-vm:word-shift))))
+     (cond ((/= (descriptor-widetag function) sb-vm:simple-fun-widetag)
+            (lookup-assembler-reference 'sb-vm::closure-tramp))
+           (t
+            (or #+(or sparc arm riscv loongarch64) ; raw addr is the function descriptor
+                (descriptor-bits function)
+                ;; For all others raw addr is the starting address
+                (+ (descriptor-base-address function)
+                   (ash sb-vm:simple-fun-insts-offset sb-vm:word-shift))))))
     fdefn)
   #+linkage-space
   (let ((fname (if (symbolp name) (cold-intern name) (ensure-cold-fdefn name))))
@@ -2759,13 +2758,10 @@ Legal values for OFFSET are -4, -8, -12, ..."
                              *load-time-value-counter*
                              *load-time-value-counter*)))
 
-;;; Called once the object files are loaded
-(defvar *cold-load-finish-hook* nil)
 (define-cold-fop (fop-funcall-for-effect (n))
-  (cond ((/= n 0)
-         (error "Can't FOP-FUNCALL-FOR-EFFECT random stuff in cold load"))
-        (*cold-load-functions-only* (pop-stack))
-        (t (push (pop-stack) *!cold-toplevels*))))
+  (if (= n 0)
+      (push (pop-stack) *!cold-toplevels*)
+      (error "Can't FOP-FUNCALL-FOR-EFFECT random stuff in cold load")))
 
 (define-cold-fop (fop-named-constant-set (index))
   (let ((toplevel (cold-list (cold-intern :named-constant)
@@ -2803,34 +2799,27 @@ Legal values for OFFSET are -4, -8, -12, ..."
 
 ;;;; cold fops for loading code objects and functions
 
-;;; The names DEFUNed in PCL's files, whose toplevel forms run in cold init
-;;; (see host-pcl-dump.lisp)
-(defvar *cold-pcl-defun-names* (make-hash-table :test 'equal))
 (define-cold-fop (fop-fset)
   (let ((fn (pop-stack))
         (name (pop-stack)))
-    (when *cold-loading-pcl-file*
-      (setf (gethash (if (descriptor-p name) (host-object-from-core name) name)
-                     *cold-pcl-defun-names*)
-            t))
     (cold-fset name fn)))
 
-;;; The functions of PCL's TEMPLATE-LAMBDAs, by name, and the variables in
-;;; their closures' slots (:NONE if not a closure): host-pcl-dump.lisp makes
-;;; closures of them.
-(defvar *cold-template-funs* (make-hash-table :test 'equal))
-(define-cold-fop (fop-template-closure)
+;;; The functions that host PCL's objects name, a method's (FAST-METHOD
+;;; name qualifier* specializers) and a TEMPLATE-LAMBDA's (TEMPLATE ...), by
+;;; name, and the variables in their closures' slots (:NONE if not a
+;;; closure): host-pcl-dump.lisp makes closures of the templates'.
+(defvar *cold-pcl-functions* (make-hash-table :test 'equal))
+(define-cold-fop (fop-pcl-function)
   (let* ((fn (pop-stack))
          ;; (uninterned symbols, SB-XC:COMPILE's, by their names)
          (vars (host-object-from-core (pop-stack) nil))
          (name (cold-pcl-method-key (host-object-from-core (pop-stack)))))
-    (aver (not (gethash name *cold-template-funs*)))
-    (setf (gethash name *cold-template-funs*) (cons fn vars))))
+    (setf (gethash name *cold-pcl-functions*) (cons fn vars))))
 
-;;; TEMPLATE's function and its closures' variables, as above
-(defun cold-template-fun (template)
-  (or (gethash template *cold-template-funs*)
-      (error "host PCL: no function for ~S" template)))
+;;; NAME's function and its closures' variables, as above
+(defun cold-pcl-function (name)
+  (or (gethash name *cold-pcl-functions*)
+      (error "host PCL: no function for ~S" name)))
 ;;; The value of the template's variable VAR in VALUES, an alist of its
 ;;; variables (a gensym came back from the fasl as another of its name)
 (defun template-var-value (template var values)
@@ -2870,7 +2859,7 @@ Legal values for OFFSET are -4, -8, -12, ..."
          (name (pop-stack))
          (template (cold-pcl-method-key (host-object-from-core (pop-stack))))
          (name (if (or (null name) (and (descriptor-p name) (cold-null name))) nil name)))
-    (destructuring-bind (fun . vars) (cold-template-fun template)
+    (destructuring-bind (fun . vars) (cold-pcl-function template)
       (if (eq vars :none)                 ; it closes over nothing
           fun
           (let ((closure (allocate-template-closure fun (length vars) name)))
@@ -2882,28 +2871,197 @@ Legal values for OFFSET are -4, -8, -12, ..."
             closure)))))
 
 ;;; A method's name and specializers, or a template's name, as host PCL has
-;;; them: PCL's definitions of CL's names (*PCL-SHADOWS*, *PCL-CLASS-SHADOWS*)
-;;; are SB-XC's (HOST-PCL-CANONICAL-SYMBOL)
-(defun cold-pcl-method-key (x)
-  (cond ((and (symbolp x) (eq (cl:symbol-package x) (find-package "CL"))
-              (or (member (symbol-name x) sb-cold::*pcl-shadows* :test #'string=)
-                  (member (symbol-name x) sb-cold::*pcl-class-shadows* :test #'string=)))
-         (find-symbol (symbol-name x) "SB-XC"))
-        ((consp x) (cons (cold-pcl-method-key (car x)) (cold-pcl-method-key (cdr x))))
-        (t x)))
+;;; them: PCL's definitions of CL's names are SB-XC's
+(defun cold-pcl-method-key (x) (sb-pcl::host-pcl-canonical x))
 
-(define-cold-fop (fop-mset)
-  (let ((fn (pop-stack))
-        (specializers (pop-stack))
-        (qualifiers (pop-stack))
-        (name (pop-stack)))
-    ;; every cross-compiled method's: the methods host PCL makes get these
-    ;; functions
-    (setf (gethash (cold-pcl-method-key (append (list (host-object-from-core name))
-                                                (host-object-from-core qualifiers)
-                                                (list (host-object-from-core specializers))))
-                   *cold-pcl-method-functions*)
-          fn)))
+;;; Host PCL's objects (src/cold/host-pcl-dump.lisp)
+;;; (Its arguments are the core's objects: the cold loader leaves some
+;;; constants the host's.)
+(defmacro pop-host-pcl-op (n)
+  `(let ((args nil))
+     (dotimes (i ,n) (push (pop-stack) args))
+     (funcall 'host-pcl-op (car args)
+              (mapcar (lambda (x) (if (descriptor-p x) x (host-constant-to-core x))) (cdr args)))))
+(define-cold-fop (fop-host-pcl (n)) (pop-host-pcl-op n))
+(define-cold-fop (fop-host-pcl-effect (n)) (pop-host-pcl-op n) (values))
+
+;;; The operations of host PCL's writer (src/cold/host-pcl-dump.lisp)
+
+(defvar *host-pcl-written*)      ; cold objects the operations fill in
+(defvar *vacuous-slot-table*)
+
+;;; A name as host PCL has it: PCL's definitions of CL's names
+;;; (*PCL-SHADOWS*, *PCL-CLASS-SHADOWS*) are SB-XC's
+(defun host-pcl-name (descriptor) (cold-pcl-method-key (host-object-from-core descriptor)))
+
+(defun host-pcl-cold-classoid (name) ; the target's classoid, if genesis made it
+  (let ((cell (gethash name *classoid-cells*)))
+    (when cell
+      (let ((classoid (read-slot cell :classoid)))
+        (unless (cold-null classoid) classoid)))))
+
+;;; A funcallable instance of N-INFO info slots, its function and layout
+;;; to be written
+(defun allocate-host-pcl-fin (n-info)
+  (let* ((n-words (+ sb-vm:funcallable-instance-info-offset n-info))
+         (fin (allocate-object *dynamic* n-words sb-vm:fun-pointer-lowtag)))
+    (write-header-word fin (sb-vm::compute-object-header
+                            n-words sb-vm:funcallable-instance-widetag))
+    (write-wordindexed/raw fin sb-vm:funcallable-instance-trampoline-slot
+                           (lookup-assembler-reference 'sb-vm::funcallable-instance-tramp))
+    fin))
+
+(defun host-pcl-op (op args)
+  (setq op (if (descriptor-p op) (host-object-from-core op) op))
+  (flet ((fresh (x) (setf (gethash (descriptor-bits x) *host-pcl-written*) t) x)
+         (fresh-p (x) (gethash (descriptor-bits x) *host-pcl-written*))
+         (data (x) (host-object-from-core x)))
+    (ecase op
+      (:method-function
+       (destructuring-bind (fun . vars) (cold-pcl-function (host-pcl-name (first args)))
+         (aver (eq vars :none))
+         fun))
+      (:global-function
+       (let* ((name (first args))
+              (f (if (= (descriptor-lowtag name) sb-vm:list-pointer-lowtag)
+                     (cold-fdefn-fun (ensure-cold-fdefn name))
+                     (cold-symbol-function (host-pcl-name name) nil))))
+         (unless (and f (not (cold-null f)))
+           (error "host PCL: ~S is not defined in the cold core" (data name)))
+         f))
+      (:mutex (write-slots (allocate-struct-of-type 'sb-thread:mutex) :name (first args)))
+      (:%method-function
+       (let ((mf (allocate-host-pcl-fin 1)))
+         (write-wordindexed mf sb-vm::funcallable-instance-layout-slot
+                            (cold-layout-descriptor (gethash 'sb-pcl::%method-function *cold-layouts*)))
+         mf))
+      (:%method-function-fill
+       (destructuring-bind (mf function fast-function) args
+         (write-wordindexed mf sb-vm::funcallable-instance-function-slot function)
+         (write-wordindexed mf sb-vm:funcallable-instance-info-offset fast-function)))
+      (:fin
+       (let ((fin (allocate-host-pcl-fin 2)))
+         (write-wordindexed fin (1+ sb-vm:funcallable-instance-info-offset) (first args)) ; hash
+         fin))
+      (:fin-fill
+       (destructuring-bind (fin function layout slots) args
+         (write-wordindexed fin sb-vm::funcallable-instance-function-slot function)
+         (write-wordindexed fin sb-vm::funcallable-instance-layout-slot layout)
+         (write-wordindexed fin sb-vm:funcallable-instance-info-offset slots)))
+      ;; one of PCL's classes (a wrapper), or one of the cross-compiler's,
+      ;; which genesis may have already: unless built-in (a classoid genesis
+      ;; makes), only cold init could make it (a DEFSTRUCT's)
+      (:layout
+       (destructuring-bind (name pcl depthoid flags length bitmap current-p builtin-p &rest inherits)
+           args
+         (let* ((name (host-pcl-name name))
+                (pcl (not (cold-null pcl)))
+                (cold (gethash name *cold-layouts*)))
+           (cond ((and cold (not pcl)) (cold-layout-descriptor cold))
+                 ((and (not pcl) (cold-null builtin-p))
+                  (error "host PCL: genesis cannot write the layout of ~S" name))
+                 (t
+                  (let* ((flags (data flags))
+                         (layout (make-cold-layout
+                                  name (data depthoid) flags (data length) (data bitmap)
+                                  (vector-in-core inherits)
+                                  ;; layout IDs are for structure types
+                                  (logtest flags +structure-layout-flag+)
+                                  ;; class-init.lisp made the current one
+                                  (and (not (cold-null current-p)) cold))))
+                    (when pcl (pushnew name *cold-pcl-wrapper-names*))
+                    (fresh layout)))))))
+      (:layout-fill
+       (destructuring-bind (layout pcl classoid info table) args
+         (when (fresh-p layout)
+           (unless (cold-null pcl)
+             (write-slots layout :classoid classoid :%info info))
+           ;; its slot table: PCL's, or, as MAKE-LAYOUT's for a built-in
+           ;; classoid (which cold init's LOAD-LAYOUT finds made,
+           ;; *!INITIAL-LAYOUTS*), the empty one
+           (let ((index (+ sb-vm:instance-slots-offset
+                           (dsd-index-cached 'sb-kernel:layout 'sb-kernel::slot-table))))
+             (cond ((not (cold-null table)) (write-wordindexed layout index table))
+                   ((cold-null pcl)
+                    (write-wordindexed layout index
+                                       (if (boundp '*vacuous-slot-table*)
+                                           *vacuous-slot-table*
+                                           (setq *vacuous-slot-table*
+                                                 (host-constant-to-core '#(1 nil)))))))))))
+      ;; one of a target-only file's classes, as it is defined
+      ;; (SB-PCL::NOTE-CLASS-FOR-GENESIS): the cross-compiler's type of its
+      ;; name from here on, as host PCL had it, of which cold load makes
+      ;; the constants that mention it (VALUES-SPECIFIER-TYPE in FOP-FUNCALL)
+      (:declare-classoid
+       (let ((name (host-pcl-name (first args))))
+         (unless (sb-kernel:find-classoid name nil)
+           (setf (sb-kernel:classoid-cell-classoid (sb-kernel:find-classoid-cell name :create t))
+                 (sb-kernel:make-standard-classoid :name name)
+                 (sb-int:info :type :kind name) :instance))))
+      ;; one of PCL's, or of the cross-compiler's (a structure's, a
+      ;; condition's, a built-in class's), which CTYPE-TO-CORE files in its
+      ;; cell: the one there already, if genesis made it (of the cold load's
+      ;; types, the cross-compiler's classoid of its name)
+      (:classoid
+       (destructuring-bind (name type namep) args
+         (let ((name (host-pcl-name name)))
+           (or (and (not (cold-null namep)) (host-pcl-cold-classoid name))
+               (let ((result (fresh (allocate-struct-of-type (host-pcl-name type)))))
+                 (dolist (dsd (coerce (type-dd-slots-or-lose (host-pcl-name type)) 'list))
+                   (when (eq (dsd-raw-type dsd) t)
+                     (write-wordindexed result (+ sb-vm:instance-slots-offset (dsd-index dsd))
+                                        *nil-descriptor*)))
+                 (unless (cold-null namep)
+                   (write-slots (cold-find-classoid-cell name :create t) :classoid result))
+                 result)))))
+      ;; (its slots are FOP-STRUCTSETs')
+      (:classoid-fill
+       (destructuring-bind (classoid type name own) args
+         ;; a structure classoid's layout's classoid, which %DEFSTRUCT sets
+         ;; when its toplevel form runs: PCL's code may meet its instances
+         ;; before (TYPE-OF of a discriminating function's info, say)
+         (let ((cold (and (cold-null own) (gethash (host-pcl-name name) *cold-layouts*))))
+           (when (and cold (eq (host-pcl-name type) 'sb-kernel:structure-classoid))
+             (write-slots (cold-layout-descriptor cold) :classoid classoid)))))
+      (:xc-classoid-required
+       (destructuring-bind (name classoid) args
+         (declare (ignore classoid))
+         (unless (host-pcl-cold-classoid (host-pcl-name name))
+           (error "host PCL: genesis cannot write the classoid ~S" (host-pcl-name name)))))
+      (:classoid-cell-class
+       (destructuring-bind (name class) args
+         (write-slots (cold-find-classoid-cell (host-pcl-name name) :create t) :pcl-class class)))
+      ;; the slot table or slot mapper of a layout genesis made
+      (:layout-slot
+       (destructuring-bind (name slot value) args
+         (let ((cold (gethash (host-pcl-name name) *cold-layouts*)))
+           (unless cold (error "host PCL: genesis has no layout of ~S" (host-pcl-name name)))
+           (write-wordindexed (cold-layout-descriptor cold)
+                              (+ sb-vm:instance-slots-offset
+                                 (dsd-index-cached 'sb-kernel:layout (data slot)))
+                              value))))
+      (:subclassoids
+       (destructuring-bind (super &rest subs) args
+         (let ((written (loop for (sub) on subs by #'cddr collect sub)))
+           (write-slots super :subclasses
+                        (list-to-core
+                         (append
+                          (loop for (sub layout) on subs by #'cddr collect (cold-cons sub layout))
+                          ;; any other the cross-compiler's classoid has in the
+                          ;; core (its own of the meta-braid's, class-init.lisp,
+                          ;; are above)
+                          (let ((old (read-slot super :subclasses)))
+                            (loop until (cold-null old)
+                                  unless (member (cold-car (cold-car old)) written :test #'descriptor=)
+                                    collect (cold-car old)
+                                  do (setq old (cold-cdr old))))))))))
+      (:cold-set (cold-set (host-pcl-name (first args)) (second args)))
+      (:report
+       (destructuring-bind (objects gfs compiles written) (mapcar #'data args)
+         (format t "~&; host PCL dumped: ~D objects, ~D generic functions~%" objects gfs)
+         (format t "~&; host PCL: ~D functions cross-compiled (SB-XC:COMPILE), ~D of them written~%"
+                 compiles written))))))
+
 
 (define-cold-fop (fop-fdefn)
   (let ((name (pop-stack)))
@@ -4274,7 +4432,7 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
           ;; at this word because math is hard. Just zero the slot.
           (aref nil-slots 7) 0) ; available for use
     (setf (aref t-slots 0) (logior (ash +package-id-lisp+ 8) sb-vm:symbol-widetag)
-          (aref t-slots sb-vm:symbol-hash-slot) (symhash-bits "T" t-des "COMMON-LISP")
+          (aref t-slots sb-vm:symbol-hash-slot) (symhash-bits "T" "COMMON-LISP")
           (aref t-slots sb-vm:symbol-value-slot) (descriptor-bits t-des)
           (aref t-slots sb-vm:symbol-fdefn-slot) 0
           (aref t-slots sb-vm:symbol-info-slot) (descriptor-bits *t-symbol-info*)
@@ -4473,6 +4631,7 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
            (*cold-layout-by-addr* (make-hash-table :test 'eql)) ; addr -> cold-layout
            (*tls-index-to-symbol* nil)
            (*pcl-cold-toplevels* nil)
+           (*host-pcl-written* (make-hash-table :test 'eql)) ; (src/pcl/host-pcl-objects.lisp)
            (*!cold-toplevels* nil)
            *asm-routine-alist*
            *assembler-routines*
@@ -4533,14 +4692,11 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
           (cold-load file-name verbose (find file-name foptrace-file-names :test 'equal))))
 
       (sb-cold::check-no-new-cl-symbols)
-      ;; e.g. host PCL's build of the class hierarchy (src/cold/genesis-2.lisp),
-      ;; which may load what it compiles
-      (when *cold-load-finish-hook* (funcall *cold-load-finish-hook*))
       (fill-primitive-object-layouts)
 
       (when (and verbose core-file-name)
-        (format t "~&; SB-Loader: (~D~@{+~D~}) methods/other~%"
-                (hash-table-count *cold-pcl-method-functions*)
+        (format t "~&; SB-Loader: (~D~@{+~D~}) PCL functions/other~%"
+                (hash-table-count *cold-pcl-functions*)
                 (length *!cold-toplevels*)))
 
       (cold-set '*!cold-toplevels* (list-to-core (append (reverse *pcl-cold-toplevels*)
@@ -4549,8 +4705,6 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
 
       ;; Tidy up loose ends left by cold loading. ("Postpare from cold load?")
       (when core-file-name
-        ;; the class hierarchy that PCL built on the host
-        (when (fboundp 'host-pcl-dump) (funcall 'host-pcl-dump))
         (resolve-deferred-known-funs)
         (setq foreign-symbols (foreign-symbols-to-core))
         (finish-symbols)

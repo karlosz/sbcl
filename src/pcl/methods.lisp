@@ -1755,9 +1755,8 @@
                 (make-lambda-list llks nil required optional rest (keys))))
             (make-lambda-list llks nil required optional))))))
 
-;;; A method made from its fast method function FMF: host PCL makes those of
-;;; the files before boot.lisp and of files whose methods' bodies are the
-;;; target's only, from what genesis has of them (FOP-MSET).
+;;; A method made from its fast method function FMF: host PCL makes every
+;;; method so, of what the cross-compiler noted of its DEFMETHOD.
 (defun !install-cold-method (gf-name qualifiers specializers fmf lambda-list source-loc
                             &optional initargs)
   (let* ((nreq (nth-value 1 (analyze-lambda-list lambda-list)))

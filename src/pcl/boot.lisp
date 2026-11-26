@@ -421,6 +421,8 @@ bootstrapping.
              ((method-function-lambda initargs new-lambda-list)
               (make-method-lambda-using-specializers
                proto-gf proto-method qualifiers specializers method-lambda env))
+             #+sb-xc-host
+             (*defmethod-lambda-list* (or new-lambda-list unspecialized-lambda-list))
              (initargs-form
               (make-method-initargs-form
                proto-gf proto-method method-function-lambda initargs env))

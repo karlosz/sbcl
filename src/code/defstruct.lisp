@@ -2472,6 +2472,9 @@ or they must be declared locally notinline at each call site.~@:>"
 ;; Emulate variable-length structures for COMPILED-DEBUG-INFO.
 (defun %instance-length (instance)
   (declare (notinline layout-length))
+  ;; a standard instance: its layout and slot vector (src/code/cross-pcl.lisp)
+  (when (sb-pcl::host-instance-p instance)
+    (return-from %instance-length (1+ sb-vm:instance-data-start)))
   (let ((basic (layout-length (%instance-layout instance))))
     (if (sb-c::compiled-debug-info-p instance)
         (+ (1- basic)
@@ -2497,7 +2500,17 @@ or they must be declared locally notinline at each call site.~@:>"
         (aref (sb-c::compiled-debug-info-rest instance) (- index (1- (length map))))
         (funcall (aref map index) instance)))))
 
-(defun %raw-instance-ref/word (instance index) (%instance-ref instance index))
+;;; ... and the target's word of an untagged slot: a fixnum slot's (one the
+;;; layout's bitmap says is not a pointer) as the target's fixnum, a raw
+;;; slot's as it is
+(defun %raw-instance-ref/word (instance index)
+  (let ((value (%instance-ref instance index))
+        (dsd (find index (dd-slots (layout-%info (%instance-layout instance)))
+                   :key #'dsd-index)))
+    (cond ((not (integerp value)) value)
+          ((and dsd (eq (dsd-raw-type dsd) t))
+           (ldb (byte sb-vm:n-word-bits 0) (ash value sb-vm:n-fixnum-tag-bits)))
+          (t (ldb (byte sb-vm:n-word-bits 0) value)))))
 ) ; end PROGN
 
 (/show0 "code/defstruct.lisp end of file")

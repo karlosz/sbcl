@@ -760,13 +760,12 @@
 
 (defun make-method-initargs-form-internal1
     (initargs body req-args lmf-params restp)
-  ;; (what genesis and host PCL need of a cross-compiled method:
-  ;; *HOST-PCL-MAKING-METHODS*)
+  ;; (what host PCL needs of a cross-compiled method)
   #+sb-xc-host
-  (when (and (!cross-compiling-p) (boundp '*method-name*) *method-name*)
-    (sb-c::note-method-info `(fast-method ,@*method-name*)
-                            (copy-tree (car lmf-params)) (copy-tree initargs)
-                            *host-pcl-making-methods*))
+  (when (and (!cross-compiling-p) sb-kernel:*top-level-form-p*
+             (boundp '*method-name*) *method-name*)
+    (note-method-info `(fast-method ,@*method-name*)
+                            (copy-tree *defmethod-lambda-list*) (copy-tree initargs)))
   (let* (;; The lambda-list of the method, minus specifiers
          (lambda-list (car lmf-params))
          ;; Names of the parameters that will be in the outermost lambda-list

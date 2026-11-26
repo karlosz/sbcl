@@ -5,11 +5,16 @@
 ;;;; the host, made them.  What only the target can make (a recipe) is an
 ;;;; error: such objects are made when first needed instead (lazy tables,
 ;;;; prototypes).
+;;;;
+;;;; As host PCL's build ends, HOST-PCL-WRITE-OBJECTS walks what it built
+;;;; and writes it into the fasl of src/pcl/host-pcl-objects.lisp, as
+;;;; FOP-HOST-PCL operations; genesis carries them out as it loads the file
+;;;; (HOST-PCL-OP in genesis.lisp), once the object files are loaded, finding
+;;;; what it has made of them already (layouts, classoids, method functions,
+;;;; global functions) by name.
 
 (in-package "SB-FASL")
 
-(defvar *host-pcl-memo*)
-(defvar *host-pcl-pv-tables*)    ; the cold ones
 ;;; PCL's tables that its accessors make when first needed (DEFINE-LAZY-TABLE):
 ;;; NIL in the core, whatever host PCL put in them
 (defparameter *host-pcl-lazy-tables*
@@ -25,175 +30,72 @@
 (defmacro host-call (name &rest args)
   `(funcall ',name ,@args))
 
-(defun host-pcl-unbound-p (x) (eq x (sb-kernel::make-unbound-marker)))
 
 
-;;; The cross-compiled function of a method, by its name
-(defun host-pcl-cold-function (x)
-  (let ((key (gethash x sb-pcl::*early-method-function-keys*))
-        (name (gethash x sb-pcl::*host-fun-names*)))
-    (cond (key (gethash key *cold-pcl-method-functions*))
-          ((and (consp name) (eq (car name) 'sb-pcl::fast-method))
-           (or (gethash (cdr name) *cold-pcl-method-functions*)
-               (host-pcl-eql-method-function (cdr name)))))))
+;;;; The writer, as host PCL's build ends: HP-DUMP-OBJECT, by which the
+;;;; cross-compiler's dumper writes host PCL's objects as FOP-HOST-PCL
+;;;; operations (SB-C::*XC-DUMP-OBJECT*).  An object is
+;;;; made where the dumper first meets it, and in the fasl's table from then
+;;;; on, and filled in later (*HP-FILLS*), so its graph's cycles are table
+;;;; references; the dumper writes the rest (conses, vectors, constants,
+;;;; template closures, types) as it writes any.
 
-;;; ... of a method EQL-specialized: the host names its function by the
-;;; object, and the cross-compiler by the form (*STANDARD-METHOD-COMBINATION*)
-(defvar *host-pcl-eql-method-functions*)
-(defun host-pcl-eql-method-function (name) ; (gf-name qualifier* specializers)
-  (unless (boundp '*host-pcl-eql-method-functions*)
-    (setq *host-pcl-eql-method-functions* nil)
-    (maphash (lambda (key function)
-               (let ((specializers (car (last key))))
-                 (when (some (lambda (s) (typep s '(cons (eql eql)))) specializers)
-                   (push (cons (append (butlast key)
-                                       (list (mapcar (lambda (s)
-                                                       (if (typep s '(cons (eql eql)))
-                                                           `(eql ,(eval (sb-pcl::host-pcl-canonical (second s))))
-                                                           s))
-                                                     specializers)))
-                               function)
-                         *host-pcl-eql-method-functions*))))
-             *cold-pcl-method-functions*))
-  (let ((name (cons (car name) ; but the objects as they are
-                    (mapcar (lambda (x)
-                              (if (listp x)
-                                  (mapcar (lambda (s)
-                                            (if (typep s '(cons (eql eql))) s s))
-                                          x)
-                                  x))
-                            (cdr name)))))
-    (cdr (assoc name *host-pcl-eql-method-functions* :test #'equal))))
 
-;;; A closure of a TEMPLATE-LAMBDA (low.lisp): the cross-compiler recorded
-;;; which of the template's variables are in which of its closure's slots
-;;; (FOP-TEMPLATE-CLOSURE).
-(defvar *host-pcl-cold-compiled-written* 0)
-(defun host-pcl-template-closure (x)
-  (destructuring-bind (template . values) (gethash x sb-pcl::*host-templates*)
-    (when (eq (second template) :cold-compile) (incf *host-pcl-cold-compiled-written*))
-    (destructuring-bind (fun . vars) (cold-template-fun template)
-      (when (eq vars :none)             ; it closes over nothing
-        (return-from host-pcl-template-closure fun))
-      (let* ((name (gethash x sb-pcl::*host-fun-names*))
-             (closure (allocate-template-closure fun (length vars) name)))
-        (setf (gethash x *host-pcl-memo*) closure)
-        (loop for var in vars for i from 0
-              do (write-wordindexed closure (+ sb-vm:closure-info-offset i)
-                                    (host-pcl-slot-value (template-var-value template var values)
-                                                         closure :closure i)))
-        (when name
-          (set-template-closure-name closure (length vars) (host-pcl-to-core name)))
-        closure))))
-;;; for the dumper (DUMP-TEMPLATE-CLOSURE)
-(setq sb-c::*template-closure-of*
-      (lambda (x)
-        (destructuring-bind (template . values) (gethash x sb-pcl::*host-templates*)
-          (values template values (gethash x sb-pcl::*host-fun-names*)))))
+(defvar *hp-fasl*)                      ; the fasl-output
+(defvar *hp-written*)                   ; the objects made, for the report
+(defvar *hp-templates-written*)
+(defvar *hp-pv-tables*)                 ; the pv tables written, last first
+(defvar *hp-reset-copies*)              ; structures written for others
 
-(defun host-pcl-recipe-of (x)
-  (cond ((sb-pcl::host-recipe-p x) x)
-        ((gethash x sb-pcl::*host-templates*) nil)
-        ;; Layouts of structure and condition classoids that genesis has not
-        ;; made: their DEFSTRUCTs make them in cold init.  (Built-in ones
-        ;; genesis makes, below.)
-        ((and (typep x 'sb-kernel:layout)
-              (not (sb-pcl::host-wrapper-p x)) ; PCL's: written, below
-              (not (gethash (classoid-name (sb-kernel:layout-classoid x)) *cold-layouts*))
-              (not (typep (sb-kernel:layout-classoid x) 'sb-kernel:built-in-classoid)))
-         (sb-pcl::make-host-recipe 'sb-pcl::!classoid-layout
-                                   (classoid-name (sb-kernel:layout-classoid x))))
-        ;; ... and their classoids
-        ((and (typep x 'sb-kernel:classoid) (not (sb-pcl::host-own-classoid-p x))
-              (not (host-pcl-cold-classoid (classoid-name x)))
-              (not (typep x 'sb-kernel:built-in-classoid)))
-         (sb-pcl::make-host-recipe 'find-classoid (classoid-name x)))
-        ((sb-pcl::host-weak-pointer-p x)
-         (sb-pcl::make-host-recipe 'make-weak-pointer (sb-pcl::host-weak-pointer-value x)))
-        ;; a lazy table instead (DEFINE-LAZY-TABLE, SB-PCL::!GENESIS-TABLE)
-        ((hash-table-p x)
-         (sb-pcl::make-host-recipe 'make-hash-table :test (hash-table-test x)))
-        ((and (functionp x) (not (sb-pcl::host-funcallable-record x))
-              (not (host-pcl-cold-function x))
-              (not (host-pcl-global-function x)))
-         (error "host PCL: no target counterpart for ~S~@[ named ~S~]" x
-                (gethash x sb-pcl::*host-fun-names*)))))
-
-;;; A global function: the target's of the same name, which cold load defined
-(defun host-pcl-global-function (x)
-  (let ((name (nth-value 2 (function-lambda-expression x))))
-    (when (and (typep name '(or symbol (cons (eql setf) (cons symbol null))))
-               name (fboundp name) (eq (fdefinition name) x))
-      (let* ((name name)
-             (f (if (symbolp name)
-                    (cold-symbol-function name nil)
-                    (cold-fdefn-fun (ensure-cold-fdefn (host-pcl-to-core name))))))
-        (unless (and f (not (cold-null f)))
-          (error "host PCL: ~S is not defined in the cold core" name))
-        f))))
+;;; Dump the operation OP (a keyword) on ARGS; its value is pushed, if PUSHP
+(defun hp-op (pushp op &rest args)
+  (let ((file *hp-fasl*))
+    (sb-c::sub-dump-object op file)
+    (dolist (arg args) (sb-c::sub-dump-object arg file))
+    (if pushp
+        (sb-c::dump-fop 'fop-host-pcl file (1+ (length args)))
+        (sb-c::dump-fop 'fop-host-pcl-effect file (1+ (length args))))))
+;;; X, made by OP on ARGS: in the fasl's table from now on, and filled in
+;;; by FILL later; true, as HP-DUMP-OBJECT returns for what it dumps
+(defun hp-alloc (x fill op &rest args)
+  (apply #'hp-op t op args)
+  (sb-c::eq-save-object x *hp-fasl*)
+  (setf (gethash x *hp-written*) t)
+  (when fill (push fill sb-c::*xc-dump-fills*))
+  t)
+;;; ... as is a function genesis has already, by its name or key, which is
+;;; not counted.  (Names, which genesis looks things up by as it loads them,
+;;; are copies: not shared with what may be written yet, which the dumper
+;;; would patch in later.)
+(defun hp-found (x op name)
+  (hp-op t op (copy-tree name))
+  (sb-c::eq-save-object x *hp-fasl*)
+  t)
 
 ;;; Something genesis cannot write: an object only cold init could make
-(defun host-pcl-unwritable (x &optional (recipe (host-pcl-recipe-of x)))
+(defun host-pcl-unwritable (x &optional recipe)
   (let ((*print-level* 3) (*print-length* 5) (*print-circle* t))
     (error "host PCL: genesis cannot write ~S~@[ (class ~S)~] (~S)"
            (sb-pcl::dispatch-printable x)
            (and (sb-pcl::host-instance-p x)
                 (ignore-errors (host-call class-name x)))
            recipe)))
+;;; What the target makes itself, which no slot may hold
+(defun host-pcl-recipe-of (x)
+  (cond ((sb-pcl::host-recipe-p x) x)
+        ((sb-pcl::host-weak-pointer-p x)
+         (sb-pcl::make-host-recipe 'make-weak-pointer (sb-pcl::host-weak-pointer-value x)))
+        ;; a lazy table instead (DEFINE-LAZY-TABLE, SB-PCL::!GENESIS-TABLE)
+        ((hash-table-p x)
+         (sb-pcl::make-host-recipe 'make-hash-table :test (hash-table-test x)))))
 
-;;; Convert X for storing at INDEX of CONTAINER (of KIND)
-(defun host-pcl-slot-value (x container kind index)
-  (declare (ignore container kind index))
-  (if (host-pcl-recipe-of x)
-      (host-pcl-unwritable x)
-      (host-pcl-to-core x)))
 
-;;; The classoids of PCL's classes and layouts: its own, and the
-;;; cross-compiler's of the classes it made of them
-(defun host-pcl-classoids ()
-  (let ((seen (make-hash-table :test 'eq)) (result nil))
-    (flet ((note (classoid)
-             (unless (gethash classoid seen)
-               (setf (gethash classoid seen) t)
-               (push classoid result))))
-      (maphash (lambda (layout v) (declare (ignore v)) (note (sb-kernel:layout-classoid layout)))
-               sb-pcl::*host-pcl-layouts*)
-      (loop for (nil . class) in (sb-pcl::host-pcl-classes)
-            do (let ((wrapper (ignore-errors (host-call sb-pcl::class-wrapper class))))
-                 (when (typep wrapper 'sb-kernel:layout)
-                   (note (sb-kernel:layout-classoid wrapper))))))
-    (nreverse result)))
-
-(defun host-pcl-cold-classoid (name) ; the target's classoid, if genesis made it
-  (let ((cell (gethash name *classoid-cells*)))
-    (when cell
-      (let ((classoid (read-slot cell :classoid)))
-        (unless (cold-null classoid) classoid)))))
-
-(defun host-pcl-classoid-to-core (classoid)
-  ;; A classoid PCL made, or one of the cross-compiler's, whose copy the core
-  ;; may have already, or for a built-in classoid will have
-  ;; (!CLASSES-COLD-INIT finds it).  CTYPE-TO-CORE files it in its cell.
-  (let* ((own (sb-pcl::host-own-classoid-p classoid))
-         (pcl-class (sb-kernel:classoid-pcl-class classoid))
-         (result (or (and (not own) (host-pcl-cold-classoid (classoid-name classoid)))
-                     (progn
-                       (when own        ; the target's symbol
-                         (setf (classoid-name classoid)
-                               (classoid-name classoid)))
-                       (ctype-to-core classoid))))
-         (layout (sb-kernel:classoid-layout classoid)))
-    (when pcl-class (write-slots result :pcl-class (host-pcl-to-core pcl-class)))
-    (cond ((and own layout)
-           ;; the layout REGISTER-LAYOUT gave it on the host
-           (write-slots result :layout (host-pcl-to-core layout)))
-          ((typep classoid 'sb-kernel:structure-classoid)
-           ;; its layout's classoid, which %DEFSTRUCT sets when its toplevel
-           ;; form runs: PCL's code may meet its instances before (TYPE-OF of
-           ;; a discriminating function's info, say)
-           (let ((cold (gethash (classoid-name classoid) *cold-layouts*)))
-             (when cold (write-slots (cold-layout-descriptor cold) :classoid result)))))
-    result))
+;;; A global function's name: the target's of the same name
+(defun hp-global-function-name (x)
+  (let ((name (nth-value 2 (function-lambda-expression x))))
+    (when (and (typep name '(or symbol (cons (eql setf) (cons symbol null))))
+               name (fboundp name) (eq (fdefinition name) x))
+      name)))
 
 ;;; Slots that hold the host's state that the target makes again: method
 ;;; combinations' caches of effective method functions.  (Discriminating
@@ -220,12 +122,6 @@
       (let* ((name (and (< i (length names)) (svref names i)))
              (reset (assoc name *host-pcl-reset-slots*)))
         (cond (reset (setf (svref copy i) (cdr reset)))
-              ;; DEFGENERIC's :METHODs, as values of DEFMETHOD: during the
-              ;; braid that is the early ADD-METHOD's, a discriminating function
-              ((and (eq name 'sb-pcl::initial-methods) (listp (svref copy i)))
-               (setf (svref copy i) (remove-if-not #'sb-pcl::host-instance-p (svref copy i))))
-              ((eq name 'sb-pcl::%lock)
-               (setf (svref copy i) (make-host-pcl-mutex :name "GF lock")))
               ;; a built-in class's prototype, which CLASS-PROTOTYPE finds
               ;; in the target's *BUILT-IN-CLASSES*
               ;; (A structure or condition class's is NIL: CLASS-PROTOTYPE
@@ -238,199 +134,169 @@
                          (sb-kernel::make-unbound-marker)
                          nil))))))))
 
-;;; A mutex for the target: a new one, as MAKE-MUTEX makes (its raw words 0)
-(defstruct (host-pcl-mutex (:constructor make-host-pcl-mutex (&key name))) name)
-
-(defun host-pcl-to-core (x)
-  (cond
-    ((host-pcl-unbound-p x) (make-random-descriptor sb-vm:unbound-marker-widetag))
-    ((descriptor-p x) x)                ; the core's already (an early method's source)
-    ;; uninterned: each its own (genesis coalesces file constants by name,
-    ;; but FNGEN's variables are all named G)
-    ((and (symbolp x) (not (cl:symbol-package x)))
-     (or (gethash x *host-pcl-memo*)
-         (setf (gethash x *host-pcl-memo*)
-               (setf (gethash (list :host-pcl (hash-table-count *uninterned-symbol-table*))
-                              *uninterned-symbol-table*)
-                     (allocate-symbol sb-vm:symbol-size nil (symbol-name x))))))
-    ((symbolp x) (host-constant-to-core x))
-    ((or (numberp x) (characterp x) (stringp x)
-         ;; literal data of structure slots' defaults
-         (bit-vector-p x)
-         (and (typep x '(simple-array * (*))) (not (simple-vector-p x))))
-     (host-constant-to-core x))
-    ((and (functionp x) (host-pcl-cold-function x)))
-    ((gethash x *host-pcl-memo*))
-    ((gethash x sb-pcl::*host-templates*) (host-pcl-template-closure x))
-    ((and (functionp x) (not (sb-pcl::host-funcallable-record x)) (host-pcl-global-function x)))
+;;; X, if it is one of host PCL's objects (SB-C::*XC-DUMP-OBJECT*), made by
+;;; its operation: true, or false for what the dumper writes as it writes
+;;; any
+(defun hp-dump-object (x file)
+  (typecase x
     ;; a mutex the cross-compiler's MAKE-MUTEX made (cross-misc.lisp)
-    ((typep x '(cons (eql :mock-mutex)))
-     (let ((mutex (allocate-struct-of-type 'sb-thread:mutex)))
-       (setf (gethash x *host-pcl-memo*) mutex)
-       (write-slots mutex :name (host-pcl-to-core (second x)))))
-    ((consp x)
-     (let ((head (cold-cons *nil-descriptor* *nil-descriptor*)))
-       (setf (gethash x *host-pcl-memo*) head)
-       (write-wordindexed head sb-vm:cons-car-slot (host-pcl-slot-value (car x) head :car 0))
-       (write-wordindexed head sb-vm:cons-cdr-slot (host-pcl-slot-value (cdr x) head :cdr 0))
-       head))
-    ((simple-vector-p x)
-     (let ((v (allocate-vector sb-vm:simple-vector-widetag (length x) (length x))))
-       (setf (gethash x *host-pcl-memo*) v)
-       (dotimes (i (length x) v)
-         (write-wordindexed v (+ sb-vm:vector-data-offset i)
-                            (host-pcl-slot-value (svref x i) v :svref i)))))
-    ((sb-pcl::host-instance-p x)
-     ;; Memoize before converting anything reachable: the wrapper leads back
-     ;; through its class to the rest of the graph, possibly to X itself.
-     (let* ((placeholder (cold-layout-descriptor (gethash 't *cold-layouts*)))
-            (instance (allocate-struct (1+ sb-vm:instance-data-start) placeholder))
-            (wrapper (sb-pcl::host-instance-wrapper x))
-            (recipe (host-pcl-recipe-of wrapper)))
-       (setf (gethash x *host-pcl-memo*) instance)
-       (if recipe
-           (host-pcl-unwritable wrapper recipe)
-           (set-instance-layout instance (host-pcl-to-core wrapper)))
-       (write-wordindexed instance (+ sb-vm:instance-slots-offset sb-vm:instance-data-start)
-                          (host-pcl-to-core (host-pcl-dumped-slots
-                                             (sb-pcl::host-instance-wrapper x)
-                                             (sb-pcl::host-instance-slots x))))
-       instance))
-    ((typep (sb-pcl::host-funcallable-record x) 'sb-pcl::host-%method-function-record)
-     ;; a funcallable structure: the fast function is its one slot
-     (let* ((record (sb-pcl::host-funcallable-record x))
-            (n-words (+ sb-vm:funcallable-instance-info-offset 1))
-            (mf (allocate-object *dynamic* n-words sb-vm:fun-pointer-lowtag)))
-       (setf (gethash x *host-pcl-memo*) mf)
-       (write-header-word mf (sb-vm::compute-object-header
-                              n-words sb-vm:funcallable-instance-widetag))
-       (write-wordindexed/raw mf sb-vm:funcallable-instance-trampoline-slot
-                              (lookup-assembler-reference 'sb-vm::funcallable-instance-tramp))
-       (write-wordindexed mf sb-vm::funcallable-instance-function-slot
-                          (host-pcl-slot-value (sb-pcl::host-funcallable-function record)
-                                               mf :fin-function 0))
-       (write-wordindexed mf sb-vm::funcallable-instance-layout-slot
-                          (cold-layout-descriptor (gethash 'sb-pcl::%method-function *cold-layouts*)))
-       (write-wordindexed mf sb-vm:funcallable-instance-info-offset
-                          (host-pcl-slot-value
-                           (sb-pcl::host-%method-function-record-fast-function record)
-                           mf :fin-info 0))
-       mf))
-    ((sb-pcl::host-fin-record x)
-     (let* ((record (sb-pcl::host-fin-record x))
-            (n-words (+ sb-vm:funcallable-instance-info-offset 2))
-            (fin (allocate-object *dynamic* n-words sb-vm:fun-pointer-lowtag)))
-       (setf (gethash x *host-pcl-memo*) fin)
-       (write-header-word fin (sb-vm::compute-object-header
-                               n-words sb-vm:funcallable-instance-widetag))
-       (write-wordindexed/raw fin sb-vm:funcallable-instance-trampoline-slot
-                              (lookup-assembler-reference 'sb-vm::funcallable-instance-tramp))
-       (write-wordindexed fin sb-vm::funcallable-instance-function-slot
-                          ;; its discriminating function, as host PCL left it
-                          (host-pcl-slot-value (or (sb-pcl::host-funcallable-function record)
-                                                   (sb-pcl::host-fin-target-function record))
-                                               fin :fin-function 0))
-       (write-wordindexed fin sb-vm::funcallable-instance-layout-slot
-                          (host-pcl-to-core (sb-pcl::host-fin-wrapper record)))
-       (write-wordindexed fin sb-vm:funcallable-instance-info-offset
-                          (host-pcl-to-core (host-pcl-dumped-slots
-                                             (sb-pcl::host-fin-wrapper record)
-                                             (sb-pcl::host-fin-slots record))))
-       (write-wordindexed fin (1+ sb-vm:funcallable-instance-info-offset)
-                          (make-fixnum-descriptor (sb-pcl::host-fin-hash record)))
-       fin))
+    ((cons (eql :mock-mutex)) (hp-alloc x nil :mutex (second x)))
+    (function
+     ;; a method's function: the cross-compiled one, by its name
+     ;; (FOP-PCL-FUNCTION, SB-PCL::MAKE-METHODS)
+     (let ((key (gethash x sb-pcl::*early-method-function-keys*)))
+       (cond (key (hp-found x :method-function key))
+             ;; a closure of a TEMPLATE-LAMBDA (src/cold/host-pcl.lisp): genesis
+             ;; makes the target's closure of the template's function
+             ;; (FOP-CLOSURE), over the values of its variables
+             ((gethash x sb-pcl::*host-templates*)
+              (destructuring-bind (template . values) (gethash x sb-pcl::*host-templates*)
+                (when (eq (second template) :cold-compile) (incf *hp-templates-written*))
+                ;; (names, as HP-FOUND's)
+                (sb-c::sub-dump-object (copy-tree template) file)
+                (sb-c::sub-dump-object (copy-tree (gethash x sb-pcl::*host-fun-names*)) file)
+                (loop for (var . value) in values
+                      do (sb-c::sub-dump-object var file)
+                         (sb-c::sub-dump-object value file))
+                (sb-c::dump-fop 'fop-closure file (length values))
+                (sb-c::eq-save-object x file)
+                t))
+             ((sb-pcl::host-funcallable-record x) (hp-funcallable x))
+             ((hp-global-function-name x)
+              (hp-found x :global-function (hp-global-function-name x)))
+             (t (error "host PCL: no target counterpart for ~S~@[ named ~S~]" x
+                       (gethash x sb-pcl::*host-fun-names*))))))
+    ;; a standard instance, which the dumper writes as a structure (its
+    ;; layout and slot vector), with its slots as they are written (host
+    ;; PCL's build is over)
+    (sb-pcl::host-instance
+     (let ((slots (sb-pcl::host-instance-slots x)))
+       (replace slots (host-pcl-dumped-slots (sb-pcl::host-instance-wrapper x) slots)))
+     (setf (gethash x (sb-c::fasl-output-valid-structures file)) t
+           (gethash x *hp-written*) t)
+     (sb-c::dump-structure x file)
+     (sb-c::eq-save-object x file)
+     t)
     ;; a layout: one of PCL's classes (a wrapper, its slots as host PCL set
-    ;; them), or one of the cross-compiler's, which genesis may have already
-    ((typep x 'sb-kernel:layout)
-     (let* ((pcl (sb-pcl::host-wrapper-p x))
-            (name (sb-kernel::layout-classoid-name x))
-            (cold (gethash name *cold-layouts*)))
-       (if (and cold (not pcl))
-           (cold-layout-descriptor cold)
-           (let* ((flags (sb-kernel:layout-flags x))
-                  ;; as %UPDATE-LISP-CLASS-LAYOUT set them
-                  (inherits (host-pcl-to-core (sb-kernel:layout-inherits x)))
-                  (layout (make-cold-layout
-                           name (sb-kernel:layout-depthoid x) flags
-                           (sb-kernel:layout-length x) (sb-kernel:layout-bitmap x)
-                           inherits
-                           ;; layout IDs are for structure types
-                           (logtest flags +structure-layout-flag+)
-                           ;; A class's current layout is the one of its name
-                           ;; that compiled code refers to (TYPEP);
-                           ;; class-init.lisp made it.  (Looked up after
-                           ;; the inherits, which may lead to it.)
-                           (and pcl (eq x (sb-kernel:classoid-layout (sb-kernel:layout-classoid x)))
-                                (gethash name *cold-layouts*))))
-                  (index (dsd-index-cached 'sb-kernel:layout 'sb-kernel::slot-table))
-                  (table (sb-kernel::layout-slot-table x)))
-             (setf (gethash x *host-pcl-memo*) layout)
-             (when pcl
-               (pushnew name *cold-pcl-wrapper-names*)
-               (write-slots layout
-                            :classoid (host-pcl-classoid-to-core (sb-kernel:layout-classoid x))
-                            :%info (host-pcl-to-core (sb-kernel::layout-%info x))))
-             ;; its slot table: PCL's, or, as MAKE-LAYOUT's for a built-in
-             ;; classoid (which cold init's LOAD-LAYOUT finds made,
-             ;; *!INITIAL-LAYOUTS*), the empty one
-             (cond (table
-                    (write-wordindexed layout (+ sb-vm:instance-slots-offset index)
-                                       (host-pcl-slot-value table layout :instance index)))
-                   ((not pcl)
-                    (write-wordindexed layout (+ sb-vm:instance-slots-offset index)
-                                       (if (boundp '*vacuous-slot-table*)
-                                           *vacuous-slot-table*
-                                           (setq *vacuous-slot-table*
-                                                 (host-constant-to-core '#(1 nil)))))))
-             layout))))
-    ((typep x 'sb-kernel:classoid) (host-pcl-classoid-to-core x))
+    ;; them), or one of the cross-compiler's, which genesis may have
+    (sb-kernel:layout
+     (let ((pcl (sb-pcl::host-wrapper-p x)))
+       (apply #'hp-alloc x
+              (lambda ()
+                (hp-op nil :layout-fill x pcl
+                       (and pcl (sb-kernel:layout-classoid x))
+                       (and pcl (sb-kernel::layout-%info x))
+                       (sb-kernel::layout-slot-table x)))
+              :layout (sb-kernel::layout-classoid-name x) pcl
+              (sb-kernel:layout-depthoid x) (sb-kernel:layout-flags x)
+              (sb-kernel:layout-length x) (sb-kernel:layout-bitmap x)
+              ;; A class's current layout is the one of its name that
+              ;; compiled code refers to (TYPEP)
+              (and pcl (eq x (sb-kernel:classoid-layout (sb-kernel:layout-classoid x))))
+              (typep (sb-kernel:layout-classoid x) 'sb-kernel:built-in-classoid)
+              ;; (its ancestors', made first)
+              (coerce (sb-kernel:layout-inherits x) 'list))))
+    (sb-kernel:classoid (hp-dump-classoid x))
     ;; a method combination's generic functions (METHOD-COMBINATION-GF-SET)
-    ((sb-pcl::host-gf-hashset-p x)
-     (host-pcl-to-core (sb-pcl::host-gf-hashset-members x)))
-    ((host-pcl-mutex-p x)
-     (let ((mutex (allocate-struct-of-type 'sb-thread:mutex)))
-       (setf (gethash x *host-pcl-memo*) mutex)
-       (write-slots mutex :name (host-pcl-to-core (host-pcl-mutex-name x)))))
-    ((and (typep x 'structure-object) (get (type-of x) 'dd-proxy))
-     ;; a host instance of a target defstruct, e.g. SB-PCL::SLOT-INFO
-     (let ((result (allocate-struct-of-type (type-of x))))
-       (setf (gethash x *host-pcl-memo*) result)
-       (when (typep x 'sb-pcl::pv-table) ; the target interns it too
-         (push result *host-pcl-pv-tables*))
-       (loop for dsd across (type-dd-slots-or-lose (type-of x)) finally (return result) do
-         (let ((index (dsd-index dsd)))
-           (aver (eq (dsd-raw-type dsd) t))
-           (write-wordindexed result (+ sb-vm:instance-slots-offset index)
-                              (host-pcl-slot-value
-                               (if (member (dsd-accessor-name dsd) *host-pcl-reset-struct-slots*)
-                                   nil
-                                   (funcall (dsd-accessor-name dsd) x))
-                               result :instance index))))))
-    (t (error "host PCL: can't write ~S" x))))
+    (sb-pcl::host-gf-hashset
+     (sb-c::sub-dump-object (sb-pcl::host-gf-hashset-members x) file)
+     t)
+    ;; the dumper's
+    (sb-kernel:ctype nil)
+    ;; a host instance of a target defstruct (SB-PCL::SLOT-INFO ...), which
+    ;; the dumper writes (DUMP-STRUCTURE), with the slots that hold the
+    ;; host's state reset, but for what the target makes itself
+    (t
+     (let ((recipe (host-pcl-recipe-of x)))
+       (cond (recipe (host-pcl-unwritable x recipe))
+             ((and (typep x 'structure-object)
+                   (sb-kernel:find-defstruct-description (type-of x) nil))
+              (when (typep x 'sb-pcl::pv-table) ; the target interns it too
+                (push x *hp-pv-tables*))
+              (let ((dumped (if (gethash x *hp-reset-copies*) x (hp-reset-struct-slots x))))
+                (setf (gethash dumped (sb-c::fasl-output-valid-structures file)) t)
+                (unless (eq dumped x)
+                  (setf (gethash dumped *hp-reset-copies*) t)
+                  (sb-c::sub-dump-object dumped file)
+                  (setf (gethash x (sb-c::fasl-output-eq-table file))
+                        (gethash dumped (sb-c::fasl-output-eq-table file)))
+                  t))))))))
+;;; X, or a copy of it with its slots that hold the host's state reset
+(defun hp-reset-struct-slots (x)
+  (let ((resets (loop for dsd in (sb-kernel:dd-slots
+                                  (sb-kernel:find-defstruct-description (type-of x)))
+                      when (member (sb-kernel:dsd-accessor-name dsd) *host-pcl-reset-struct-slots*)
+                        collect (sb-kernel:dsd-accessor-name dsd))))
+    (if resets
+        (let ((copy (copy-structure x)))
+          (dolist (accessor resets copy)
+            (funcall (fdefinition `(setf ,accessor)) nil copy)))
+        x)))
+;;; a funcallable structure (%METHOD-FUNCTION: its fast function is its one
+;;; slot), or instance
+(defun hp-funcallable (x)
+  (let ((record (sb-pcl::host-funcallable-record x)))
+    (if (typep record 'sb-pcl::host-%method-function-record)
+        (hp-alloc x (lambda ()
+                      (hp-op nil :%method-function-fill x
+                             (sb-pcl::host-funcallable-function record)
+                             (sb-pcl::host-%method-function-record-fast-function record)))
+                  :%method-function)
+        (hp-alloc x (lambda ()
+                      (hp-op nil :fin-fill x
+                             ;; its discriminating function, as host PCL left it
+                             (or (sb-pcl::host-funcallable-function record)
+                                 (sb-pcl::host-fin-target-function record))
+                             (sb-pcl::host-fin-wrapper record)
+                             (host-pcl-dumped-slots (sb-pcl::host-fin-wrapper record)
+                                                    (sb-pcl::host-fin-slots record))))
+                  :fin (sb-pcl::host-fin-hash record)))))
+(defun hp-dump-classoid (x)
+  (let ((name (classoid-name x))
+        (own (sb-pcl::host-own-classoid-p x)))
+    (hp-alloc x (lambda ()
+                  ;; as CTYPE-TO-CORE writes it, with its class and, if
+                  ;; PCL's, the layout REGISTER-LAYOUT gave it on the host
+                  (let ((dd (sb-kernel:find-defstruct-description (type-of x))))
+                    (flet ((index (slot)
+                             (sb-kernel:dsd-index (find slot (sb-kernel:dd-slots dd)
+                                                        :key #'sb-kernel:dsd-name))))
+                      (sb-c::dump-structure-fills
+                       x *hp-fasl*
+                       (lambda (index)
+                         (cond ((= index (index 'sb-kernel::subclasses)) nil)
+                               ((= index (index 'sb-kernel::layout))
+                                (and own (sb-kernel:classoid-layout x)))
+                               ;; (patched in in cold init)
+                               ((and (typep x 'sb-kernel:built-in-classoid)
+                                     (= index (index 'sb-kernel::predicate)))
+                                (sb-kernel::make-unbound-marker))
+                               (t (sb-kernel:%instance-ref x index)))))))
+                  (hp-op nil :classoid-fill x (type-of x) name own))
+              :classoid name (type-of x) (eq (sb-kernel:find-classoid name nil) x))))
+
+;;; The classoids of PCL's classes and layouts: its own, and the
+;;; cross-compiler's of the classes it made of them
+(defun host-pcl-classoids ()
+  (let ((seen (make-hash-table :test 'eq)) (result nil))
+    (flet ((note (classoid)
+             (unless (gethash classoid seen)
+               (setf (gethash classoid seen) t)
+               (push classoid result))))
+      (maphash (lambda (layout v) (declare (ignore v)) (note (sb-kernel:layout-classoid layout)))
+               sb-pcl::*host-pcl-layouts*)
+      (loop for (nil . class) in (sb-pcl::host-pcl-classes)
+            do (let ((wrapper (ignore-errors (host-call sb-pcl::class-wrapper class))))
+                 (when (typep wrapper 'sb-kernel:layout)
+                   (note (sb-kernel:layout-classoid wrapper))))))
+    (nreverse result)))
 
 ;;; What PCL's toplevel forms installed on the host as global functions:
 ;;; generic functions by their names, and functions installed under other
-;;; names (LOAD-DEFCLASS is REAL-LOAD-DEFCLASS, ...).
-;;; Install FUNCTION, a host object, as the target's definition of NAME.  PCL
-;;; proper's toplevel forms must not DEFUN the name too, or cold init would
-;;; replace it.
-(defun host-pcl-fset (name function)
-  (let ((name name))
-    (if (gethash name *cold-pcl-defun-names*)
-        (error "host PCL: ~S is also DEFUNed by PCL's toplevel forms" name)
-        (let ((fdefn (ensure-cold-fdefn (if (symbolp name) (cold-intern name) (host-pcl-to-core name))))
-              (des (host-pcl-to-core function)))
-          #+linkage-space (error "host PCL: FSET ~S for linkage space" name)
-          (write-wordindexed fdefn sb-vm:fdefn-fun-slot des)
-          ;; as SET-FDEFN-FUN does
-          (write-wordindexed/raw
-           fdefn sb-vm:fdefn-raw-addr-slot
-           (if (= (descriptor-widetag des) sb-vm:simple-fun-widetag)
-               (+ (descriptor-base-address des) (ash sb-vm:simple-fun-insts-offset sb-vm:word-shift))
-               (lookup-assembler-reference 'sb-vm::closure-tramp)))))))
-
+;;; names (LOAD-DEFCLASS is REAL-LOAD-DEFCLASS, ...): (name . function)s,
+;;; and the generic functions
 (defun host-pcl-fdefinitions ()
-  (let ((gfs nil))
+  (let ((gfs nil) (fsets nil))
     (maphash (lambda (fin record)
                (when (and (sb-pcl::host-fin-p record) (host-call sb-pcl::generic-function-p fin))
                  (if (host-call sb-pcl::standard-generic-function-p fin)
@@ -439,8 +305,9 @@
                              (sb-xc:class-name (sb-xc:class-of fin))))
                  (when (and (host-call sb-pcl::standard-generic-function-p fin) ; not anonymous
                             (sb-xc:slot-boundp fin 'sb-pcl::name))
-                   (host-pcl-fset (host-call sb-mop:generic-function-name fin) fin))))
+                   (push (cons (host-call sb-mop:generic-function-name fin) fin) fsets))))
              sb-pcl::*host-funcallables*)
+    (setq fsets (nreverse fsets))
     (flet ((alias (name)
              (when (and (fboundp name) (not (macro-function (if (consp name) (second name) name))))
                (let* ((f (fdefinition name))
@@ -451,172 +318,130 @@
                             other (not (equal other name))
                             (fboundp other) (eq (fdefinition other) f)
                             (not (search "HOST" (string (if (consp other) (second other) other)))))
-                   (host-pcl-fset name f))))))
+                   (setq fsets (nconc fsets (list (cons name f)))))))))
       ;; host PCL's own names, and its shadows of other packages'
-      (dolist (package '("SB-PCL"))
-        (do-symbols (s package)
-          (when (and (eq (cl:symbol-package s) (find-package package))
-                     (not (search "HOST" (symbol-name s))))
-            (alias s)
-            (alias `(setf ,s))))))
-    gfs))
+      (do-symbols (s "SB-PCL")
+        (when (and (eq (cl:symbol-package s) (find-package "SB-PCL"))
+                   (not (search "HOST" (symbol-name s))))
+          (alias s)
+          (alias `(setf ,s)))))
+    (values fsets gfs)))
 
-(defun host-pcl-dump ()
-  (let ((*host-pcl-memo* (make-hash-table :test 'eq))
-        (*host-pcl-pv-tables* nil)
+;;; src/pcl/host-pcl-objects.lisp's forms: the functions host PCL compiled
+;;; (a list of them, so that they are compiled)
+(sb-xc:defmacro sb-pcl::!host-pcl-compiled-functions ()
+  `(list ,@(loop for (name . form) in (reverse sb-pcl::*host-pcl-cold-compiles*)
+                 collect `#'(named-lambda ,name ,@(cdr form)))))
+;;; ... and the constant which they are, as the dumper writes it
+(sb-xc:defmacro sb-pcl::!host-pcl-objects ()
+  `',(sb-c::make-deferred-dump #'host-pcl-dump-objects))
+(defun host-pcl-dump-objects (file)
+  (let ((*hp-fasl* file)
+        (sb-c::*xc-dump-object* #'hp-dump-object)
+        (*hp-templates-written* 0)
+        (*hp-pv-tables* nil)
+        (*hp-reset-copies* (make-hash-table :test 'eq)))
+    (host-pcl-write-1))
+  (sb-c::sub-dump-object nil file))
+(defun host-pcl-write-1 ()
+  (let ((sb-c::*xc-dump-fills* nil)
+        (*hp-written* (make-hash-table :test 'eq))
         (*host-pcl-slot-names* (make-hash-table :test 'eq))
-        (gfs nil))
-    ;; FIND-CLASS: the class in its name's classoid cell, as (SETF FIND-CLASS)
-    ;; puts it before the boot state is COMPLETE
-    (loop for (name . class) in (sb-pcl::host-pcl-classes)
-          do (write-slots (cold-find-classoid-cell name :create t)
-                          :pcl-class (host-pcl-to-core class)))
-    (dolist (classoid (host-pcl-classoids))
-      (when (sb-kernel:classoid-pcl-class classoid)
-        (if (or (sb-pcl::host-own-classoid-p classoid)
-                (host-pcl-cold-classoid (classoid-name classoid))
-                (typep classoid '(or sb-kernel:built-in-classoid
-                                  sb-kernel:structure-classoid
-                                  sb-kernel::condition-classoid sb-kernel::static-classoid)))
-            (host-pcl-classoid-to-core classoid)
-            (host-pcl-unwritable (sb-kernel:classoid-pcl-class classoid)))))
-    ;; slot tables of layouts that are not PCL's (STRUCTURE-OBJECT etc.)
-    (dolist (classoid (host-pcl-classoids))
-      (let* ((xc-layout (sb-kernel:classoid-layout classoid))
-             (table (and xc-layout (not (sb-pcl::host-wrapper-p xc-layout))
-                         (sb-kernel::layout-slot-table xc-layout)))
-             (cold (and table (gethash (classoid-name classoid) *cold-layouts*))))
-        (when table
-          (if cold
-              (let ((index (dsd-index-cached 'sb-kernel:layout 'sb-kernel::slot-table))
-                    (layout (cold-layout-descriptor cold)))
-                (write-wordindexed layout (+ sb-vm:instance-slots-offset index)
-                                   (host-pcl-slot-value table layout :instance index)))
-              (host-pcl-unwritable table)))))
-    ;; ... and their slot mappers
-    (loop for (name . mapper) in sb-pcl::*host-layout-slot-mappers*
-          for cold = (gethash name *cold-layouts*)
-          do (if cold
-                 (let ((index (dsd-index-cached 'sb-kernel:layout 'sb-kernel::slot-mapper)))
-                   (write-wordindexed (cold-layout-descriptor cold)
-                                      (+ sb-vm:instance-slots-offset index)
-                                      (host-pcl-to-core mapper)))
-                 (host-pcl-unwritable mapper)))
-    (dolist (classoid (host-pcl-classoids))
-      (when (and (sb-pcl::host-own-classoid-p classoid)
-                 (eq (sb-kernel:find-classoid (classoid-name classoid) nil) classoid))
-        (host-pcl-to-core classoid))) ; filed in its cell
-    ;; Each classoid PCL made is a subclassoid of its layout's ancestors'
-    ;; classoids, as REGISTER-LAYOUT makes it (ADD-SUBCLASSOID's alist: the
-    ;; target makes a hash table of a long one when it adds to it).
-    (let ((subclassoids (make-hash-table :test 'eq))) ; super -> ((sub . layout) ...)
-      (dolist (classoid (host-pcl-classoids))
-        (let ((layout (and (sb-pcl::host-own-classoid-p classoid)
-                           (sb-kernel:classoid-layout classoid))))
-          (when layout
-            (loop for super across (sb-kernel:layout-inherits layout)
-                  do (push (cons classoid layout)
-                           (gethash (sb-kernel:layout-classoid super)
-                                    subclassoids))))))
-      (maphash (lambda (super subs)
-                 (let ((cold (host-pcl-to-core super)))
-                   (write-slots cold :subclasses
-                                (list-to-core
-                                 (append
-                                  (mapcar (lambda (sub)
-                                            (cold-cons (host-pcl-to-core (car sub))
-                                                       (host-pcl-to-core (cdr sub))))
-                                          subs)
-                                  ;; any other the cross-compiler's classoid
-                                  ;; has in the core (its own of the
-                                  ;; meta-braid's, class-init.lisp, are above)
-                                  (let ((old (read-slot cold :subclasses))
-                                        (written (mapcar (lambda (sub) (host-pcl-to-core (car sub)))
-                                                         subs)))
-                                    (loop until (cold-null old)
-                                          unless (member (cold-car (cold-car old)) written
-                                                         :test #'descriptor=)
-                                            collect (cold-car old)
-                                          do (setq old (cold-cdr old)))))))))
-               subclassoids))
-    ;; global functions and variables
-    (setq gfs (host-pcl-fdefinitions))
-    (dolist (symbol (remove-if (lambda (s)
-                                 (member s *host-pcl-lazy-tables*))
-                               sb-pcl::*host-pcl-globals*))
-      (let ((value (symbol-value symbol)))
-        (if (host-pcl-recipe-of value)
-            (host-pcl-unwritable value) ; a hash table, say: a lazy table instead
-            (cold-set symbol (host-pcl-to-core value)))))
-    (cold-set 'sb-pcl::*!braid-dumped* (cold-intern t))
-    (cold-set 'sb-pcl::*!genesis-pv-tables* (list-to-core *host-pcl-pv-tables*))
-    (dolist (symbol *host-pcl-lazy-tables*) (cold-set symbol *nil-descriptor*))
-    ;; the function generators host PCL made, which SB-XC:COMPILE compiled
-    (cold-set 'sb-pcl::*!genesis-fgens*
-              (let ((fgens (symbol-value (find-symbol "*FGENS*" "SB-PCL")))
-                    (entries nil))
-                (when fgens
-                  (maphash (lambda (test fgen) (push (cons test fgen) entries)) fgens))
-                (host-pcl-to-core entries)))
-    (cold-set 'sb-pcl::*!genesis-table-entries*
-              (host-pcl-to-core
-               (loop for name in *host-pcl-genesis-tables*
-                     for table = (symbol-value name)
-                     when table
-                       collect name
-                       and collect (let (entries)
-                                     (maphash (lambda (k v) (push v entries) (push k entries))
-                                              table)
-                                     entries))))
-    (format t "~&; host PCL dumped: ~D objects, ~D generic functions~%"
-            (hash-table-count *host-pcl-memo*) (length gfs))
-    (format t "~&; host PCL: ~D functions cross-compiled (SB-XC:COMPILE), ~D of them written~%"
-            (length sb-pcl::*host-pcl-cold-compiles*) *host-pcl-cold-compiled-written*)))
-
-;;;; SB-XC:COMPILE
-
-;;; What host PCL compiled (SB-PCL::*HOST-PCL-COLD-COMPILES*), cross-compiled
-;;; into the cold core: FOP-TEMPLATE-CLOSURE tells genesis of each function,
-;;; by the name host PCL gave it.  The fasl only carries the code from the
-;;; dumper to genesis's loader.
-(defun cold-compile-path (i) (format nil "output/cold-compile/~4,'0D.fasl" i))
-(defun cold-compile (name form fasl)
-      (ensure-directories-exist fasl)
-      (funcall sb-cold::*in-target-compilation-mode-fn*
-               (lambda ()
-                 (let ((genesis-readonlyize (fdefinition 'logically-readonlyize))
-                       (sb-c::*last-message-count* (list* 0 nil nil))
-                       (sb-c::*last-error-context* nil)
-                       (sb-c::*compiler-trace-output* nil)
-                       (sb-c::*block-compile-argument* nil)
-                       (sb-c::*entry-points-argument* nil)
-                       (sb-c::*force-system-tlab* t) ; as PCL's code
-                       ;; it may run before cold init's toplevel forms
-                       (sb-c::*load-time-value-of-global-read* t)
-                       (output (sb-c::open-fasl-output (pathname fasl) "SB-XC:COMPILE"))
-                       (abort-p t))
-                   (unwind-protect
-                        (let ((sb-c::*compile-object* output))
-                          ;; the compiler's, not genesis's (which works on cold
-                          ;; objects)
-                          (setf (fdefinition 'logically-readonlyize) #'identity)
-                          (setq abort-p (sb-c::sub-compile-file
-                                         (sb-c::make-lisp-source-info
-                                          `(named-lambda ,name ,@(cdr form)))
-                                         nil)))
-                     (setf (fdefinition 'logically-readonlyize) genesis-readonlyize)
-                     (sb-c::close-fasl-output output abort-p))
-                   (when abort-p (error "host PCL: failed to cross-compile ~S" form))))))
-;;; As host PCL's build ends, with the cross-compiler as the build left it
-(defun cold-compile-host-pcl ()
-  (loop for (name . form) in (reverse sb-pcl::*host-pcl-cold-compiles*)
-        for i from 1
-        do (cold-compile name form (cold-compile-path i))))
-;;; ... and in genesis, which loads them
-(defun cold-load-host-pcl-code ()
-  (let ((*cold-load-functions-only* t))
-    (loop for i from 1
-          for fasl = (cold-compile-path i)
-          while (probe-file fasl)
-          do (cold-load fasl nil nil))))
-
+        (classoids (host-pcl-classoids)))
+    (labels ((fill-all () (sb-c::dump-xc-fills))
+             ;; (with what its arguments lead to written first, as genesis
+             ;; may look for it)
+             (op (&rest args) (fill-all) (apply #'hp-op nil args))
+             ;; (made, and in the table)
+             (dump (x)
+               (sb-c::sub-dump-object x *hp-fasl*)
+               (sb-c::dump-pop *hp-fasl*)))
+      ;; FIND-CLASS: the class in its name's classoid cell, as (SETF FIND-CLASS)
+      ;; puts it before the boot state is COMPLETE
+      (loop for (name . class) in (sb-pcl::host-pcl-classes)
+            do (op :classoid-cell-class name class))
+      (dolist (classoid classoids)
+        (when (sb-kernel:classoid-pcl-class classoid)
+          (if (or (sb-pcl::host-own-classoid-p classoid)
+                  (typep classoid '(or sb-kernel:built-in-classoid
+                                    sb-kernel:structure-classoid
+                                    sb-kernel::condition-classoid sb-kernel::static-classoid)))
+              (dump classoid)
+              ;; (unless genesis has made it)
+              (op :xc-classoid-required (classoid-name classoid) classoid))))
+      ;; slot tables of layouts that are not PCL's (STRUCTURE-OBJECT etc.)
+      (dolist (classoid classoids)
+        (let* ((xc-layout (sb-kernel:classoid-layout classoid))
+               (table (and xc-layout (not (sb-pcl::host-wrapper-p xc-layout))
+                           (sb-kernel::layout-slot-table xc-layout))))
+          (when table
+            (op :layout-slot (classoid-name classoid) 'sb-kernel::slot-table table))))
+      ;; ... and their slot mappers
+      (loop for (name . mapper) in sb-pcl::*host-layout-slot-mappers*
+            do (op :layout-slot name 'sb-kernel::slot-mapper mapper))
+      (dolist (classoid classoids)
+        (when (and (sb-pcl::host-own-classoid-p classoid)
+                   (eq (sb-kernel:find-classoid (classoid-name classoid) nil) classoid))
+          (dump classoid)))       ; filed in its cell
+      ;; Each classoid PCL made is a subclassoid of its layout's ancestors'
+      ;; classoids, as REGISTER-LAYOUT makes it (ADD-SUBCLASSOID's alist: the
+      ;; target makes a hash table of a long one when it adds to it).
+      (let ((subclassoids (make-hash-table :test 'eq)) ; super -> ((sub . layout) ...)
+            (supers nil))
+        (dolist (classoid classoids)
+          (let ((layout (and (sb-pcl::host-own-classoid-p classoid)
+                             (sb-kernel:classoid-layout classoid))))
+            (when layout
+              (loop for super across (sb-kernel:layout-inherits layout)
+                    do (let ((super (sb-kernel:layout-classoid super)))
+                         (unless (gethash super subclassoids) (push super supers))
+                         (push (cons classoid layout) (gethash super subclassoids)))))))
+        (dolist (super (nreverse supers))
+          (apply #'op :subclassoids super
+                 (loop for (sub . layout) in (gethash super subclassoids)
+                       collect sub collect layout))))
+      ;; global functions and variables
+      (multiple-value-bind (fsets gfs) (host-pcl-fdefinitions)
+        (loop for (name . function) in fsets
+              do (fill-all)
+                 (sb-c::sub-dump-object (copy-tree name) *hp-fasl*)
+                 (sb-c::sub-dump-object function *hp-fasl*)
+                 (sb-c::dump-fop 'fop-fset *hp-fasl*))
+        (dolist (symbol (remove-if (lambda (s) (member s *host-pcl-lazy-tables*))
+                                   sb-pcl::*host-pcl-globals*))
+          (let ((value (symbol-value symbol)))
+            (if (host-pcl-recipe-of value)
+                (host-pcl-unwritable value) ; a hash table, say: a lazy table instead
+                (op :cold-set symbol value))))
+        (op :cold-set 'sb-pcl::*!braid-dumped* t)
+        (dolist (symbol *host-pcl-lazy-tables*) (op :cold-set symbol nil))
+        ;; the function generators host PCL made, which SB-XC:COMPILE compiled
+        (op :cold-set 'sb-pcl::*!genesis-fgens*
+            (let ((fgens (symbol-value (find-symbol "*FGENS*" "SB-PCL")))
+                  (entries nil))
+              (when fgens
+                (maphash (lambda (test fgen) (push (cons test fgen) entries)) fgens))
+              entries))
+        (op :cold-set 'sb-pcl::*!genesis-table-entries*
+            (loop for name in *host-pcl-genesis-tables*
+                  for table = (symbol-value name)
+                  when table
+                    collect name
+                    and collect (let (entries)
+                                  (maphash (lambda (k v) (push v entries) (push k entries))
+                                           table)
+                                  entries)))
+        (fill-all)
+        ;; the pv tables the objects led to
+        (op :cold-set 'sb-pcl::*!genesis-pv-tables* *hp-pv-tables*)
+        (op :report (hash-table-count *hp-written*) (length gfs)
+            (length sb-pcl::*host-pcl-cold-compiles*) *hp-templates-written*)
+        ;; what was made, by type, if the build directory has a file host-pcl-histogram
+        (when (probe-file "host-pcl-histogram")
+          (let ((h (make-hash-table :test 'equal)))
+            (maphash (lambda (k v) (declare (ignore v))
+                       (incf (gethash (let ((ty (type-of k))) (if (consp ty) (car ty) ty)) h 0)))
+                     *hp-written*)
+            (maphash (lambda (k v) (format t "~&HIST ~S ~D~%" k v)) h)
+            (maphash (lambda (k v) (declare (ignore v)) (when (symbolp k) (format t "~&SYM ~S~%" k)))
+                     *hp-written*)))))))

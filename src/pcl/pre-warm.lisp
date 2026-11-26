@@ -34,27 +34,24 @@
 ;;; cross-compiler expands PCL's macros as it compiles PCL, so their code
 ;;; does not count on classes.
 #+sb-xc-host (defvar *host-pcl-ready* nil)
-;;; ... and while it runs PCL's definitions (CALL-WITH-HOST-PCL-CLOS-MACROS)
+;;; ... and while it runs PCL's definitions (CALL-AS-HOST-PCL)
 #+sb-xc-host (defvar *host-pcl-evaluating* nil)
 (defmacro pcl-ready-p () #+sb-xc-host '*host-pcl-ready* #-sb-xc-host t)
 
-;;; Toplevel forms of PCL's files that host PCL, which builds the classes
-;;; and generic functions genesis writes (src/cold/host-pcl.lisp), doesn't
-;;; run where they are, but once PCL's bootstrap is over (when the braid
-;;; genesis wrote is linked: !FINISH-GENESIS-BRAID)
-;;; The markers below tell host PCL what to run when: their forms are
-;;; recorded, as the host loads PCL proper's files (before it builds host
-;;; PCL: !HOST-LOAD-RECORD, src/code/cross-early.lisp), or as the cross-compiler
-;;; compiles the others (src/cold/host-pcl-dispatch.lisp).
+;;; Toplevel forms of PCL proper's files that host PCL, which builds the
+;;; classes and generic functions genesis writes (src/cold/host-pcl.lisp),
+;;; runs later than where they are: !CAPTURING below.  Their forms are
+;;; recorded as the host loads PCL proper's files (before it builds host
+;;; PCL: !HOST-LOAD-RECORD, src/code/cross-early.lisp).
 #+sb-xc-host (declaim (ftype function !host-load-record))
-#+sb-xc-host (defvar *host-pcl-making-methods*)
+;;; The lambda list of the method a DEFMETHOD makes, which the
+;;; cross-compiler notes (EXPAND-DEFMETHOD)
+#+sb-xc-host (defvar *defmethod-lambda-list*)
 (defmacro !cross-compiling-p () '(member :sb-xc sb-xc:*features*))
 ;;; (as the host loads PCL's files, rather than host PCL running them)
 (defmacro !loading-pcl-proper-p ()
   #+sb-xc-host '(not (or (!cross-compiling-p) *host-pcl-evaluating*)) #-sb-xc-host nil)
-(defmacro !after-pcl-bootstrap (&body forms)
-  (unless (!loading-pcl-proper-p) `(!target-form (lambda () ,@forms))))
-;;; ... that host PCL runs as it makes PCL's generic functions, once they
+;;; Forms that host PCL runs as it makes PCL's generic functions, once they
 ;;; exist and before they are initialized: LOAD-TIME-VALUE of one,
 ;;; braid.lisp's links of classoids to their classes, which initializing
 ;;; them needs, and dlisp3.lisp's dfun constructors, which are code

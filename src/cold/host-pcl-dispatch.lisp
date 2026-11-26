@@ -18,7 +18,10 @@
 ;;; make-host-2's and genesis's records, and host PCL's generic functions,
 ;;; which it makes as it builds
 (declaim (special sb-cold::*host-pcl-record*)
-         (ftype function add-reader-method add-writer-method class-wrapper))
+         (ftype function add-reader-method add-writer-method class-wrapper
+                create-gf-lambda-list parse-specialized-lambda-list
+                generic-function-initial-methods (setf generic-function-initial-methods)
+                method-qualifiers method-specializers))
 
 (unless (find-package "SB-PCL-DISPATCH")
   (make-package "SB-PCL-DISPATCH" :use nil))
@@ -121,9 +124,16 @@
          (args (dispatch-symbol "ARGS"))
          (specializers (mapcar (lambda (p) (if (consp p) (second p) t)) required)))
     (note-dispatch-gf name nreq)
+    ;; a generic function without a DEFGENERIC has its first method's lambda
+    ;; list, as ENSURE-GENERIC-FUNCTION gives it (calls of it cross-compiled
+    ;; before the method is made need it)
+    (let ((entry (gethash name *dispatch-gfs*)))
+      (unless (third entry)
+        (setf (third entry)
+              (create-gf-lambda-list (nth-value 1 (parse-specialized-lambda-list lambda-list))))))
     ;; An EQL specializer (defcombin.lisp's on *STANDARD-METHOD-COMBINATION*):
     ;; the host's dispatch is on classes, and its bootstrap needs no such
-    ;; method; the method itself is PCL's, made in pass 2 as any other
+    ;; method; the method itself is PCL's, made as any other
     (when (some #'consp specializers)
       (return-from dispatch-method-form '(progn)))
     `(progn
@@ -164,6 +174,12 @@
                                      writer nil `(new-value (object ,name))
                                      `((setf (slot-value object ',slot-name) new-value))))))))
 
+;;; A DEFGENERIC as host PCL runs it: its :METHOD options' methods, its
+;;; initial methods, are made of what the cross-compiler notes as any
+;;; method's (MAKE-OPTION-METHODS)
+(defun defgeneric-without-methods (form)
+  `(,@(subseq form 0 3)
+    ,@(remove-if (lambda (option) (typep option '(cons (eql :method)))) (nthcdr 3 form))))
 ;;; Those whose DEFGENERIC names their class (:GENERIC-FUNCTION-CLASS): their
 ;;; DEFGENERICs make them, once the class is made (MAKE-PCL-GENERIC-FUNCTIONS)
 (defvar *dispatch-gfs-of-own-class* nil)
@@ -201,7 +217,7 @@
     (when forms
       (push (list* 'progn forms) *dispatch-forms*))))
 
-;;; (once for PCL proper's, once for the target-only files': their dispatch
+;;; (once for PCL proper's, and again for the other files': their dispatch
 ;;; generic functions are made once, and the forms run once)
 (defvar *dispatch-gfs-made* (make-hash-table :test 'equal))
 (defun build-dispatch ()
@@ -241,52 +257,73 @@
 (defvar *pass-2-forms* nil)
 (defvar *pass-2-capturing-forms* nil)
 
-;;; The forms that pass 2 runs, as loading PCL proper's files recorded them
+;;; The forms that pass 2 runs, as loading PCL proper's files recorded them.
+;;; A DEFMETHOD is the dispatch layer's only: the method itself is made of
+;;; what the cross-compiler notes of it (MAKE-METHODS), as any other's.
 (defun take-pass-2-forms ()
   (dolist (entry (reverse sb-cold::*host-pcl-record*))
     (destructuring-bind (kind package form) entry
       (note-dispatch-form kind form)
-      (if (eq kind :capturing)
-          (push (cons package form) *pass-2-capturing-forms*)
-          (push (cons package form) *pass-2-forms*)))))
-;;; A target-only file's DEFCLASS or DEFGENERIC, as make-host-2 compiles it
-;;; (!XC-DEFINITION)
+      (case kind
+        (:capturing (push (cons package form) *pass-2-capturing-forms*))
+        (:method)
+        (:generic-function (push (cons package (defgeneric-without-methods form)) *pass-2-forms*))
+        (t (push (cons package form) *pass-2-forms*))))))
+;;; The methods of the files before boot.lisp are early, their generic
+;;; functions being called in cold init before PCL's toplevel forms.
+(defvar *methods-made* 0)               ; (MAKE-METHODS)
+(defvar *methods-waiting* nil)          ; ... the records of, in order
+(defvar *host-pcl-boot-seen* nil)
+;;; Any file's DEFCLASS or DEFGENERIC but PCL proper's, as make-host-2
+;;; compiles it (!XC-DEFINITION)
+;;; ... whose class genesis knows as a type from where the file's fasl says
+;;; so on, as the cross-compiler does (the target's constants of it):
+;;; its object host PCL writes once it is built (src/cold/host-pcl-dump.lisp)
+(defun note-class-for-genesis (name)
+  (let ((file sb-c::*compile-object*))
+    (when (typep file 'sb-c::fasl-output)
+      (sb-c::dump-object :declare-classoid file)
+      (sb-c::dump-object name file)
+      (sb-c::dump-fop 'sb-fasl::fop-host-pcl-effect file 2))))
 (defun host-pcl-define (kind form)
   (note-dispatch-form kind form)
   (when (eq kind :class)
-    (push (second form) *target-only-class-names*))
-  (push (cons *package* form) *pass-2-forms*)
-  ;; (what the host compiles of it warns as host code, not as the file's;
-  ;; and host PCL runs it, not the cross-compiler: !CROSS-COMPILING-P)
-  (handler-bind ((warning #'muffle-warning))
-    (cl:with-compilation-unit (:override t)
-     (let ((sb-xc:*features* (remove :sb-xc sb-xc:*features*)))
-      (call-with-host-gensyms
-       (lambda () (call-with-host-pcl-clos-macros #'pass-2-definitions)))))))
+    (push (second form) *compile-time-class-names*)
+    (note-class-for-genesis (second form)))
+  (push (cons *package* (if (eq kind :generic-function) (defgeneric-without-methods form) form))
+        *pass-2-forms*)
+  (call-as-host-pcl #'pass-2-definitions)
+  (when (eq kind :generic-function)
+    (make-option-methods form nil)
+    (make-methods (shiftf *methods-waiting* nil))))
 
-;;; Cross-compiled, PCL's DEFCLASS, DEFGENERIC, DEFMETHOD and
-;;; DEFINE-METHOD-COMBINATION forms (pre-warm.lisp's !DEFINITION) have
-;;; their compile-time effects, and the rest of what they expand into is
-;;; compiled into a function that is never called, which dumps the methods'
-;;; functions (FOP-MSET) for host PCL's methods.
+;;; Cross-compiled, DEFCLASS, DEFGENERIC, DEFMETHOD and
+;;; DEFINE-METHOD-COMBINATION forms have their compile-time effects, and
+;;; the rest of what they expand into is compiled into a function that is
+;;; never called, which dumps the methods' functions for host PCL's methods
+;;; (genesis finds them by their names).  A class has nothing more: host PCL
+;;; makes it and its accessors' methods.
+(defun compile-time-parts (expansion)
+  (loop for x in (if (typep expansion '(cons (eql progn))) (cdr expansion) (list expansion))
+        when (and (typep x '(cons (eql eval-when) (cons list)))
+                  (member :compile-toplevel (second x)))
+          collect `(eval-when (:compile-toplevel) ,@(cddr x))))
 (defun host-pcl-compile-time-only (expansion)
-  `(progn
-     ,@(loop for x in (if (typep expansion '(cons (eql progn))) (cdr expansion) (list expansion))
-             when (and (typep x '(cons (eql eval-when) (cons list)))
-                       (member :compile-toplevel (second x)))
-               collect `(eval-when (:compile-toplevel) ,@(cddr x)))
-     (!host-form (lambda () ,expansion))))
-;;; A target-only file's classes and generic functions are host PCL's as
-;;; it compiles them (whose methods host PCL makes of what genesis has:
-;;; MAKE-EARLY-METHODS)
-(defvar *host-pcl-stem* nil) ; the file being cross-compiled
+  `(progn ,@(compile-time-parts expansion)
+          (!host-form (lambda () (symbol-macrolet ((%in-host-form t)) ,expansion)))))
+;;; A file's classes and generic functions are host PCL's as the
+;;; cross-compiler compiles it, as the target's are as it loads the file
+;;; (and its methods, of what the cross-compiler notes: MAKE-METHODS), but
+;;; for PCL proper's, which host PCL has already (:HOST-DEFINITIONS)
+(defvar *host-pcl-defining* nil)
 ;;; (target functions that macro bodies mention, which the host compiles)
 (declaim (ftype function sb-mop:method-function class-wrapper))
 (defun !xc-definition (kind form expansion)
-  (if (and (member kind '(:class :generic-function))
-           (member *host-pcl-stem* (host-pcl-target-only-stems) :test #'string=))
+  (if (and (member kind '(:class :generic-function)) *host-pcl-defining*)
       ;; (after the definition's compile-time effects for the cross-compiler)
-      `(progn ,(host-pcl-compile-time-only expansion)
+      `(progn ,@(if (eq kind :class)
+                    (compile-time-parts expansion)
+                    (list (host-pcl-compile-time-only expansion)))
               (eval-when (:compile-toplevel) (host-pcl-define ',kind ',form)))
       (host-pcl-compile-time-only expansion)))
 
@@ -304,75 +341,63 @@
                      (defmethod :method)
                      (define-method-combination :method-combination)))))
     (cond ((not kind) (funcall expander form env))
+          ;; (code of a definition already made, which is only compiled:
+          ;; a DEFGENERIC's :METHODs)
+          ((nth-value 1 (sb-xc:macroexpand-1 '%in-host-form env))
+           (funcall expander form env))
+          ;; Host PCL makes the definitions that the cross-compiler
+          ;; processes as top level forms, as each build mode does: those
+          ;; anywhere else would be the target's only, once cold init got
+          ;; to them, not CLOS as cold init begins.
+          ((not sb-kernel:*top-level-form-p*)
+           (error "host PCL: ~S ~S is not a top level form" (car form) (second form)))
           ((and (eq kind :class) (!host-pcl-class-p (second form))) nil)
-          (t (!xc-definition kind form (funcall expander form env))))))
+          (t (let ((expansion (funcall expander form env)))
+               (case kind
+                 (:method (setq expansion (expand-defmethod-once expansion env)))
+                 ;; (another file's DEFGENERIC makes them once it has made
+                 ;; the generic function: HOST-PCL-DEFINE)
+                 (:generic-function
+                  (unless *host-pcl-defining* (make-option-methods form env))))
+               (!xc-definition kind form expansion))))))
 
-;;; Each method's initargs (its plist: SLOT-NAME-LISTS etc.) are computed by
-;;; the code walker along with its function, and they belong together: the
-;;; dump of the function takes them along (FOP-MSET), and so do genesis and
-;;; host PCL (MAKE-METHOD-INITARGS-FORM-INTERNAL1).  Host PCL makes the
-;;; methods of the files whose bodies are the target's only from them, and
-;;; those of PCL proper from its source (:HOST-DEFINITIONS), from boot.lisp
-;;; on: the files before have :EARLY methods (note-method-info in dump.lisp).
-(defvar *host-pcl-making-methods* nil)
-(defvar *host-pcl-boot-seen* nil)
-;;; As the cross-compiler begins a file (TARGET-COMPILE-STEM)
-(defun sb-cold::host-pcl-before-target-compile (stem flags)
-  (setq sb-xc:*macroexpand-hook* #'xc-definition-macroexpand-hook)
-  (setq *host-pcl-stem* stem
-        sb-c::*method-info-records* nil)
-  ;; the classes of the structures and conditions of the files before it
-  (make-structure-classes-so-far)
-  (when (string= stem "src/pcl/boot")
-    (setq *host-pcl-boot-seen* t))
-  (setq *host-pcl-making-methods*
-        (cond ((not *host-pcl-boot-seen*) :early)
-              ((member :host-definitions flags) nil)
-              (t t))))
-
-;;; ... and as it ends one: what the file's DEFMETHODs noted (SB-C::NOTE-METHOD-INFO),
-;;; next to its fasl, for host PCL to make the methods of in whichever
-;;; process builds it (a parallel build compiles files in its children)
-(defun method-info-path (stem flags)
-  (concatenate 'string (sb-cold::stem-object-path stem flags :target-compile) "-methods"))
-(defun sb-cold::host-pcl-after-target-compile (stem flags)
-  (unless sb-cold::*compile-for-effect-only*
-    (with-open-file (stream (method-info-path stem flags) :direction :output
-                                                          :if-exists :supersede)
-      (with-standard-io-syntax
-        (let ((*package* (find-package "KEYWORD")) (*print-circle* t))
-          (prin1 (reverse sb-c::*method-info-records*) stream)))))
-  (setq sb-c::*method-info-records* nil))
-;;; Every file's, in the order of the build:
-;;; (fun-name lambda-list namestring indices initargs make-p) each
-(defvar *method-info* nil)
-(defun method-info ()
-  (or *method-info*
-      (setq *method-info*
-            (let ((all nil))
-              (sb-cold::do-stems-and-flags (stem flags 2)
-                (unless (member :not-target flags)
-                  (with-open-file (stream (method-info-path stem flags) :if-does-not-exist nil)
-                    (when stream
-                      (with-standard-io-syntax
-                        (let ((*package* (find-package "KEYWORD")) (*read-eval* nil))
-                          (setq all (revappend (read stream) all))))))))
-              (nreverse all)))))
-
-;;; A generic function proxy called on the host: the host's dispatch, by its name
-(defvar *dispatch-routes* (make-hash-table :test 'eq)) ; record -> function or :NONE
-(defun dispatch-route (record)
-  (let ((route (gethash record *dispatch-routes*)))
-    (when (null route)
-      (setq route
-            (or (and (eq (sb-kernel::layout-classoid-name (host-fin-wrapper record)) 'standard-generic-function)
-                     (let ((name (svref (host-fin-slots record)
-                                        (!bootstrap-slot-index 'standard-generic-function 'name))))
-                       (and (gethash name *dispatch-gfs*)
-                            (lambda (&rest args) (apply #'dispatch-call name args)))))
-                :none))
-      (setf (gethash record *dispatch-routes*) route))
-    (and (functionp route) route)))
+;;; The methods that the DEFMETHOD being expanded notes, last first:
+;;; (fun-name lambda-list source-location initargs), by the name of its
+;;; function, of which host PCL makes the method (MAKE-METHODS).  INITARGS
+;;; are its DEFMETHOD's (MAKE-METHOD-INITARGS-FORM-INTERNAL1).
+(defvar *noted-methods*)
+(defun note-method-info (fun-name lambda-list initargs)
+  (push (list fun-name lambda-list (sb-c::make-definition-source-location) initargs)
+        *noted-methods*))
+;;; A top level DEFMETHOD's EXPANSION, its %DEFMETHOD-EXPANDERs expanded
+;;; here, once, where they would be as top level forms, which notes the
+;;; method: its expansion is compiled into a function instead
+;;; (HOST-PCL-COMPILE-TIME-ONLY).  Host PCL makes the method now, as the
+;;; target does once it has loaded the form.
+(defun expand-defmethod-once (expansion env)
+  (let ((*noted-methods* nil) (method nil))
+    (prog1 `(,(car expansion)
+             ,@(loop for x in (cdr expansion)
+                     collect (if (typep x '(cons (eql eval-when)
+                                            (cons t (cons (cons (eql %defmethod-expander)) null))))
+                                 `(,(first x) ,(second x)
+                                   ,(or method (setq method (sb-xc:macroexpand-1 (third x) env))))
+                                 x)))
+      (make-methods (let ((early (not *host-pcl-boot-seen*)))
+                      (mapcar (lambda (record) (cons early record)) (reverse *noted-methods*)))))))
+;;; ... and a DEFGENERIC's :METHOD options, as DEFMETHODs: its initial
+;;; methods
+(defvar *option-methods*)               ; (as they are made, last first)
+(defun make-option-methods (form env)
+  (let ((*option-methods* '()))
+    (dolist (option (cdddr form))
+      (when (typep option '(cons (eql :method)))
+        (sb-xc:macroexpand-1 `(defmethod ,(second form) ,@(cdr option)) env)))
+    (when *option-methods*
+      (call-as-host-pcl
+       (lambda ()
+         (setf (generic-function-initial-methods (fdefinition (second form)))
+               (reverse *option-methods*)))))))
 
 (defvar *pass-2-warnings* (make-hash-table :test 'equal))
 ;;; Pass 2 shows what goes wrong briefly: PCL's objects are circular
@@ -385,17 +410,40 @@
                             (format t "~&;; pass 2 warning: ~A~%" text)))
                         (muffle-warning c)))
                     (error
-                      (lambda (c)
-                        (format t "~&;; pass 2 error: ~A~%" c)
-                        (host-sb-debug:print-backtrace :count 30)
-                        (host-sb-ext:exit :code 4 :abort t)))
-                    (storage-condition
-                      (lambda (c)
-                        (declare (ignore c))
-                        (host-sb-debug:print-backtrace :count 80)
-                        (host-sb-ext:exit :code 3 :abort t))))
+                      ;; (and on to the debugger, or whatever the host does)
+                      (lambda (c) (format t "~&;; pass 2 error: ~A~%" c))))
        ,@body)))
 
+;;; As the cross-compiler begins a file (TARGET-COMPILE-STEM)
+(defun sb-cold::host-pcl-before-target-compile (stem flags)
+  (setq sb-xc:*macroexpand-hook* #'xc-definition-macroexpand-hook)
+  (setq *host-pcl-defining* (not (member :host-definitions flags)))
+  (when (string= stem "src/pcl/boot")
+    (setq *host-pcl-boot-seen* t)))
+
+;;; A function of NAME that calls its host generic function
+(defun dispatch-trampoline (name) (lambda (&rest args) (apply #'dispatch-call name args)))
+;;; A generic function proxy called on the host: the host's dispatch, by its name
+(defvar *dispatch-routes* (make-hash-table :test 'eq)) ; record -> function or :NONE
+(defun dispatch-route (record)
+  (let ((route (gethash record *dispatch-routes*)))
+    (when (null route)
+      (setq route
+            (or (and (eq (sb-kernel::layout-classoid-name (host-fin-wrapper record)) 'standard-generic-function)
+                     (let ((name (svref (host-fin-slots record)
+                                        (!bootstrap-slot-index 'standard-generic-function 'name))))
+                       (and (gethash name *dispatch-gfs*) (dispatch-trampoline name))))
+                :none))
+      (setf (gethash record *dispatch-routes*) route))
+    (and (functionp route) route)))
+
+
+;;; CLASS's slots' initfunctions, as (location . function)s
+(defun slot-initfunctions (class)
+  (loop for slotd in (dispatch-call 'sb-mop:class-slots class)
+        for function = (dispatch-call 'sb-mop:slot-definition-initfunction slotd)
+        when function
+          collect (cons (dispatch-call 'sb-mop:slot-definition-location slotd) function)))
 ;;; PCL's generic functions, as MAKE-INSTANCE makes them but in two steps:
 ;;; allocated and named first, so that each is a generic function by its
 ;;; name (#'INITIALIZE-INSTANCE ...) while any of them is initialized.
@@ -408,18 +456,12 @@
         (gfs nil))
     ;; Initializing one reads others' slots (their methods, ...): all get
     ;; their slots' initial values first.
-    (let ((initial (loop for slotd in (dispatch-call 'sb-mop:class-slots class)
-                         for function = (dispatch-call
-                                         'sb-mop:slot-definition-initfunction slotd)
-                         when function
-                           collect (cons (dispatch-call
-                                          'sb-mop:slot-definition-location slotd)
-                                         function))))
+    (let ((initial (slot-initfunctions class)))
       (maphash (lambda (name entry)
                  (cond
                    ((shiftf (gethash name *pcl-gfs-made*) t)) ; made already
                    ((member name *dispatch-gfs-of-own-class* :test #'equal)
-                     (fmakunbound name)) ; (RUN-PASS-2's trampoline)
+                     (fmakunbound name)) ; (PASS-2-DEFINITIONS's trampoline)
                    (t
                      (let* ((gf (dispatch-call 'allocate-instance class))
                             (slots (host-fin-slots (host-funcallable-record gf))))
@@ -476,44 +518,35 @@
                             ((string= name "OR") *or-method-combination*)))
                  (error "host PCL: no method combination ~S ~S" name options))))))
 
-(defun pass-2-definitions ()
+;;; The definitions recorded since: another file's, or, if PROPER,
+;;; PCL proper's (HOST-PCL-BUILD-PROPER), with the cross-compiler
+(defun pass-2-definitions (&optional proper)
   (build-dispatch)
+  (when proper
+    (host-only-methods)
+    (setq *host-pcl-ready* t))
   (with-pass-2-reporting
     ;; until they are made: PCL's generic functions' names call the host's dispatch
     (maphash (lambda (name entry)
                (declare (ignore entry))
                (unless (gethash name *pcl-gfs-made*)
-                 (setf (fdefinition name) (lambda (&rest args) (apply #'dispatch-call name args)))))
+                 (setf (fdefinition name) (dispatch-trampoline name))))
              *dispatch-gfs*)
     (make-pcl-generic-functions)
-    (dolist (entry (reverse (shiftf *pass-2-forms* nil)))
-      (let ((*package* (car entry))) (eval (cdr entry))))))
-;;; PCL proper's (HOST-PCL-BUILD-PROPER), with the cross-compiler
-(defun run-pass-2-proper ()
-  (build-dispatch)
-  (host-only-methods)
-  (setq *host-dispatch-routing* t
-        *host-pcl-ready* t)
-  (with-pass-2-reporting
-    (maphash (lambda (name entry)
-               (declare (ignore entry))
-               (setf (fdefinition name) (lambda (&rest args) (apply #'dispatch-call name args))))
-             *dispatch-gfs*)
-    (make-pcl-generic-functions)
-    (make-braid-accessors)
+    (when proper (make-braid-accessors))
     (dolist (entry (reverse (shiftf *pass-2-forms* nil)))
       (let ((*package* (car entry))) (eval (cdr entry))))))
 ;;; ... and the rest, in genesis
 (defun run-pass-2 ()
-  (setq *host-dispatch-routing* t
-        *host-pcl-ready* t)
+  (setq *host-pcl-ready* t)
   (format t "~&; host PCL dispatch: ~D generic functions, ~D dispatch classes~%"
           (hash-table-count *dispatch-gfs*) (hash-table-count *dispatch-classes*))
   (with-pass-2-reporting
     (redefine-braid-classes)
     (make-structure-classes)
-    (finalize-target-only-classes)
-    (make-early-methods)
+    (finalize-compile-time-classes)
+    (make-methods (shiftf *methods-waiting* nil) nil)
+    (format t "~&; host PCL: ~D methods made of what the cross-compiler noted~%" *methods-made*)
     ;; what each generic function caches of COMPUTE-APPLICABLE-METHODS, now
     ;; that it has its methods
     (maphash (lambda (name entry)
@@ -556,8 +589,8 @@
              *host-funcallables*)
     (format t "~&; host PCL: discriminating functions of ~D generic functions~%" n)))
 
-;;; The functions of the methods made of what genesis has -> the keys of
-;;; their cross-compiled ones (SB-FASL::*COLD-PCL-METHOD-FUNCTIONS*)
+;;; The functions of the methods host PCL makes -> the names of their
+;;; cross-compiled ones (SB-FASL::*COLD-PCL-FUNCTIONS*)
 (defvar *early-method-function-keys* (make-hash-table :test 'eq))
 
 ;;; The generic functions of the methods of files before PCL's boot.lisp
@@ -565,47 +598,50 @@
 ;;; forms
 (defvar *early-method-gfs* nil)
 
-;;; The methods of the files before PCL's boot.lisp, and those of the files
-;;; whose bodies are the target's only (*HOST-PCL-TARGET-ONLY*), as real
-;;; methods:
-;;; the cross-compiler noted their lambda lists, source locations and
-;;; initargs as it compiled their DEFMETHODs (SB-C::NOTE-METHOD-INFO), and
-;;; their functions are the cross-compiled ones (HOST-PCL-COLD-FUNCTION in
-;;; host-pcl-dump.lisp finds them by the name of the host function standing
-;;; in for each).
-(defun make-early-methods ()
-  (let ((n 0))
-    (dolist (record (method-info))
-      (destructuring-bind (fun-name lambda-list namestring indices initargs make-p) record
-        (when make-p
-          (incf n)
-          (destructuring-bind (name &rest rest) (cdr fun-name) ; (fast-method name ...)
-            (let ((qualifiers (butlast rest)) (specializers (car (last rest))))
-              (unless (and (fboundp name) (funcall 'generic-function-p (fdefinition name)))
-                (error "host PCL: no generic function ~S for the early method ~S ~S"
-                       name qualifiers specializers))
-              (when (eq make-p :early)
-                (pushnew name *early-method-gfs* :test #'equal))
-              ;; its function, which stands for the cross-compiled one genesis has
-              ;; (HOST-PCL-COLD-FUNCTION)
-              (let* ((key (cdr fun-name))
-                     ;; (a closure, so each method's is its own)
-                     (fmf (lambda (&rest args)
-                            (declare (ignore args))
-                            (error "host PCL: the cross-compiled function of ~S" key))))
-                (setf (gethash fmf *early-method-function-keys*) key)
-                (funcall 'sb-pcl::!install-cold-method
-                         (host-pcl-canonical name) (host-pcl-canonical qualifiers)
-                         (host-pcl-canonical specializers) fmf (host-pcl-canonical lambda-list)
-                         (sb-c::%make-basic-definition-source-location namestring indices)
-                         (host-pcl-canonical initargs))))))))
-    (format t "~&; host PCL: ~D methods made of what genesis has~%" n)))
+;;; Methods, as real methods, of what the cross-compiler noted as it compiled
+;;; their DEFMETHODs (NOTE-METHOD-INFO): their lambda lists, source
+;;; locations and initargs.  Their functions are the cross-compiled ones
+;;; (HP-DUMP-OBJECT in host-pcl-dump.lisp finds them by the name of
+;;; the host function standing in for each).  A method of a generic
+;;; function defined later (by a DEFGENERIC of a file after it) waits for
+;;; it, if WAIT.
+(defun make-methods (records &optional (wait t))
+  (call-as-host-pcl
+   (lambda ()
+     (with-pass-2-reporting
+       (dolist (record records)       ; (early fun-name lambda-list location initargs)
+         (cond ((make-noted-method record))
+               (wait (setq *methods-waiting* (nconc *methods-waiting* (list record))))
+               (t (error "host PCL: no generic function for the method ~S" (second record)))))))))
+;;; ... one, unless its generic function is not defined yet
+(defun make-noted-method (record)
+  (destructuring-bind (early fun-name lambda-list location initargs) record
+    (destructuring-bind (name &rest rest) (copy-tree (cdr fun-name)) ; (fast-method name ...)
+      (let ((qualifiers (butlast rest)) (specializers (car (last rest)))
+            (gf (and (fboundp name) (fdefinition name))))
+        (when (and gf (funcall 'generic-function-p gf))
+          (incf *methods-made*)
+          (when early
+            (pushnew name *early-method-gfs* :test #'equal))
+          (let* ((key fun-name)
+                 ;; (a closure, so each method's is its own)
+                 (fmf (lambda (&rest args)
+                        (declare (ignore args))
+                        (error "host PCL: the cross-compiled function of ~S" key)))
+                 (method
+                   (progn
+                     (setf (gethash fmf *early-method-function-keys*) key)
+                     (funcall 'sb-pcl::!install-cold-method
+                              name qualifiers specializers fmf lambda-list location initargs))))
+            (when (boundp '*option-methods*)
+              (push method *option-methods*))
+            t))))))
 
 ;;; Finalized as made, as the target's would be before it makes methods'
 ;;; caches (lazy finalization would invalidate the layouts cached)
-(defun finalize-target-only-classes ()
+(defun finalize-compile-time-classes ()
   (let ((finalize (fdefinition 'sb-mop:finalize-inheritance)))
-    (dolist (name (reverse *target-only-class-names*))
+    (dolist (name (reverse *compile-time-class-names*))
       (funcall finalize (host-find-class name)))))
 
 ;;; Their discriminating functions: caches for every class host PCL knows,
@@ -636,13 +672,10 @@
 ;;; with the braid's stays valid.  Anything else is an error.
 (defun fill-unbound-slots (object)
   (let ((slots (host-instance-slots object)))
-    (dolist (slotd (dispatch-call 'sb-mop:class-slots
-                                  (wrapper-class (host-instance-wrapper object))))
-      (let ((location (dispatch-call 'sb-mop:slot-definition-location slotd))
-            (function (dispatch-call 'sb-mop:slot-definition-initfunction slotd)))
-        (when (and (integerp location) function
-                   (eq (svref slots location) +slot-unbound+))
-          (setf (svref slots location) (funcall function)))))))
+    (loop for (location . function)
+            in (slot-initfunctions (wrapper-class (host-instance-wrapper object)))
+          when (and (integerp location) (eq (svref slots location) +slot-unbound+))
+            do (setf (svref slots location) (funcall function)))))
 
 (defvar *redefining-braid* nil)
 
@@ -694,46 +727,20 @@
     (format t "~&; host PCL: ~D classes of the meta-braid made again by PCL's protocol~%"
             redefined)))
 
-;;; EXPERIMENT: the classes of the structures and conditions the
-;;; cross-compiler knows, as fixup.lisp's sweep makes them in cold init
-;;; (as make-host-1 builds host PCL, and before each file make-host-2
-;;; compiles: those of the structures and conditions the files before it
-;;; defined, as the target makes them as it loads their definitions
-;;; (*DEFSTRUCT-HOOKS*, *DEFINE-CONDITION-HOOKS*); and those of the last,
-;;; in genesis, which reports them)
+;;; The classes of the structures and conditions the cross-compiler knows,
+;;; as fixup.lisp's sweep makes them in cold init: those of PCL proper's
+;;; time as make-host-1 builds host PCL, and the rest as make-host-2 ends
 (defvar *structure-classes-made* 0)
-(defvar *structure-class-failures* (make-hash-table :test 'eq)) ; name -> text
 (defun make-structure-classes (&optional (report t))
   ;; (conditions' slots are cold init's: fixup.lisp's sweep fills them in)
   (dolist (root '(sb-kernel::condition function structure-object))
     (sb-kernel::do-subclassoids ((classoid layout) (sb-kernel:find-classoid root))
       (declare (ignore layout))
-      (let ((name (sb-kernel:classoid-name classoid)))
-        (unless (or (sb-kernel:classoid-pcl-class classoid)
-                    (gethash name *structure-class-failures*))
-          (handler-case
-              (progn (ensure-non-standard-class name classoid)
-                     (incf *structure-classes-made*))
-            (error (c)
-              (setf (gethash name *structure-class-failures*)
-                    (let ((s (princ-to-string c))) (subseq s 0 (min 90 (length s)))))))))))
+      (unless (sb-kernel:classoid-pcl-class classoid)
+        (ensure-non-standard-class (sb-kernel:classoid-name classoid) classoid)
+        (incf *structure-classes-made*))))
   (when report
-    (format t "~&; host PCL: ~D structure and condition classes made~%" *structure-classes-made*)
-    (let ((failed (make-hash-table :test 'equal)))
-      (maphash (lambda (name text) (push name (gethash text failed)))
-               *structure-class-failures*)
-      (maphash (lambda (text names)
-                 (format t "~&;   ~D failed: ~A (~{~S~^ ~})~%" (length names) text
-                         (subseq names 0 (min 4 (length names)))))
-               failed))))
-;;; ... quietly, as host PCL itself, while the cross-compiler is built and
-;;; compiles
-(defun make-structure-classes-so-far ()
-  (handler-bind ((warning #'muffle-warning))
-    (cl:with-compilation-unit (:override t)
-      (let ((sb-xc:*features* (remove :sb-xc sb-xc:*features*)))
-        (call-with-host-gensyms
-         (lambda () (with-pass-2-reporting (make-structure-classes nil))))))))
+    (format t "~&; host PCL: ~D structure and condition classes made~%" *structure-classes-made*)))
 
 ;;;; Before host PCL boots its meta-braid (class-init.lisp)
 
