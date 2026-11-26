@@ -1232,11 +1232,14 @@ core and return a descriptor to it."
 ;;; Compute bits to store into the HASH slot (as opposed to what the hash is
 ;;; logically) of a symbol. For x86-64 this means XORing with some of NIL's bits
 ;;; - just the ones that overlap the hash - so that linkage index reads as 0.
-(defun symhash-bits (name descriptor)
+(defun symhash-bits (name descriptor package-name)
+  (declare (ignore descriptor))
   ;; "why not just call sb-c::symbol-name-hash?" you ask? because: no symbol.
-  (let ((name-hash (sb-c::calc-symbol-name-hash name (length name)))
-        (salt (sb-impl::murmur3-fmix-word (descriptor-bits descriptor)))
-        (prng-byte sb-impl::symbol-hash-prng-byte))
+  (let* ((name-hash (sb-c::calc-symbol-name-hash name (length name)))
+         ;; of the name, not the address, so that the cross-compiler knows
+         ;; the target's SYMBOL-HASH (SB-C::TARGET-SYMBOL-HASH)
+         (salt (sb-c::symbol-hash-salt name-hash package-name))
+         (prng-byte sb-impl::symbol-hash-prng-byte))
     ;; 64-bit: Low 4 bytes to high 4 bytes of slot
     ;; 32-bit: name-hash to high 29 bits
     ;; plus salt the hash any way you want as long as the build is reproducible.
@@ -1257,7 +1260,8 @@ core and return a descriptor to it."
 ;;; Even though all symbols are the same size now, I still envision the possibility
 ;;; of reducing gensyms to 4 words, though I'm not sure what to do if information
 ;;; is later attached (function, value, plist)
-(defun allocate-symbol (size cold-package name &key (gspace (symbol-value *cold-symbol-gspace*)))
+(defun allocate-symbol (size cold-package name &key (gspace (symbol-value *cold-symbol-gspace*))
+                                                    package-name)
   (declare (simple-string name))
   (let ((symbol (allocate-otherptr gspace size sb-vm:symbol-widetag)))
     (when core-file-name
@@ -1265,7 +1269,7 @@ core and return a descriptor to it."
              (pkg-id (if cold-package
                          (descriptor-fixnum (read-slot cold-package :id))
                          sb-impl::+package-id-none+)))
-        (write-wordindexed/raw symbol sb-vm:symbol-hash-slot (symhash-bits name symbol))
+        (write-wordindexed/raw symbol sb-vm:symbol-hash-slot (symhash-bits name symbol package-name))
         (write-wordindexed symbol sb-vm:symbol-value-slot *unbound-marker*)
         (write-wordindexed symbol sb-vm:symbol-info-slot *nil-descriptor*)
         (set-symbol-pkgid symbol pkg-id)
@@ -1824,7 +1828,8 @@ core and return a descriptor to it."
       (let* ((pkg-info
               (when core-file-name (cold-find-package-info (sb-xc:package-name package))))
              (handle (allocate-symbol sb-vm:symbol-size
-                      (cdr pkg-info) name :gspace gspace)))
+                      (cdr pkg-info) name :gspace gspace
+                      :package-name (sb-xc:package-name package))))
         (when pkg-info
           (aver (not (zerop (descriptor-fixnum (read-slot (cdr pkg-info) :id))))))
         (setf (get symbol 'cold-intern-info) handle)
@@ -1932,7 +1937,7 @@ core and return a descriptor to it."
         (write-wordindexed nil-val 1 nil-val)
         ;; Assign HASH if and only if NIL's hash is address-insensitive
         #-64-bit ; 64-bit depends on address
-        (write-wordindexed/raw des (+ 1 sb-vm:symbol-hash-slot) (symhash-bits "NIL" des))
+        (write-wordindexed/raw des (+ 1 sb-vm:symbol-hash-slot) (symhash-bits "NIL" des "COMMON-LISP"))
         (write-wordindexed des (+ 1 sb-vm:symbol-info-slot) initial-info)
         (set-symbol-pkgid des +package-id-lisp+ 1)
         (write-wordindexed des (+ 1 sb-vm:symbol-name-slot) name)))
@@ -4310,7 +4315,7 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
           ;; at this word because math is hard. Just zero the slot.
           (aref nil-slots 7) 0) ; available for use
     (setf (aref t-slots 0) (logior (ash +package-id-lisp+ 8) sb-vm:symbol-widetag)
-          (aref t-slots sb-vm:symbol-hash-slot) (symhash-bits "T" t-des)
+          (aref t-slots sb-vm:symbol-hash-slot) (symhash-bits "T" t-des "COMMON-LISP")
           (aref t-slots sb-vm:symbol-value-slot) (descriptor-bits t-des)
           (aref t-slots sb-vm:symbol-fdefn-slot) 0
           (aref t-slots sb-vm:symbol-info-slot) (descriptor-bits *t-symbol-info*)

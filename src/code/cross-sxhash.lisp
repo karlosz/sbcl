@@ -80,9 +80,28 @@
 ;;; However, for cross-compiling, it's OK to forgo randomizing, because
 ;;; we don't have many (if any) STRING= symbols that would benefit from
 ;;; having distinct hashes.
-;;; The target's, which genesis knows, while the host's PCL builds the
-;;; target's slot tables and caches (src/cold/genesis-2.lisp)
+;;; The target's, while the host's PCL builds the target's slot tables and
+;;; caches (src/cold/genesis-2.lisp)
 (defvar *symbol-hash-hook* nil)
+;;; The random bits of the hash of a symbol that genesis makes, of its name's
+;;; hash and its package's name (genesis's SYMHASH-BITS): the target's
+;;; SYMBOL-HASH of a symbol of the cold core, which the target's %MAKE-SYMBOL
+;;; salts by its address
+(defun symbol-hash-salt (name-hash package-name)
+  (sb-impl::murmur3-fmix-word
+   (logxor name-hash (if package-name (%sxhash-simple-string package-name) 0))))
+(defun target-symbol-hash (symbol)
+  #-64-bit (error "TARGET-SYMBOL-HASH of ~S" symbol)
+  #+64-bit
+  (let* ((name (symbol-name symbol))
+         (name-hash (calc-symbol-name-hash name (length name)))
+         (package (sb-xc:symbol-package symbol))
+         (prng-byte sb-impl::symbol-hash-prng-byte))
+    (ash (logior (ash name-hash (+ (byte-size prng-byte) (byte-position prng-byte)))
+                 (mask-field prng-byte
+                             (symbol-hash-salt name-hash
+                                               (and package (sb-xc:package-name package)))))
+         (- sb-vm::n-symbol-hash-discard-bits))))
 (defun symbol-hash (symbol)
   (if *symbol-hash-hook*
       (funcall *symbol-hash-hook* symbol)

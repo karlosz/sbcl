@@ -29,15 +29,6 @@
 (defun host-pcl-unbound-p (x) (eq x (sb-kernel::make-unbound-marker)))
 
 
-;;; SYMBOL-HASH of a symbol as the target has it (see SYMHASH-BITS and the
-;;; SYMBOL-HASH vop)
-(defun cold-symbol-hash (symbol)
-  #-64-bit (error "host PCL: SYMBOL-HASH of ~S" symbol)
-  #+64-bit
-  (ash (logxor (read-bits-wordindexed (cold-intern symbol) sb-vm:symbol-hash-slot)
-               (sb-vm::symhash-xor-constant (descriptor-bits *nil-descriptor*)))
-       (- sb-vm::n-symbol-hash-discard-bits)))
-
 ;;; The cross-compiled function of a method, by its name
 (defun host-pcl-cold-function (x)
   (let ((key (gethash x sb-pcl::*early-method-function-keys*))

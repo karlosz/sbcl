@@ -16,9 +16,7 @@
       (lambda ()
         ;; host PCL's hashes are the target's from here on, the dump's
         ;; lookups included
-        (setq sb-c::*symbol-hash-hook*
-              (lambda (symbol)
-                (sb-fasl::cold-symbol-hash symbol)))
+        (setq sb-c::*symbol-hash-hook* #'sb-c::target-symbol-hash)
         (let ((sb-pcl::*host-pcl-cold-compile*
                 ;; whose own tables have the cross-compiler's hashes
                 (lambda (form)
