@@ -579,8 +579,8 @@
 ;;; into the cold core: FOP-TEMPLATE-CLOSURE tells genesis of each function,
 ;;; by the name host PCL gave it.  The fasl only carries the code from the
 ;;; dumper to genesis's loader.
-(defun cold-compile (name form)
-    (let ((fasl (sb-cold::stem-object-path "output/cold-compile" nil :target-compile)))
+(defun cold-compile-path (i) (format nil "output/cold-compile/~4,'0D.fasl" i))
+(defun cold-compile (name form fasl)
       (ensure-directories-exist fasl)
       (funcall sb-cold::*in-target-compilation-mode-fn*
                (lambda ()
@@ -606,10 +606,17 @@
                                          nil)))
                      (setf (fdefinition 'logically-readonlyize) genesis-readonlyize)
                      (sb-c::close-fasl-output output abort-p))
-                   (when abort-p (error "host PCL: failed to cross-compile ~S" form)))))
-      (let ((*cold-load-functions-only* t))
-        (cold-load fasl nil nil))))
+                   (when abort-p (error "host PCL: failed to cross-compile ~S" form))))))
+;;; As host PCL's build ends, with the cross-compiler as the build left it
 (defun cold-compile-host-pcl ()
   (loop for (name . form) in (reverse sb-pcl::*host-pcl-cold-compiles*)
-        do (cold-compile name form)))
+        for i from 1
+        do (cold-compile name form (cold-compile-path i))))
+;;; ... and in genesis, which loads them
+(defun cold-load-host-pcl-code ()
+  (let ((*cold-load-functions-only* t))
+    (loop for i from 1
+          for fasl = (cold-compile-path i)
+          while (probe-file fasl)
+          do (cold-load fasl nil nil))))
 

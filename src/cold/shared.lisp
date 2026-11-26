@@ -869,7 +869,9 @@
                           system-tlab-p)
                (loop
                 (with-simple-restart (recompile "Recompile")
-                  (return (compile-stem stem flags :target-compile)))))))))
+                  (return (compile-stem stem flags :target-compile)))))))
+    (when (fboundp 'host-pcl-after-target-compile)
+      (funcall 'host-pcl-after-target-compile stem flags))))
 (compile 'target-compile-stem)
 
 ;;; (This function is not used by the build process, but is intended

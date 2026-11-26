@@ -738,13 +738,6 @@
   (if (or *cold-load-functions-only* *cold-loading-pcl-file*)
       (push toplevel *pcl-cold-toplevels*)
       (push toplevel *!cold-toplevels*)))
-;;; The methods that host PCL makes from what the cross-compiler dumped of
-;;; them (FOP-MSET): those of the files before boot.lisp, and those whose
-;;; bodies are the target's only.  Each is (name qualifiers specializers
-;;; lambda-list source-location initargs early-p).
-(defvar *cold-early-methods* nil)
-;;; ... and that of every method, by its key in *COLD-PCL-METHOD-FUNCTIONS*
-(defvar *cold-method-records* (make-hash-table :test 'equal))
 
 
 ;;;; miscellaneous stuff to read and write the core memory
@@ -2901,50 +2894,16 @@ Legal values for OFFSET are -4, -8, -12, ..."
 
 (define-cold-fop (fop-mset)
   (let ((fn (pop-stack))
-        (info (pop-stack))
         (specializers (pop-stack))
         (qualifiers (pop-stack))
         (name (pop-stack)))
-    ;; every cross-compiled method's: the methods the host builds get these
+    ;; every cross-compiled method's: the methods host PCL makes get these
     ;; functions
     (setf (gethash (cold-pcl-method-key (append (list (host-object-from-core name))
                                                 (host-object-from-core qualifiers)
                                                 (list (host-object-from-core specializers))))
                    *cold-pcl-method-functions*)
-          fn)
-    (when (or (null info) (and (descriptor-p info) (cold-null info)))
-      (error "no record of the method ~S ~S ~S" (host-object-from-core name)
-             (host-object-from-core qualifiers) (host-object-from-core specializers)))
-    (flet ((host-object (x) ; may have gensyms
-             (named-let recurse ((x x))
-               (cond ((cold-null x) nil)
-                     ((= (descriptor-lowtag x) sb-vm:list-pointer-lowtag)
-                      (cons (recurse (cold-car x)) (recurse (cold-cdr x))))
-                     ((nth-value 1 (gethash (descriptor-bits x) *cold-symbols*))
-                      (warm-symbol x))
-                     ((and (= (descriptor-lowtag x) sb-vm:other-pointer-lowtag)
-                           (= (descriptor-widetag x) sb-vm:symbol-widetag))
-                      (make-symbol (read-cold-symbol-name x)))
-                     (t (host-object-from-core x))))))
-      (destructuring-bind (lambda-list namestring indices initargs make-p)
-          (let ((list nil))
-            (do ((x info (cold-cdr x))) ((cold-null x) (nreverse list))
-              (push (cold-car x) list)))
-        ;; (name qualifiers specializers lambda-list source-location initargs
-        ;; early-p), the source location as the core's object
-        (let ((record (list (cold-pcl-method-key (host-object-from-core name))
-                            (cold-pcl-method-key (host-object-from-core qualifiers))
-                            (cold-pcl-method-key (host-object-from-core specializers))
-                            (host-object lambda-list)
-                            (write-slots (allocate-struct-of-type 'sb-c:definition-source-location)
-                                         :namestring namestring :indices indices)
-                            (host-object initargs)
-                            (eq (host-object make-p) :early))))
-          (setf (gethash (append (list (first record)) (second record) (list (third record)))
-                         *cold-method-records*)
-                record)
-          (unless (cold-null make-p)
-            (push record *cold-early-methods*)))))))
+          fn)))
 
 (define-cold-fop (fop-fdefn)
   (let ((name (pop-stack)))
@@ -4513,8 +4472,6 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
            (*cold-layouts* (make-hash-table :test 'eq)) ; symbol -> cold-layout
            (*cold-layout-by-addr* (make-hash-table :test 'eql)) ; addr -> cold-layout
            (*tls-index-to-symbol* nil)
-           (*cold-early-methods* nil)
-           (*cold-method-records* (make-hash-table :test 'equal))
            (*pcl-cold-toplevels* nil)
            (*!cold-toplevels* nil)
            *asm-routine-alist*
@@ -4583,7 +4540,7 @@ INDEX   LINK-ADDR       FNAME    FUNCTION  NAME
 
       (when (and verbose core-file-name)
         (format t "~&; SB-Loader: (~D~@{+~D~}) methods/other~%"
-                (length *cold-early-methods*)
+                (hash-table-count *cold-pcl-method-functions*)
                 (length *!cold-toplevels*)))
 
       (cold-set '*!cold-toplevels* (list-to-core (append (reverse *pcl-cold-toplevels*)

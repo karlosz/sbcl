@@ -7,17 +7,18 @@
 
 (load "tools-for-build/corefile.lisp" :verbose nil)
 (host-cload-stem "src/compiler/generic/genesis" nil)
-;;; Run PCL's bootstrap of the class hierarchy on the host, once the object
-;;; files are loaded; genesis writes out what it builds.  In make-host-2,
-;;; what host PCL compiles is cross-compiled into the cold core as well
+;;; Finish PCL's bootstrap of the class hierarchy on the host, with what the
+;;; cross-compiler noted of the methods it compiled; genesis writes out
+;;; what it builds, once the object files are loaded, with what host PCL
+;;; compiles cross-compiled into the cold core as well
 ;;; (SB-FASL::COLD-COMPILE).
 (load "src/cold/host-pcl-dump.lisp")
-(setq sb-fasl::*cold-load-finish-hook*
-      (lambda ()
-        (handler-bind ((style-warning #'muffle-warning))
-          (funcall (intern "HOST-PCL-BUILD" "SB-PCL"))
-          ;; what it compiled, which the dump refers to
-          (sb-fasl::cold-compile-host-pcl))))
+(handler-bind ((style-warning #'muffle-warning))
+  (funcall (intern "HOST-PCL-BUILD" "SB-PCL")))
+;;; what it compiled, which the dump refers to
+(map nil #'delete-file (directory "output/cold-compile/*.fasl"))
+(sb-fasl::cold-compile-host-pcl)
+(setq sb-fasl::*cold-load-finish-hook* #'sb-fasl::cold-load-host-pcl-code)
 
 (let (object-file-names foptrace-file-names)
   (do-stems-and-flags (stem flags 2)

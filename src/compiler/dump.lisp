@@ -228,23 +228,25 @@
 ;;; dumping uses the table.
 (defvar *circularities-detected*)
 
-;;; What genesis needs of each cross-compiled DEFMETHOD's method, by the
-;;; name of its function, for FOP-MSET: (lambda-list namestring indices
-;;; initargs make-p).  INITARGS are its DEFMETHOD's, and MAKE-P says host
-;;; PCL makes the method from this: its body is the target's only (methods
-;;; of PCL proper are made by host PCL from their source).  MAKE-P is :EARLY
-;;; for the methods of files before PCL's boot.lisp, whose generic functions
-;;; cold init may call before PCL's toplevel forms.
+;;; What host PCL needs of each DEFMETHOD's method that the file being
+;;; cross-compiled has, last first: (fun-name lambda-list namestring
+;;; indices initargs make-p), by the name of its function.  INITARGS are its
+;;; DEFMETHOD's, and MAKE-P says host PCL makes the method from this: its
+;;; body is the target's only (methods of PCL proper are made by host PCL
+;;; from their source).  MAKE-P is :EARLY for the methods of files before
+;;; PCL's boot.lisp, whose generic functions cold init may call before PCL's
+;;; toplevel forms.  They are written next to the file's fasl, for host PCL
+;;; to read whichever process compiled it (src/cold/host-pcl-dispatch.lisp).
 #+sb-xc-host
 (progn
-(defvar *method-info* (make-hash-table :test 'equal))
+(defvar *method-info-records* nil)
 (defun note-method-info (name lambda-list initargs make-p)
   (let ((location (make-definition-source-location)))
-    (setf (gethash name *method-info*)
-          (list lambda-list
+    (push (list name lambda-list
                 (definition-source-location-namestring location)
                 (definition-source-location-indices location)
-                initargs make-p)))))
+                initargs make-p)
+          *method-info-records*))))
 
 ;;;; utilities
 
@@ -1413,7 +1415,6 @@
                    (dump-object method file)
                    (dump-object qualifiers file)
                    (dump-object specializers file)
-                   (dump-object (gethash name *method-info*) file)
                    (dump-push entry-handle file)
                    (dump-fop 'fop-mset file)))
                 ((typep name '(cons (eql sb-pcl::template)))

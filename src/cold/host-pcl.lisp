@@ -23,8 +23,7 @@
 (in-package "SB-PCL")
 
 ;;; genesis's (FOP-MSET), and what INSTALL-HOST-PCL-OPERATORS defines
-(declaim (special sb-fasl::*cold-method-records*)
-         (ftype function host-real-load-defmethod))
+(declaim (ftype function host-real-load-defmethod))
 
 ;;; Non-PCL target functions that PCL's macro expanders call.
 (unless (fboundp 'sb-int:interned-symbol-p)
@@ -418,20 +417,22 @@
   (let ((method (apply #'host-real-load-defmethod args)))
     (push method *host-pcl-methods*)
     method))
-;;; The plists of the cross-compiled methods, which genesis has (FOP-MSET):
-;;; methods built on the host get these, as they go with the cross-compiled
-;;; functions genesis gives them.  The host walks their bodies as host code
+;;; The plists of the cross-compiled methods, which the cross-compiler noted
+;;; (METHOD-INFO): methods built on the host get these, as they go
+;;; with the cross-compiled functions genesis gives them.  The host walks their bodies as host code
 ;;; (HOST-WALK-FORM), which tells nothing of their slot accesses: their
 ;;; :SLOT-NAME-LISTS, of which the method's pv table is made.
-(defun fix-host-pcl-method-plists ()
+(defun fix-host-pcl-method-plists (&aux (method-info (make-hash-table :test 'equal)))
+  (dolist (record (method-info)) ; (the last of a name's)
+    (setf (gethash (first record) method-info) record))
   (dolist (method *host-pcl-methods*)
     (let* ((mf (!bootstrap-get-slot 'standard-method method '%function))
            (ff (and (%method-function-p mf) (%method-function-fast-function mf)))
            (name (and ff (gethash ff *host-fun-names*)))
-           (record (and (typep name '(cons (eql fast-method)))
-                        (gethash (cdr name) sb-fasl::*cold-method-records*))))
-      (when record
-        (let* ((plist (copy-list (host-pcl-canonical (getf (sixth record) 'plist))))
+           (info (and (typep name '(cons (eql fast-method)))
+                      (gethash name method-info))))
+      (when info
+        (let* ((plist (copy-list (host-pcl-canonical (getf (fifth info) 'plist))))
                (snl (getf plist :slot-name-lists)))
           (!bootstrap-set-slot 'standard-method method 'plist
                                (if snl

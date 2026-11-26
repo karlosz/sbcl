@@ -1174,8 +1174,8 @@
   (declare (ignore name fn)))
 
 ;;; Like FOP-FSET, but for method definitions.
-(define-fop 75 :not-host (fop-mset (name qualifiers specializer info fn) nil)
-  (declare (ignore name qualifiers specializer info fn)))
+(define-fop 75 :not-host (fop-mset (name qualifiers specializer fn) nil)
+  (declare (ignore name qualifiers specializer fn)))
 
 ;;; When cross-compiling: the function of a TEMPLATE-LAMBDA (see PCL's
 ;;; low.lisp), and the variables in its closure's slots, for genesis.

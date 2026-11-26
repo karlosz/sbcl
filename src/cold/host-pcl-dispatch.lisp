@@ -17,7 +17,7 @@
 
 ;;; make-host-2's and genesis's records, and host PCL's generic functions,
 ;;; which it makes as it builds
-(declaim (special sb-cold::*host-pcl-record* sb-fasl::*cold-early-methods*)
+(declaim (special sb-cold::*host-pcl-record*)
          (ftype function add-reader-method add-writer-method class-wrapper))
 
 (unless (find-package "SB-PCL-DISPATCH")
@@ -319,7 +319,8 @@
 ;;; As the cross-compiler begins a file (TARGET-COMPILE-STEM)
 (defun sb-cold::host-pcl-before-target-compile (stem flags)
   (setq sb-xc:*macroexpand-hook* #'xc-definition-macroexpand-hook)
-  (setq *host-pcl-stem* stem)
+  (setq *host-pcl-stem* stem
+        sb-c::*method-info-records* nil)
   ;; the classes of the structures and conditions of the files before it
   (make-structure-classes-so-far)
   (when (string= stem "src/pcl/boot")
@@ -328,6 +329,35 @@
         (cond ((not *host-pcl-boot-seen*) :early)
               ((member :host-definitions flags) nil)
               (t t))))
+
+;;; ... and as it ends one: what the file's DEFMETHODs noted (SB-C::NOTE-METHOD-INFO),
+;;; next to its fasl, for host PCL to make the methods of in whichever
+;;; process builds it (a parallel build compiles files in its children)
+(defun method-info-path (stem flags)
+  (concatenate 'string (sb-cold::stem-object-path stem flags :target-compile) "-methods"))
+(defun sb-cold::host-pcl-after-target-compile (stem flags)
+  (unless sb-cold::*compile-for-effect-only*
+    (with-open-file (stream (method-info-path stem flags) :direction :output
+                                                          :if-exists :supersede)
+      (with-standard-io-syntax
+        (let ((*package* (find-package "KEYWORD")) (*print-circle* t))
+          (prin1 (reverse sb-c::*method-info-records*) stream)))))
+  (setq sb-c::*method-info-records* nil))
+;;; Every file's, in the order of the build:
+;;; (fun-name lambda-list namestring indices initargs make-p) each
+(defvar *method-info* nil)
+(defun method-info ()
+  (or *method-info*
+      (setq *method-info*
+            (let ((all nil))
+              (sb-cold::do-stems-and-flags (stem flags 2)
+                (unless (member :not-target flags)
+                  (with-open-file (stream (method-info-path stem flags) :if-does-not-exist nil)
+                    (when stream
+                      (with-standard-io-syntax
+                        (let ((*package* (find-package "KEYWORD")) (*read-eval* nil))
+                          (setq all (revappend (read stream) all))))))))
+              (nreverse all)))))
 
 ;;; A generic function proxy called on the host: the host's dispatch, by its name
 (defvar *dispatch-routes* (make-hash-table :test 'eq)) ; record -> function or :NONE
@@ -538,36 +568,38 @@
 ;;; The methods of the files before PCL's boot.lisp, and those of the files
 ;;; whose bodies are the target's only (*HOST-PCL-TARGET-ONLY*), as real
 ;;; methods:
-;;; genesis has their lambda lists and source locations (FOP-MSET), and
+;;; the cross-compiler noted their lambda lists, source locations and
+;;; initargs as it compiled their DEFMETHODs (SB-C::NOTE-METHOD-INFO), and
 ;;; their functions are the cross-compiled ones (HOST-PCL-COLD-FUNCTION in
 ;;; host-pcl-dump.lisp finds them by the name of the host function standing
 ;;; in for each).
 (defun make-early-methods ()
-  (dolist (method (reverse sb-fasl::*cold-early-methods*))
-    (destructuring-bind (name qualifiers specializers lambda-list source initargs early-p)
-        method
-      (let ((host-name name))
-        (unless (and (fboundp host-name)
-                     (funcall 'generic-function-p
-                              (fdefinition host-name)))
-          (error "host PCL: no generic function ~S for the early method ~S ~S"
-                 name qualifiers specializers))
-        (when early-p
-          (pushnew host-name *early-method-gfs* :test #'equal))
-        ;; its function, which stands for the cross-compiled one genesis has
-        ;; (HOST-PCL-COLD-FUNCTION)
-        (let* ((key (append (list name) qualifiers (list specializers)))
-               ;; (a closure, so each method's is its own)
-               (fmf (lambda (&rest args)
-                      (declare (ignore args))
-                      (error "host PCL: the cross-compiled function of ~S" key))))
-          (setf (gethash fmf *early-method-function-keys*) key)
-          (funcall 'sb-pcl::!install-cold-method
-                   (host-pcl-canonical name) (host-pcl-canonical qualifiers)
-                   (host-pcl-canonical specializers) fmf (host-pcl-canonical lambda-list)
-                   source (host-pcl-canonical initargs))))))
-  (format t "~&; host PCL: ~D methods made of what genesis has~%"
-          (length sb-fasl::*cold-early-methods*)))
+  (let ((n 0))
+    (dolist (record (method-info))
+      (destructuring-bind (fun-name lambda-list namestring indices initargs make-p) record
+        (when make-p
+          (incf n)
+          (destructuring-bind (name &rest rest) (cdr fun-name) ; (fast-method name ...)
+            (let ((qualifiers (butlast rest)) (specializers (car (last rest))))
+              (unless (and (fboundp name) (funcall 'generic-function-p (fdefinition name)))
+                (error "host PCL: no generic function ~S for the early method ~S ~S"
+                       name qualifiers specializers))
+              (when (eq make-p :early)
+                (pushnew name *early-method-gfs* :test #'equal))
+              ;; its function, which stands for the cross-compiled one genesis has
+              ;; (HOST-PCL-COLD-FUNCTION)
+              (let* ((key (cdr fun-name))
+                     ;; (a closure, so each method's is its own)
+                     (fmf (lambda (&rest args)
+                            (declare (ignore args))
+                            (error "host PCL: the cross-compiled function of ~S" key))))
+                (setf (gethash fmf *early-method-function-keys*) key)
+                (funcall 'sb-pcl::!install-cold-method
+                         (host-pcl-canonical name) (host-pcl-canonical qualifiers)
+                         (host-pcl-canonical specializers) fmf (host-pcl-canonical lambda-list)
+                         (sb-c::%make-basic-definition-source-location namestring indices)
+                         (host-pcl-canonical initargs))))))))
+    (format t "~&; host PCL: ~D methods made of what genesis has~%" n)))
 
 ;;; Finalized as made, as the target's would be before it makes methods'
 ;;; caches (lazy finalization would invalidate the layouts cached)
