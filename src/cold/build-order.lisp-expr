@@ -604,10 +604,12 @@
  ("src/pcl/defs" :host-definitions)
  ("src/pcl/wrapper" :host-definitions)
  ;; PCL on the host, over the cross-compiler's copy of PCL's files, which
- ;; boots its meta-braid (class-init.lisp) and which genesis has build the
- ;; rest of the class hierarchy (src/cold/genesis-2.lisp)
+ ;; boots its meta-braid (class-init.lisp), builds the class hierarchy
+ ;; (fixup.lisp, and make-host-2.lisp's end), and writes it for genesis
+ ;; (src/cold/host-pcl-dump.lisp)
  ("src/cold/host-pcl" :not-target)
  ("src/cold/host-pcl-dispatch" :not-target)
+ ("src/cold/host-pcl-dump" :not-target) ; (genesis's half is genesis.lisp's)
  ("src/pcl/class-init" :host-definitions)
 
  ("src/code/cold-init" :not-host) ; needs (SETF EXTERN-ALIEN) macroexpansion

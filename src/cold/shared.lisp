@@ -105,6 +105,9 @@
 ;;; :COMPILE-TOPLEVEL forms, not to produce an output file.
 ;;; This is part of the implementation of parallelized make-host-2.
 (defvar *compile-for-effect-only* nil)
+;;; Whether loading the cross-compiler builds host PCL: not for genesis
+;;; (make-genesis-2.lisp), which loads what make-host-2 built
+(defvar *build-host-pcl* t)
 
 ;;; prefixes for filename stems when cross-compiling. These are quite arbitrary
 ;;; (although of course they shouldn't collide with anything we don't want to

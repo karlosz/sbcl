@@ -1187,6 +1187,13 @@
 (define-fop 86 :not-host (fop-closure ((:operands n) template name))
   (declare (ignore template name))
   (bug "FOP-CLOSURE (of ~D values) is only for genesis" n))
+;;; What host PCL built (src/cold/host-pcl-dump.lisp): an operation of
+;;; genesis's on the N values on the stack, the first its name, whose value
+;;; is pushed, or (FOP-HOST-PCL-EFFECT) not.
+(define-fop 87 :not-host (fop-host-pcl ((:operands n)))
+  (bug "FOP-HOST-PCL (of ~D values) is only for genesis" n))
+(define-fop 91 :not-host (fop-host-pcl-effect ((:operands n)) nil)
+  (bug "FOP-HOST-PCL-EFFECT (of ~D values) is only for genesis" n))
 
 ;;; Modify a slot of the code boxed constants.
 (define-fop 20 (fop-alter-code ((:operands index) code value) nil)

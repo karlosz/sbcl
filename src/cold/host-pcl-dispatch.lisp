@@ -251,18 +251,27 @@
           (push (cons package form) *pass-2-forms*)))))
 ;;; A target-only file's DEFCLASS or DEFGENERIC, as make-host-2 compiles it
 ;;; (!XC-DEFINITION)
+;;; ... whose class genesis knows as a type from where the file's fasl says
+;;; so on, as the cross-compiler does (the target's constants of it):
+;;; its object host PCL writes once it is built (src/cold/host-pcl-dump.lisp)
+(defun note-class-for-genesis (name)
+  (let ((file sb-c::*compile-object*))
+    (when (typep file 'sb-c::fasl-output)
+      (sb-c::dump-object :declare-classoid file)
+      (sb-c::dump-object name file)
+      (sb-c::dump-fop 'sb-fasl::fop-host-pcl-effect file 2))))
 (defun host-pcl-define (kind form)
   (note-dispatch-form kind form)
   (when (eq kind :class)
-    (push (second form) *target-only-class-names*))
+    (push (second form) *target-only-class-names*)
+    (note-class-for-genesis (second form)))
   (push (cons *package* form) *pass-2-forms*)
   ;; (what the host compiles of it warns as host code, not as the file's;
   ;; and host PCL runs it, not the cross-compiler: !CROSS-COMPILING-P)
   (handler-bind ((warning #'muffle-warning))
     (cl:with-compilation-unit (:override t)
      (let ((sb-xc:*features* (remove :sb-xc sb-xc:*features*)))
-      (call-with-host-gensyms
-       (lambda () (call-with-host-pcl-clos-macros #'pass-2-definitions)))))))
+      (call-with-host-pcl-clos-macros #'pass-2-definitions)))))
 
 ;;; Cross-compiled, PCL's DEFCLASS, DEFGENERIC, DEFMETHOD and
 ;;; DEFINE-METHOD-COMBINATION forms (pre-warm.lisp's !DEFINITION) have
@@ -321,8 +330,6 @@
   (setq sb-xc:*macroexpand-hook* #'xc-definition-macroexpand-hook)
   (setq *host-pcl-stem* stem
         sb-c::*method-info-records* nil)
-  ;; the classes of the structures and conditions of the files before it
-  (make-structure-classes-so-far)
   (when (string= stem "src/pcl/boot")
     (setq *host-pcl-boot-seen* t))
   (setq *host-pcl-making-methods*
@@ -385,15 +392,8 @@
                             (format t "~&;; pass 2 warning: ~A~%" text)))
                         (muffle-warning c)))
                     (error
-                      (lambda (c)
-                        (format t "~&;; pass 2 error: ~A~%" c)
-                        (host-sb-debug:print-backtrace :count 30)
-                        (host-sb-ext:exit :code 4 :abort t)))
-                    (storage-condition
-                      (lambda (c)
-                        (declare (ignore c))
-                        (host-sb-debug:print-backtrace :count 80)
-                        (host-sb-ext:exit :code 3 :abort t))))
+                      ;; (and on to the debugger, or whatever the host does)
+                      (lambda (c) (format t "~&;; pass 2 error: ~A~%" c))))
        ,@body)))
 
 ;;; PCL's generic functions, as MAKE-INSTANCE makes them but in two steps:
@@ -694,46 +694,26 @@
     (format t "~&; host PCL: ~D classes of the meta-braid made again by PCL's protocol~%"
             redefined)))
 
-;;; EXPERIMENT: the classes of the structures and conditions the
-;;; cross-compiler knows, as fixup.lisp's sweep makes them in cold init
-;;; (as make-host-1 builds host PCL, and before each file make-host-2
-;;; compiles: those of the structures and conditions the files before it
-;;; defined, as the target makes them as it loads their definitions
-;;; (*DEFSTRUCT-HOOKS*, *DEFINE-CONDITION-HOOKS*); and those of the last,
-;;; in genesis, which reports them)
+;;; The classes of the structures and conditions the cross-compiler knows,
+;;; as fixup.lisp's sweep makes them in cold init: those of PCL proper's
+;;; time as make-host-1 builds host PCL, and the rest as make-host-2 ends
 (defvar *structure-classes-made* 0)
-(defvar *structure-class-failures* (make-hash-table :test 'eq)) ; name -> text
 (defun make-structure-classes (&optional (report t))
   ;; (conditions' slots are cold init's: fixup.lisp's sweep fills them in)
   (dolist (root '(sb-kernel::condition function structure-object))
     (sb-kernel::do-subclassoids ((classoid layout) (sb-kernel:find-classoid root))
       (declare (ignore layout))
-      (let ((name (sb-kernel:classoid-name classoid)))
-        (unless (or (sb-kernel:classoid-pcl-class classoid)
-                    (gethash name *structure-class-failures*))
-          (handler-case
-              (progn (ensure-non-standard-class name classoid)
-                     (incf *structure-classes-made*))
-            (error (c)
-              (setf (gethash name *structure-class-failures*)
-                    (let ((s (princ-to-string c))) (subseq s 0 (min 90 (length s)))))))))))
+      (unless (sb-kernel:classoid-pcl-class classoid)
+        (ensure-non-standard-class (sb-kernel:classoid-name classoid) classoid)
+        (incf *structure-classes-made*))))
   (when report
-    (format t "~&; host PCL: ~D structure and condition classes made~%" *structure-classes-made*)
-    (let ((failed (make-hash-table :test 'equal)))
-      (maphash (lambda (name text) (push name (gethash text failed)))
-               *structure-class-failures*)
-      (maphash (lambda (text names)
-                 (format t "~&;   ~D failed: ~A (~{~S~^ ~})~%" (length names) text
-                         (subseq names 0 (min 4 (length names)))))
-               failed))))
-;;; ... quietly, as host PCL itself, while the cross-compiler is built and
-;;; compiles
+    (format t "~&; host PCL: ~D structure and condition classes made~%" *structure-classes-made*)))
+;;; ... quietly, as host PCL itself, while the cross-compiler is built
 (defun make-structure-classes-so-far ()
   (handler-bind ((warning #'muffle-warning))
     (cl:with-compilation-unit (:override t)
       (let ((sb-xc:*features* (remove :sb-xc sb-xc:*features*)))
-        (call-with-host-gensyms
-         (lambda () (with-pass-2-reporting (make-structure-classes nil))))))))
+        (with-pass-2-reporting (make-structure-classes nil))))))
 
 ;;;; Before host PCL boots its meta-braid (class-init.lisp)
 

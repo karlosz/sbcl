@@ -469,24 +469,27 @@
 
 ;;;; main entries to object dumping
 
-;;; A closure that host PCL made of a TEMPLATE-LAMBDA (src/cold/host-pcl.lisp):
-;;; *TEMPLATE-CLOSURE-OF* gives the template's name, the values of its
-;;; variables (an alist) and the closure's name, and genesis makes the
-;;; target's closure of the template's function (FOP-TEMPLATE-CLOSURE).
 #+sb-xc-host
 (progn
-(defvar *template-closure-of* nil)
-(defun dump-template-closure (x file)
-  (multiple-value-bind (template values name)
-      (if *template-closure-of*
-          (funcall *template-closure-of* x)
-          (error "This object cannot be dumped into a fasl file:~% ~S" x))
-    (dump-object template file)
-    (dump-object name file)
-    (loop for (var . value) in values
-          do (dump-object var file)
-             (dump-object value file))
-    (dump-fop 'fop-closure file (length values)))))
+;;; A function that dumps an object the dumper otherwise would not and
+;;; returns true, or returns false.  While there is one, each list is its
+;;; own, and the dumper writes a graph of objects breadth first: a structure
+;;; as its shell, which is in the fasl's table from then on, whose slots are
+;;; set later (*XC-DUMP-FILLS*), so that what refers to it is a reference
+;;; in the table, it among them.
+(defvar *xc-dump-object* nil)
+(defvar *xc-dump-fills*)                ; functions that dump the fills, last first
+(defun dump-xc-fills ()
+  (loop while *xc-dump-fills*
+        do (let ((fills (reverse *xc-dump-fills*)))
+             (setq *xc-dump-fills* nil)
+             (mapc #'funcall fills))))
+;;; A constant that the cross-compiler dumps by calling its FUNCTION on the
+;;; fasl-output, which leaves what it stands for on the stack: what the
+;;; cross-compiler writes for genesis of its own making (host PCL's objects,
+;;; src/cold/host-pcl-dump.lisp)
+(cl:defstruct (deferred-dump (:constructor make-deferred-dump (function)) (:copier nil))
+  (function nil :type function :read-only t)))
 
 ;;; This function deals with dumping objects that are complex enough
 ;;; so that we want to cache them in the table, rather than repeatedly
@@ -501,11 +504,18 @@
     (cond ((fixnump index)
            (dump-push index file))
           ((cdr-similarity-p index file))
+          #+sb-xc-host
+          ((deferred-dump-p x) (funcall (deferred-dump-function x) file))
+          ;; one the cross-compiler dumps in another way (host PCL's
+          ;; objects: src/cold/host-pcl-dump.lisp)
+          #+sb-xc-host
+          ((and *xc-dump-object* (funcall *xc-dump-object* x file)))
           (t
            (typecase x
              (symbol (dump-symbol x file))
              (list
-              (cond ((not (coalesce-tree-p x))
+              (cond ((or #+sb-xc-host *xc-dump-object* ; (the identity of each)
+                         (not (coalesce-tree-p x)))
                      (dump-list x file)
                      (eq-save-object x file))
                     ((not (similar-check-table x file))
@@ -520,10 +530,6 @@
               (dump-object 'values-specifier-type file)
               (dump-object (type-specifier x) file)
               (dump-fop 'fop-funcall file 1))
-             #+sb-xc-host
-             (function
-              (dump-template-closure x file)
-              (eq-save-object x file))
              (instance
               (multiple-value-bind (slot-names slot-names-p)
                   (gethash x (fasl-output-saved-slot-names file))
@@ -610,6 +616,8 @@
          (if x
              (dump-non-immediate-object x file)
              (dump-fop 'fop-empty-list file)))
+        #+sb-xc-host
+        ((unbound-marker-p x) (dump-fop 'fop-misc-trap file)) ; (the target's)
         ((symbolp x)
          (if (eq x t)
              (dump-fop 'fop-truth file)
@@ -1479,6 +1487,9 @@
   (unless (gethash struct (fasl-output-valid-structures file))
     (error "attempt to dump invalid structure:~%  ~S~%How did this happen?"
            struct))
+  #+sb-xc-host
+  (when *xc-dump-object*
+    (return-from dump-structure (dump-structure-shell struct file)))
   (note-potential-circularity struct file)
   (do* ((length (%instance-length struct))
         (layout (%instance-layout struct))
@@ -1502,6 +1513,36 @@
                               nil)
                              (t obj))
                        file))))
+
+;;; STRUCT with its tagged slots NIL, which FOP-STRUCTSETs set later
+;;; (*XC-DUMP-FILLS*), once it is in the table
+#+sb-xc-host
+(defun dump-structure-shell (struct file)
+  (let* ((length (%instance-length struct))
+         (layout (%instance-layout struct))
+         (bitmap (layout-bitmap layout)))
+    (loop for index from sb-vm:instance-data-start below length
+          do (sub-dump-object (if (logbitp index bitmap)
+                                  nil
+                                  (%raw-instance-ref/word struct index))
+                              file))
+    (dump-non-immediate-object layout file)
+    (dump-fop 'fop-struct file length)
+    (push (lambda () (dump-structure-fills struct file)) *xc-dump-fills*)))
+;;; FOP-STRUCTSETs of STRUCT's tagged slots that are not NIL, STRUCT being
+;;; in the table: their values, or VALUE-OF's of their indices
+#+sb-xc-host
+(defun dump-structure-fills (struct file &optional value-of)
+  (let ((bitmap (layout-bitmap (%instance-layout struct))))
+    (loop for index from sb-vm:instance-data-start below (%instance-length struct)
+          for value = (and (logbitp index bitmap)
+                           (if value-of
+                               (funcall value-of index)
+                               (%instance-ref struct index)))
+          when value
+            do (sub-dump-object value file)
+               (dump-fop 'fop-structset file
+                         (gethash struct (fasl-output-eq-table file)) index))))
 
 (defun dump-layout (obj file)
   (when (layout-invalid obj)

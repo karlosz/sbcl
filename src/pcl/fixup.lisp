@@ -175,18 +175,27 @@
 #+sb-xc-host (setf (fdefinition 'ensure-accessor) #'real-ensure-accessor)
 
 ;;; PCL proper's classes, generic functions and methods so far, on the host
-;;; (where the target's PCL, booted, would fix its early generic functions)
-#+sb-xc-host (host-pcl-build-proper)
+;;; (where the target's PCL, booted, would fix its early generic functions),
+;;; and what is made of them below, but for genesis, which make-host-2's
+;;; writes (SB-COLD::*BUILD-HOST-PCL*)
+#+sb-xc-host (when sb-cold::*build-host-pcl* (host-pcl-build-proper))
 
 #+sb-xc-host
+(when *host-pcl-ready*
 (dolist (gf-name *!temporary-ensure-accessor-functions*)
   ; (format t "~&Genericizing ~S~%" gf-name)
   (fmakunbound gf-name)
-  (ensure-accessor gf-name))
+  (ensure-accessor gf-name)))
 
-(!after-pcl-bootstrap (setq sb-kernel::*defstruct-hooks* '(ensure-defstruct-class)))
-#+sb-xc-host (compute-standard-slot-locations)
-(!after-pcl-bootstrap
+#+sb-xc-host (when *host-pcl-ready* (compute-standard-slot-locations))
+
+;;; Once PCL's bootstrap is over (!FINISH-GENESIS-BRAID): PCL makes the
+;;; classes of the conditions and structures defined from then on, and
+;;; finishes those genesis wrote
+#-sb-xc-host
+(defun !hook-pcl-into-system ()
+(pushnew 'ensure-deffoo-class sb-kernel::*define-condition-hooks*) ; braid.lisp
+(setq sb-kernel::*defstruct-hooks* '(ensure-defstruct-class))
 (dolist (s '(condition function structure-object))
   (sb-kernel::do-subclassoids ((k v) (find-classoid s))
     (declare (ignore v))
@@ -208,13 +217,14 @@
 ;;; CLASS-PROTOTYPE for FUNCTION should not use ALLOCATE-INSTANCE.
 ;;;
 #+sb-xc-host
+(when *host-pcl-ready*
 (let ((class (find-class 'function)))
-  (setf (slot-value class 'prototype) #'identity))
+  (setf (slot-value class 'prototype) #'identity)))
 
 ;;; The standard and OR method combinations (defcombin.lisp): genesis
 ;;; writes their info, which host PCL makes
 #+sb-xc-host
-(progn
+(when *host-pcl-ready*
 (setf (gethash 'standard (method-combinations))
       (make-method-combination-info
        :constructor (standard-method-combination-constructor)
@@ -229,6 +239,7 @@
 
 ;;; (methods.lisp)
 #+sb-xc-host
+(when *host-pcl-ready*
 (mapc
  #'!proclaim-incompatible-superclasses
  '(;; superclass class
@@ -247,16 +258,17 @@
    (list vector)                        ; direct subclasses of sequence
    (cons null)                          ; direct subclasses of list
    (string bit-vector)                  ; direct subclasses of vector
-   ))
+   )))
 
 ;;; consistency check: all our standard SLOT-VALUE-USING-CLASS methods are available
 ;;; and distinct from each other.
 #+sb-xc-host
+(when *host-pcl-ready*
 (let (set)
   (dolist (type '(reader writer boundp makunbound))
     (dolist (fun '(standard-svuc-method structure-svuc-method condition-svuc-method))
       (pushnew (funcall fun type) set)))
-  (assert (= (length set) 12)))
+  (assert (= (length set) 12))))
 
 #-sb-xc-host
 (dolist (symbol '(add-method allocate-instance class-name compute-applicable-methods

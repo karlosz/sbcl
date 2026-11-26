@@ -62,13 +62,4 @@ echo '(load "loader.lisp") (load-sbcl-file "make-host-2.lisp")' | $SBCL_XC_HOST
 # time was before we ran the cross-compiler, in order to create the
 # header file which was needed in order to run gcc on the runtime
 # code.)
-# make-host-2.lisp did the second genesis (src/cold/genesis-2.lisp).
-echo //testing for consistency of first and second GENESIS passes
-if ! command -v diff > /dev/null ; then
-    echo //no diffutils, not testing
-elif diff -r src/runtime/genesis output/genesis-2; then
-    echo //header files match between first and second GENESIS -- good
-else
-    echo error: header files do not match between first and second GENESIS
-    exit 1
-fi
+sh make-genesis-2.sh

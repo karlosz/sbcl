@@ -222,6 +222,7 @@
               (let ((x (car found)))
                 (target-compile-stem (car x) (cdr x))))
             (when (null (cdr found))
+              (host-pcl-compile-objects)
               (sb-kernel::write-structure-definitions-as-text
                (sb-cold:find-bootstrap-file "output/defstructs.lisp-expr" t))))))
        (list
@@ -270,6 +271,8 @@
            (sb-c::dump/restore-interesting-types 'write)))
      (write-sxhash-xcheck-data
       (sb-cold:find-bootstrap-file "output/sxhash-calls.lisp-expr" t))
+     ;; what host PCL built, once every file is compiled
+     (host-pcl-compile-objects)
      (sb-kernel::write-structure-definitions-as-text
       (sb-cold:find-bootstrap-file "output/defstructs.lisp-expr" t)))))
 #+nil (sb-kernel::show-ctype-ctor-cache-metrics)

@@ -184,10 +184,6 @@ Sample output
 ;;; cold init if it wasn't.)
 (load "tests/type.after-xc.lisp")
 
-;;; The second genesis is done here, where the cross-compiler can compile
-;;; what PCL compiles while it builds the class hierarchy on the host.
-(load "src/cold/genesis-2.lisp")
-
 ;;; If you're experimenting with the system under a cross-compilation
 ;;; host which supports CMU-CL-style SAVE-LISP, this can be a good
 ;;; time to run it. The resulting core isn't used in the normal build,

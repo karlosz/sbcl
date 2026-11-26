@@ -147,9 +147,17 @@
 ;;; sure that everything has a distinct symbol name.  (This is not an
 ;;; issue for user code, which is compiled with a normal
 ;;; implementation of GENSYM).
+;;; (While host PCL makes code, they are numbered: genesis tells the
+;;; variables that its closures close over by their names,
+;;; FOP-TEMPLATE-CLOSURE.)
+;;; Whether host PCL runs PCL's definitions (CALL-WITH-HOST-PCL-CLOS-MACROS)
+(defvar sb-pcl::*host-pcl-evaluating* nil)
+(defvar *xc-gensym-count* 0)
 (defun sb-xc:gensym (&optional (thing "G"))
   (declare (type string thing))
-  (make-symbol thing))
+  (if (and (member :sb-xc sb-xc:*features*) (not sb-pcl::*host-pcl-evaluating*))
+      (make-symbol thing)
+      (make-symbol (format nil "~A~D" thing (incf *xc-gensym-count*)))))
 
 ;;; These functions are needed for constant-folding.
 (defun simple-array-nil-p (object)

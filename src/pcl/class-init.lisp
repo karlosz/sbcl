@@ -824,11 +824,8 @@
         do (setf (gethash key table) value))
   table)
 ;;; Toplevel forms of PCL proper, as compiled for a dumped braid
-;;; (!XC-DEFINITION, src/cold/host-pcl-dispatch.lisp): the host ran this one; this one runs at
-;;; the end of PCL's bootstrap (!FINISH-GENESIS-BRAID).
+;;; (!XC-DEFINITION, src/cold/host-pcl-dispatch.lisp): the host ran them.
 (defun !host-form (function) (declare (ignore function)))
-(define-load-time-global *!target-forms* nil)
-(defun !target-form (function) (push (cons *package* function) *!target-forms*))
 
 ;;; The function of a funcallable instance before it has one of its own (the
 ;;; host calls this; genesis writes the closure)
@@ -856,14 +853,12 @@
     (settle fgens all-ctors typecheck-cache standard-slot-locations pv-tables
             eql-specializer-table class-eq-specializer-methods method-combinations)))
 
-;;; Cold init, after PCL's toplevel forms: the forms that hook PCL into the
-;;; system, then the end of the lazy tables' bootstrap.
+;;; Cold init, after PCL's toplevel forms: PCL is hooked into the system,
+;;; then the lazy tables' bootstrap ends.
 (defun !finish-genesis-braid ()
   (when *!braid-dumped*
     (setq *!braid-dumped* nil)
-    (dolist (form (nreverse (shiftf *!target-forms* nil)))
-      (let ((*package* (car form)))
-        (funcall (cdr form))))
+    (funcall '!hook-pcl-into-system) ; fixup.lisp's
     (!settle-lazy-tables)
     (funcall '!make-method-combination-gf-sets))) ; defcombin.lisp's
 
