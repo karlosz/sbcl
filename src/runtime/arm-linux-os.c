@@ -39,7 +39,9 @@
 int arch_os_thread_init(struct thread __attribute__((unused)) *thread) {
     return 1;                   /* success */
 }
-int arch_os_thread_cleanup(struct thread __attribute__((unused)) *thread) {
+int arch_os_thread_cleanup(struct thread *thread) {
+    if (thread->breakpoint_misc)
+        os_deallocate((os_vm_address_t) thread->breakpoint_misc, getpagesize());
     return 1;                   /* success */
 }
 #endif
@@ -94,8 +96,15 @@ os_flush_icache(os_vm_address_t address, os_vm_size_t length)
 static void
 sigtrap_handler(int signal, siginfo_t *siginfo, os_context_t *context)
 {
-    unsigned int code = *((unsigned char *)(4+OS_CONTEXT_PC(context)));
     uint32_t trap_instruction = *(uint32_t *)OS_CONTEXT_PC(context);
+
+    if ((trap_instruction & 0x0FFFFFF0) == 0x01200070) {
+        /* BKPT: a breakpoint of the debugger. */
+        arch_handle_breakpoint(context);
+        return;
+    }
+
+    unsigned int code = *((unsigned char *)(4+OS_CONTEXT_PC(context)));
 
     if (trap_instruction != 0xe7f001f0) {
         lose("Unrecognized trap instruction %08x in sigtrap_handler()", trap_instruction);
