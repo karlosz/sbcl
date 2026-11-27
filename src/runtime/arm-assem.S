@@ -239,17 +239,35 @@ call_into_c:
 
 	.size	call_into_c, .-call_into_c
 
-        @@ FIXME-ARM: The following is random garbage, to make
-        @@ code/debug-int compile. To get the debugger working, this
-        @@ needs to be implemented.
-        .align
+        @@ This is a small fragment of code that make-bpt-lra copies
+        @@ into a heap code object, and that a returning callee jumps
+        @@ to: it contains an LRA object, code to convert a
+        @@ single-value return to unknown-values format, and a
+        @@ trap_FunEndBreakpoint, like the other backends have.
+        @@ In the arm unknown-values convention, a single-value
+        @@ return arrives with all of the condition flags clear and
+        @@ anything else with them set (see LISP-RETURN in
+        @@ compiler/arm/macros.lisp), so a single value falls
+        @@ through into the conversion below.
+        .align 2
         .global fun_end_breakpoint_guts
         .type   fun_end_breakpoint_guts, %object
 fun_end_breakpoint_guts:
+        beq     1f
+        @@ Single-value return: convert it to the unknown-values
+        @@ convention the multiple-value case already uses.  The
+        @@ value itself stays in reg_R0.
+        mov     reg_OCFP, reg_CSP
+        add     reg_CSP, reg_CSP, #4
+        mov     reg_NARGS, #4
+        mov     reg_R1, reg_NULL
+        mov     reg_R2, reg_NULL
+1:
 	.global	fun_end_breakpoint_trap
 	.type	fun_end_breakpoint_trap, %function
 fun_end_breakpoint_trap:
-        b       fun_end_breakpoint_trap
+        .word   0xe7f001f0
+        .byte   trap_FunEndBreakpoint
         .global fun_end_breakpoint_end
 fun_end_breakpoint_end:
 
