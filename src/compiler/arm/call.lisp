@@ -879,13 +879,14 @@
                  (do-next-filler)
                  (return)))
 
-           (note-this-location vop ,(if (eq return :tail)
-                                        :tail-call-site
-                                        :call-site))
            ,@(if (eq return :tail)
                  '((loadw lip cfp-tn lra-save-offset)
+                   ;; Note the call site at the jump, which a
+                   ;; breakpoint can decode the callee of.
+                   (note-this-location vop :tail-call-site)
                    (lisp-jump function))
-                 '((inst add lip function
+                 '((note-this-location vop :call-site)
+                   (inst add lip function
                     (- (ash simple-fun-insts-offset word-shift) fun-pointer-lowtag))
                    (inst blx lip))))
 
