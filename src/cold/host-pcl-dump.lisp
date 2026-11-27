@@ -163,10 +163,6 @@
 ;;; any
 (defun hp-dump-object (x file)
   (typecase x
-    ;; uninterned: each its own (genesis coalesces file constants by name,
-    ;; but FNGEN's variables are all named G)
-    (symbol
-     (unless (cl:symbol-package x) (hp-alloc x nil :uninterned-symbol (symbol-name x))))
     ;; a mutex the cross-compiler's MAKE-MUTEX made (cross-misc.lisp)
     ((cons (eql :mock-mutex)) (hp-alloc x nil :mutex (second x)))
     (function

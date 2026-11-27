@@ -2931,10 +2931,6 @@ Legal values for OFFSET are -4, -8, -12, ..."
          (fresh-p (x) (gethash (descriptor-bits x) *host-pcl-written*))
          (data (x) (host-object-from-core x)))
     (ecase op
-      (:uninterned-symbol
-       (setf (gethash (list :host-pcl (hash-table-count *uninterned-symbol-table*))
-                      *uninterned-symbol-table*)
-             (allocate-symbol sb-vm:symbol-size nil (data (first args)))))
       (:method-function
        (let ((key (host-pcl-name (first args))))
          (or (gethash key *cold-pcl-method-functions*)
