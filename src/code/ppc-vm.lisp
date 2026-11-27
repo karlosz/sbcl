@@ -35,9 +35,10 @@
            (word-at (sap offset)
              (sap-ref-32 sap (* 4 offset)))
          (mtctr-reg (word)
-           ;; mtctr rt: opcode 31, XO 338, rt in bits 25:21.
+           ;; mtctr rt: opcode 31, XO 467 (mtspr with CTR), rt in
+           ;; bits 25:21.
            (when (and (= (ldb (byte 6 26) word) 31)
-                      (= (ldb (byte 10 1) word) 338))
+                      (= (ldb (byte 10 1) word) 467))
              (ldb (byte 5 21) word)))
          (bl-target (pc word)
            ;; bl target: opcode 18 with LK set.
