@@ -834,7 +834,7 @@
 (defun (setf frame-saved-lra) (new-lra frame debug-fun)
   (sub-set-debug-var-slot
    (frame-pointer frame)
-   (return-pc-offset-for-location debug-fun (frame-code-location frame))
+   (return-pc-offset-for-location debug-fun frame)
    #+c-stack-is-control-stack new-lra
    #-c-stack-is-control-stack (%make-lisp-obj (sap-int new-lra))
    (compiled-frame-escaped frame))
