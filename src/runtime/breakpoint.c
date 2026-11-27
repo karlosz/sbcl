@@ -168,9 +168,16 @@ void *handle_fun_end_breakpoint(os_context_t *context)
     lra = codeptr->constants[REAL_LRA_SLOT];
 
 #if defined LISP_FEATURE_PPC || defined LISP_FEATURE_PPC64
-    /* PPC now passes LRA objects in reg_LRA during return.  Other
-     * platforms should as well, but haven't been fixed yet. */
-    *os_context_register_addr(context, reg_LRA) = lra;
+    /* PPC returns with the address of the return PC in reg_LRA, which
+     * the caller computes its CODE from, so restore the one the
+     * breakpoint rerouted from the component and offset the starter
+     * stored.  Other platforms should as well, but haven't been
+     * fixed yet. */
+    {
+        void *return_pc = compute_pc(lra, fixnum_value(codeptr->constants[REAL_LRA_SLOT+1]));
+        *os_context_register_addr(context, reg_LRA) = (uword_t)return_pc;
+        lra = (lispobj)return_pc;
+    }
 #else
 #ifdef reg_LRA
     /*
@@ -190,7 +197,9 @@ void *handle_fun_end_breakpoint(os_context_t *context)
     th->state_word.mv_count = saved_mv_count;
     th->breakpoint_misc = old_misc;
 #endif
-#ifdef reg_LRA
+#if defined LISP_FEATURE_PPC || defined LISP_FEATURE_PPC64
+    return (void *)lra;
+#elif defined(reg_LRA)
     return (void *)(lra-OTHER_POINTER_LOWTAG+sizeof(lispobj));
 #else
     return compute_pc(lra, fixnum_value(codeptr->constants[REAL_LRA_SLOT+1]));
